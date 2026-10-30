@@ -1,95 +1,207 @@
-const crypto = require('crypto');
+// services/student-session.js
+const jwt = require('jsonwebtoken');
 const { getDatiCarriera } = require('../scraper/segrepass');
 const { getDocentiData } = require('../scraper/docenti');
 const { buildStudentProfile } = require('./profile-extractor');
 const snapshots = require('./career-snapshots');
+const careerCache = require('./career-cache');
+const slowSync = require('./slow-sync');
+const { clearDocentiCache } = require('./docenti-cache');
 const dbModule = require('../db');
-const { upsertStudentProfile } = require('../db/repository');
+const { upsertStudentProfile, getStudentProfile, getStudyPlan } = require('../db/repository');
+const { setCredentials } = require('../utils/sessionStore');
+const { JWT_SECRET, JWT_TTL } = require('../lib/config');
+const { seal } = require('../lib/secret-box');
 
-// Garantisce che db faccia riferimento all'istanza attiva di Database
 const db = dbModule.db || dbModule;
+const EMPTY_DOCENTI = Object.freeze({ subscriptions: [], bookedExams: [], announcements: [] });
 
-const SESSION_DAYS = 30;
+function hasProfileSetup(profile) {
+  const course = profile?.course_id || profile?.courseId;
+  const cohort = profile?.cohort_year || profile?.cohortYear;
+  return Boolean(course && cohort);
+}
 
-const EMPTY_DOCENTI = Object.freeze({
-  subscriptions: [],
-  bookedExams: [],
-  announcements: []
-});
+function listPlansForCohort(cohortYear, database = db) {
+  if (!cohortYear) return [];
+  for (const columns of ['course_id, course_code, course_name', 'course_id, course_name']) {
+    try {
+      return database.prepare(`SELECT ${columns} FROM StudyPlans WHERE cohort_year = ?`).all(cohortYear);
+    } catch {}
+  }
+  return [];
+}
 
-function loadDocentiInBackground(profileId, credentials = {}) {
+function docentiCredentials(dependencies = {}) {
+  // Nessun fallback globale: in produzione non esistono credenziali Docenti
+  // condivise. I servizi possono ancora ricevere credenziali esplicite per
+  // test o integrazioni, ma il default resta vuoto.
+  return dependencies.docentiCredentials || {};
+}
+
+function loadDocentiInBackground(profileId, dependencies = {}) {
+  // Un solo job per studente: due login ravvicinati non devono aprire due
+  // sessioni sullo stesso account (il portale invaliderebbe la prima).
+  if (snapshots.isDocentiLoading(profileId)) return Promise.resolve();
+
+  const credentials = docentiCredentials(dependencies);
+  if (!credentials.username || !credentials.password) {
+    snapshots.setDocentiSnapshot(profileId, {
+      available: false,
+      reason: 'DOCENTI_CREDENTIALS_REQUIRED',
+      ...EMPTY_DOCENTI
+    });
+    return Promise.resolve();
+  }
+
+  const scraper = dependencies.getDocentiData || getDocentiData;
   snapshots.markDocentiLoading(profileId);
 
-  getDocentiData({
-    username: credentials.username || profileId,
-    password: credentials.password
-  })
+  return Promise.resolve()
+    .then(() => scraper(credentials))
     .then(data => snapshots.setDocentiSnapshot(profileId, data))
     .catch(error => {
-      console.warn(`[docenti] Acquisizione per ${profileId} non riuscita: ${error.message}`);
+      console.warn(`[docenti] Acquisizione per ${profileId} non riuscita: ${error?.message}`);
       snapshots.setDocentiSnapshot(profileId, {
         available: false,
-        reason: error.code || 'DOCENTI_SCRAPE_FAILED',
+        reason: error?.code || 'DOCENTI_SCRAPE_FAILED',
         ...EMPTY_DOCENTI
       });
     })
     .finally(() => snapshots.clearDocentiLoading(profileId));
 }
 
-function listPlansForCohort(cohortYear) {
-  for (const columns of ['course_id, course_code, course_name', 'course_id, course_name']) {
-    try {
-      return db.prepare(`SELECT ${columns} FROM StudyPlans WHERE cohort_year = ?`).all(cohortYear);
-    } catch {}
-  }
-  return [];
+/**
+ * Email da usare per il portale Docenti: quella del profilo, oppure l'id
+ * stesso se l'utente ha fatto login con l'email istituzionale.
+ */
+function resolveDocentiEmail(profile, profileId) {
+  const fromProfile = profile?.email;
+  if (typeof fromProfile === 'string' && fromProfile.includes('@')) return fromProfile.trim().toLowerCase();
+  if (String(profileId).includes('@')) return String(profileId).trim().toLowerCase();
+  return null;
 }
 
-async function createStudentSession({ codiceFiscale, password } = {}) {
-  if (!codiceFiscale || !password) {
-    throw new Error('Inserisci codice fiscale e password.');
+/**
+ * Accetta solo email ben formate (es. nome.cognome@studenti.unina.it).
+ */
+function normalizeEmail(value) {
+  const email = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : null;
+}
+
+async function createStudentSession({ codiceFiscale, password, email } = {}, dependencies = {}) {
+  if (typeof codiceFiscale !== 'string' || !codiceFiscale.trim() || typeof password !== 'string' || !password) {
+    const error = new Error('Inserisci codice fiscale e password.');
+    error.status = 400;
+    throw error;
   }
 
-  const cfClean = String(codiceFiscale).trim().toUpperCase();
+  const database = dependencies.database || db;
+  const scraper = dependencies.getDatiCarriera || getDatiCarriera;
+  const jwtSecret = dependencies.jwtSecret || JWT_SECRET;
+  const cfClean = codiceFiscale.trim().toUpperCase();
 
-  // 1. Scraping sincrono da Segrepass
-  const datiCarriera = await getDatiCarriera({ codiceFiscale: cfClean, password });
-  const profile = buildStudentProfile(datiCarriera);
-  const profileId = profile.codiceFiscale || cfClean;
+  // Cache per studente: se i dati sono freschi si evita lo scraping completo.
+  // La chiave include un HMAC della password, così una password errata non
+  // può riutilizzare i dati di un login precedente.
+  const careerResult = await careerCache.getOrLoadCareer(
+    cfClean,
+    password,
+    () => scraper({ codiceFiscale: cfClean, password }, { phase: 'fast' })
+  );
+  const datiCarriera = careerResult.value;
+  const fromCache = careerResult.fromCache;
 
-  // 2. Salvataggio o aggiornamento del profilo nel DB
-  upsertStudentProfile({
-    profileId,
-    codiceFiscale: cfClean,
-    anagrafica: profile.anagrafica,
-    carriera: profile.carriera,
-    esamiSostenuti: profile.esamiSostenuti,
-    tasse: profile.tasse
+  const esami = Array.isArray(datiCarriera.esami) ? datiCarriera.esami : [];
+  const tasse = datiCarriera.tasse || null;
+
+  const existing = getStudentProfile(database, cfClean);
+  const profile = buildStudentProfile(datiCarriera.anagrafica || {}, {
+    taxes: tasse,
+    existing,
+    findPlan: dependencies.findPlan || ((courseId, cohortYear) => getStudyPlan(database, courseId, cohortYear)),
+    listPlans: dependencies.listPlans || (cohortYear => listPlansForCohort(cohortYear, database))
   });
 
-  // 3. Generazione Token di Sessione
-  const sessionToken = crypto.randomBytes(32).toString('hex');
-  const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+  // Se il piano è già a database, completa il nome corso mancante.
+  if (profile.courseId && profile.cohortYear && !profile.courseName) {
+    const plan = getStudyPlan(database, profile.courseId, profile.cohortYear);
+    if (plan?.course_name) profile.courseName = plan.course_name;
+  }
 
-  db.prepare(`
-    INSERT INTO UserSessions (token, profile_id, expires_at)
-    VALUES (?, ?, ?)
-    ON CONFLICT(token) DO UPDATE SET expires_at = excluded.expires_at
-  `).run(sessionToken, profileId, expiresAt);
+  const storedProfile = upsertStudentProfile(database, {
+    id: cfClean,
+    ...profile,
+    esamiSostenuti: esami,
+    tasse
+  });
 
-  // 4. Caricamento asincrono portale Docenti
-  loadDocentiInBackground(profileId, { username: cfClean, password });
+  snapshots.setCareerSnapshot(cfClean, esami);
+  snapshots.setTaxesSnapshot(cfClean, tasse);
+  // Ogni login invalida i dati Docenti precedenti e forza un refresh completo:
+  // niente dati stale di sessioni precedenti, anche a parità di credenziali.
+  snapshots.setDocentiSnapshot(cfClean, null);
+  clearDocentiCache(cfClean);
+  slowSync.resetSlowSync(cfClean);
+
+  // Tasse e appelli partono in background: il login non li attende.
+  const ensureSlow = dependencies.ensureSlowSync || slowSync.ensureSlowSync;
+  const slowStatus = ensureSlow(cfClean, { codiceFiscale: cfClean, password }, dependencies);
+
+  // Il portale Docenti richiede l'email istituzionale (@studenti.unina.it),
+  // non il codice fiscale.
+  const docentiEmail = normalizeEmail(email) || resolveDocentiEmail(storedProfile || profile, cfClean);
+
+  // La password viaggia nel JWT in forma cifrata (campo "pw"), così le rotte
+  // /api/docenti la recuperano da req.user.password anche dopo un riavvio del
+  // server o una ricarica della pagina.
+  const token = jwt.sign(
+    { sub: cfClean, codiceFiscale: cfClean, email: docentiEmail || undefined, pw: seal(password) },
+    jwtSecret,
+    { expiresIn: JWT_TTL }
+  );
+
+  // Eventuali credenziali esplicite passate dal chiamante (es. test) hanno
+  // la precedenza; non esistono credenziali di servizio globali.
+  const configuredDocenti = docentiCredentials(dependencies);
+  const credentials = dependencies.docentiCredentials
+    || (configuredDocenti.username && configuredDocenti.password
+      ? configuredDocenti
+      : (docentiEmail ? { username: docentiEmail, password } : {}));
+
+  if (credentials.username && credentials.password) {
+    setCredentials(cfClean, credentials);
+  }
+
+  const docentiSnapshot = snapshots.getDocentiSnapshot(cfClean);
+  const alreadyLoading = snapshots.isDocentiLoading(cfClean);
+  if (!docentiSnapshot && !alreadyLoading) {
+    loadDocentiInBackground(cfClean, { ...dependencies, docentiCredentials: credentials });
+  }
+
+  const docentiLoading = !docentiSnapshot && (alreadyLoading || Boolean(credentials.username && credentials.password));
+  const docentiReason = docentiSnapshot
+    ? (docentiSnapshot.available ? null : docentiSnapshot.reason || 'DOCENTI_SCRAPE_FAILED')
+    : (docentiLoading ? null : 'DOCENTI_CREDENTIALS_REQUIRED');
 
   return {
-    token: sessionToken,
-    expiresAt,
-    profileId,
-    profile
+    token,
+    expiresIn: JWT_TTL,
+    profileId: cfClean,
+    profile: storedProfile || profile,
+    onboardingRequired: !hasProfileSetup(storedProfile || profile),
+    fromCache,
+    slowSync: slowStatus.state,
+    docentiLoading,
+    docentiReason,
+    metriche: datiCarriera
   };
 }
 
 module.exports = {
   createStudentSession,
   loadDocentiInBackground,
-  listPlansForCohort
+  listPlansForCohort,
+  hasProfileSetup
 };

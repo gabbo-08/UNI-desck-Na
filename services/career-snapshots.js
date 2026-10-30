@@ -1,16 +1,10 @@
-// Archivio in memoria dei dati letti al login (esami di Segrepass e dati del portale Docenti),
-// uno per profilo. Si perde al riavvio del backend: le rotte rispondono 409 e l'utente rifa' il login.
-//
-// Firme (le stesse usate da routes/career-plan.js e routes/docenti.js):
-//   getCareerSnapshot(profileId)  -> Esame[] oppure null
-//   getDocentiSnapshot(profileId) -> oggetto Docenti oppure null
-// NB: nessun parametro "db": la versione precedente le dichiarava come (db, profileId) e le rotte
-// passavano solo l'id, quindi "db" era una stringa e partiva "db.prepare is not a function".
-
-const TTL_MS = 12 * 60 * 60 * 1000;
+// services/career-snapshots.js
+const TTL_MS = 12 * 60 * 60 * 1000; // 12 ore di validità per la sessione in memoria
 
 const careerSnapshots = new Map();
 const docentiSnapshots = new Map();
+const taxesSnapshots = new Map(); // Aggiunto store per le tasse
+const slowSnapshots = new Map(); // Tasse + appelli caricati in background
 const docentiLoading = new Set();
 
 function prune(store) {
@@ -30,6 +24,7 @@ function readFresh(store, profileId) {
   return entry.value;
 }
 
+// -- Esami --
 function setCareerSnapshot(profileId, esami) {
   prune(careerSnapshots);
   careerSnapshots.set(profileId, { value: Array.isArray(esami) ? esami : [], storedAt: Date.now() });
@@ -39,6 +34,27 @@ function getCareerSnapshot(profileId) {
   return readFresh(careerSnapshots, profileId);
 }
 
+// -- Tasse (Nuovo) --
+function setTaxesSnapshot(profileId, data) {
+  prune(taxesSnapshots);
+  taxesSnapshots.set(profileId, { value: data || null, storedAt: Date.now() });
+}
+
+function getTaxesSnapshot(profileId) {
+  return readFresh(taxesSnapshots, profileId);
+}
+
+// -- Dati lenti (tasse + appelli) --
+function setSlowSnapshot(profileId, data) {
+  prune(slowSnapshots);
+  slowSnapshots.set(profileId, { value: data || null, storedAt: Date.now() });
+}
+
+function getSlowSnapshot(profileId) {
+  return readFresh(slowSnapshots, profileId);
+}
+
+// -- Docenti --
 function setDocentiSnapshot(profileId, data) {
   prune(docentiSnapshots);
   docentiSnapshots.set(profileId, { value: data, storedAt: Date.now() });
@@ -63,12 +79,18 @@ function isDocentiLoading(profileId) {
 function clearSnapshots(profileId) {
   careerSnapshots.delete(profileId);
   docentiSnapshots.delete(profileId);
+  taxesSnapshots.delete(profileId); // Svuota anche le tasse
+  slowSnapshots.delete(profileId);
   docentiLoading.delete(profileId);
 }
 
 module.exports = {
   setCareerSnapshot,
   getCareerSnapshot,
+  setTaxesSnapshot,
+  getTaxesSnapshot,
+  setSlowSnapshot,
+  getSlowSnapshot,
   setDocentiSnapshot,
   getDocentiSnapshot,
   markDocentiLoading,

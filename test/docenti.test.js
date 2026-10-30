@@ -3,23 +3,42 @@ const assert = require('node:assert/strict');
 const {
   normalizeDocentiTables,
   getDocentiData,
-  collectDocentiTables
+  mapAnnouncement,
+  findTeacher,
+  fetchAnnouncementsForProfessors
 } = require('../scraper/docenti');
 
-function useDocentiCredentials(t) {
+function withoutDocentiEnv(t) {
   const previousUsername = process.env.DOCENTI_USERNAME;
   const previousPassword = process.env.DOCENTI_PASSWORD;
-  process.env.DOCENTI_USERNAME = 'test-user';
-  process.env.DOCENTI_PASSWORD = 'test-password';
+  delete process.env.DOCENTI_USERNAME;
+  delete process.env.DOCENTI_PASSWORD;
   t.after(() => {
-    if (previousUsername === undefined) delete process.env.DOCENTI_USERNAME;
-    else process.env.DOCENTI_USERNAME = previousUsername;
-    if (previousPassword === undefined) delete process.env.DOCENTI_PASSWORD;
-    else process.env.DOCENTI_PASSWORD = previousPassword;
+    if (previousUsername !== undefined) process.env.DOCENTI_USERNAME = previousUsername;
+    if (previousPassword !== undefined) process.env.DOCENTI_PASSWORD = previousPassword;
   });
 }
 
-test('separates subscribed courses from booked exam calls', () => {
+function fakePage() {
+  const inputs = [
+    { click: async () => {}, press: async () => {}, type: async () => {} },
+    { click: async () => {}, press: async () => {}, type: async () => {} }
+  ];
+  return {
+    goto: async () => {},
+    evaluate: async () => {},
+    waitForSelector: async () => inputs[0],
+    waitForFunction: async () => {},
+    $: async selector => (String(selector).includes('Password') || String(selector).includes('password') ? inputs[1] : inputs[0]),
+    $$: async () => inputs,
+    click: async () => {},
+    waitForNavigation: async () => null,
+    url: () => 'https://www.docenti.unina.it/personal-area/student/summaries',
+    frames: () => []
+  };
+}
+
+test('separa corsi sottoscritti e appelli prenotati', () => {
   const result = normalizeDocentiTables([
     {
       headers: ['Codice', 'Insegnamento', 'Docente', 'Anno Accademico'],
@@ -37,7 +56,7 @@ test('separates subscribed courses from booked exam calls', () => {
   assert.equal(result.bookedExams[0].examDate, '10/01/2027');
 });
 
-test('prioritizes subject fields and does not treat course status as an exam booking', () => {
+test('non interpreta lo stato del corso come prenotazione d\'esame', () => {
   const result = normalizeDocentiTables([{
     headers: ['Corso di laurea', 'Insegnamento', 'Docente', 'Stato corso'],
     records: [{
@@ -53,88 +72,122 @@ test('prioritizes subject fields and does not treat course status as an exam boo
   assert.equal(result.bookedExams.length, 0);
 });
 
-test('collects tables from every relevant same-origin page', async () => {
-  let currentUrl = 'https://www.docenti.unina.it/home';
-  const page = {
-    url: () => currentUrl,
-    goto: async href => { currentUrl = href; },
-    $: async () => null
-  };
-  const tablesByUrl = {
-    'https://www.docenti.unina.it/home': [{ headers: ['Insegnamento'], records: [{ Insegnamento: 'Analisi I' }] }],
-    'https://www.docenti.unina.it/prenotazioni': [{ headers: ['Esame'], records: [{ Esame: 'Analisi I' }] }]
-  };
-  const linksByUrl = {
-    'https://www.docenti.unina.it/home': [
-      { href: 'https://www.docenti.unina.it/prenotazioni', text: 'Prenotazioni' },
-      { href: 'https://other.example/private', text: 'Esami' }
-    ],
-    'https://www.docenti.unina.it/prenotazioni': []
-  };
-
-  const tables = await collectDocentiTables(page, {
-    extractTables: async target => tablesByUrl[target.url()] || [],
-    getLinks: async target => linksByUrl[target.url()] || []
+test('mappa un avviso del backend webdocenti-be nel formato del frontend', () => {
+  const mapped = mapAnnouncement({
+    id: 26963614,
+    categoria: 'Esami',
+    titolo: 'Calendario esami',
+    testo: '<p>21 dicembre</p>',
+    dataPubb: '2026-10-20T00:00:00+0200',
+    allegati: [{ id: 'abc123' }]
   });
 
-  assert.equal(tables.length, 2);
-  assert.equal(currentUrl, 'https://www.docenti.unina.it/prenotazioni');
+  assert.equal(mapped.id, '26963614');
+  assert.equal(mapped.title, 'Calendario esami');
+  assert.equal(mapped.content, '<p>21 dicembre</p>');
+  assert.equal(mapped.date, '2026-10-20T00:00:00+0200');
+  assert.equal(mapped.link, 'https://www.docenti.unina.it/webdocenti-be/allegati/avvisi/abc123');
 });
 
-test('reports missing Docenti credentials without launching a browser', async t => {
-  const previousUsername = process.env.DOCENTI_USERNAME;
-  const previousPassword = process.env.DOCENTI_PASSWORD;
-  delete process.env.DOCENTI_USERNAME;
-  delete process.env.DOCENTI_PASSWORD;
-  t.after(() => {
-    if (previousUsername !== undefined) process.env.DOCENTI_USERNAME = previousUsername;
-    if (previousPassword !== undefined) process.env.DOCENTI_PASSWORD = previousPassword;
+test('findTeacher ignora nomi troppo corti senza fare richieste', async () => {
+  let called = false;
+  const teacher = await findTeacher('ab', {
+    fetchJson: async () => { called = true; return null; }
   });
 
-  const result = await getDocentiData({
-    acquireBrowserContext: async () => { throw new Error('browser should not start without Docenti credentials'); }
+  assert.equal(teacher, null);
+  assert.equal(called, false);
+});
+
+test('fetchAnnouncementsForProfessors raggruppa gli avvisi per docente', async () => {
+  const calls = [];
+  const groups = await fetchAnnouncementsForProfessors(
+    ['BOCCARUSSO LUCA', 'BOCCARUSSO LUCA', 'Docente Ignoto'],
+    {
+      fetchJson: async path => {
+        calls.push(path);
+        if (path.startsWith('/docenti?')) {
+          return path.includes('Ignoto')
+            ? { content: [] }
+            : { content: [{ id: 't1', nome: 'LUCA', cognome: 'BOCCARUSSO' }] };
+        }
+        if (path.includes('/avvisi')) {
+          return {
+            content: [{
+              id: 1,
+              titolo: 'Calendario esami',
+              testo: '<p>21 dicembre</p>',
+              dataPubb: '2026-10-20',
+              allegati: []
+            }]
+          };
+        }
+        return null;
+      }
+    }
+  );
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].professor, 'LUCA BOCCARUSSO');
+  assert.equal(groups[0].items[0].title, 'Calendario esami');
+  // Il nome duplicato produce una sola ricerca; il docente inesistente viene scartato.
+  assert.equal(calls.filter(path => path.startsWith('/docenti?')).length, 2);
+});
+
+test('fetchAnnouncementsForProfessors scarta risposte senza contenuto valido', async () => {
+  const groups = await fetchAnnouncementsForProfessors(['Docente Test'], {
+    fetchJson: async path => (path.includes('/avvisi') ? { content: [] } : { content: [{ id: 't1', nome: 'A', cognome: 'TEST' }] })
   });
+
+  assert.deepEqual(groups, []);
+});
+
+test('senza credenziali non avvia il browser e non inventa avvisi', async t => {
+  withoutDocentiEnv(t);
+
+  const result = await getDocentiData({}, {
+    fetchAnnouncements: async () => { throw new Error('non deve essere chiamato'); },
+    queueScrapingTask: async () => { throw new Error('non deve essere chiamato'); }
+  });
+
   assert.equal(result.available, false);
   assert.equal(result.reason, 'DOCENTI_CREDENTIALS_REQUIRED');
   assert.deepEqual(result.subscriptions, []);
+  assert.deepEqual(result.announcements, []);
 });
 
-test('returns unavailable when an authenticated scrape finds no useful records', async t => {
-  useDocentiCredentials(t);
-  const closed = { value: false };
-  const page = {
-    goto: async () => {},
-    evaluate: async () => {},
-    waitForSelector: async () => {},
-    type: async () => {},
-    waitForNavigation: async () => null,
-    waitForFunction: async () => null,
-    click: async () => {},
-    $: async () => null,
-    url: () => 'https://www.docenti.unina.it/home'
-  };
+test('con credenziali raccoglie iscrizioni e avvisi per docente', async () => {
+  const result = await getDocentiData({ username: 'u', password: 'p' }, {
+    queueScrapingTask: async (data, logic) => logic(fakePage(), data),
+    extractTables: async () => [{
+      headers: ['Insegnamento', 'Docente'],
+      records: [{ Insegnamento: 'Reti di calcolatori', Docente: 'Docente A' }]
+    }],
+    fetchAnnouncements: async professors => {
+      assert.deepEqual(professors, ['Docente A']);
+      return [{
+        professor: 'Docente A',
+        slug: 'teacher-1',
+        items: [{ id: '1', title: 'Avviso', content: '<p>Testo</p>', date: '2026-10-01' }]
+      }];
+    }
+  });
 
-  const result = await getDocentiData({
-    acquireBrowserContext: async () => ({ context: { newPage: async () => page }, close: async () => { closed.value = true; } }),
+  assert.equal(result.available, true);
+  assert.equal(result.reason, null);
+  assert.equal(result.subscriptions.length, 1);
+  assert.equal(result.announcements.length, 1);
+  assert.equal(result.announcements[0].professor, 'Docente A');
+});
+
+test('segnala l\'assenza di dati quando la pagina non contiene tabelle utili', async () => {
+  const result = await getDocentiData({ username: 'u', password: 'p' }, {
+    queueScrapingTask: async (data, logic) => logic(fakePage(), data),
     extractTables: async () => [],
-    getLinks: async () => []
+    fetchAnnouncements: async () => []
   });
 
   assert.equal(result.available, false);
   assert.equal(result.reason, 'DOCENTI_DATA_NOT_FOUND');
-  assert.equal(closed.value, true);
-});
-
-test('closes the browser context when page initialization fails', async t => {
-  useDocentiCredentials(t);
-  let closed = false;
-
-  await assert.rejects(getDocentiData({
-    acquireBrowserContext: async () => ({
-      context: { newPage: async () => { throw new Error('newPage failed'); } },
-      close: async () => { closed = true; }
-    })
-  }), /newPage failed/);
-
-  assert.equal(closed, true);
+  assert.deepEqual(result.subscriptions, []);
 });

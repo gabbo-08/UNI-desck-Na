@@ -1,65 +1,76 @@
+const { enableFastMode, extractTables } = require('./utils');
 const { findPaymentTables } = require('../lib/taxes');
 
-async function enableFastMode(page) {
-  try {
-    await page.setRequestInterception(true);
-    page.on('request', (req) => {
-      if (req.isInterceptResolutionHandled()) return;
-      if (['image', 'font', 'media'].includes(req.resourceType())) {
-        req.abort().catch(() => {});
-      } else {
-        req.continue().catch(() => {});
-      }
-    });
-  } catch {}
-}
-
-async function extractTables(targetPage) {
-  const results = [];
-  for (const frame of targetPage.frames()) {
-    try {
-      const tables = await frame.evaluate(() => {
-        const c = s => (s || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
-        return Array.from(document.querySelectorAll('table')).map(t => {
-          const rows = Array.from(t.querySelectorAll('tr')).map(tr => ({
-            cells: Array.from(tr.querySelectorAll('th, td')).map(td => c(td.innerText)),
-          }));
-          if (rows.length < 2) return null;
-          const headers = rows[0].cells;
-          const records = rows.slice(1)
-            .map(row => row.cells)
-            .filter(row => row.some(cell => cell !== ''))
-            .map(row => Object.fromEntries(headers.map((h, i) => [h || `col_${i}`, row[i] ?? ''])));
-          return { headers, records, rowCount: records.length };
-        }).filter(Boolean);
-      });
-      if (tables && tables.length > 0) results.push(...tables);
-    } catch {}
-  }
-  return results;
-}
+const DEBUG = process.env.DEBUG_SCRAPER === '1';
 
 async function scrapeTasse(context, esisUrl) {
   const page = await context.newPage();
   await enableFastMode(page);
+  
   try {
-    await page.goto(esisUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
-    // Cerca versamenti
-    for (const frame of page.frames()) {
-      const clicked = await frame.evaluate(() => {
-        const link = Array.from(document.querySelectorAll('a')).find(a => a.href.includes('versamenti') || (a.innerText || '').toLowerCase().includes('versamenti'));
-        if (link) { link.click(); return true; }
-        return false;
-      });
-      if (clicked) {
-        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 6000 }).catch(() => {});
-        break;
+    console.log('[tasse] Caricamento pagina ESIS...');
+    await page.goto(esisUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    
+    // Ricaviamo il dominio base (es. https://www.segrepass3.unina.it)
+    const urlObj = new URL(page.url());
+    const baseUrl = urlObj.origin;
+
+    console.log('[tasse] Navigazione specifica su "Pagamenti in debito"...');
+    
+    // Tentativo di navigazione diretta alla voce di menu "Pagamenti in debito"
+    await page.goto(`${baseUrl}/esis/caricaMenu.do?azione=pagamentiDebito&currentParent=link_15`, {
+      waitUntil: 'domcontentloaded',
+      timeout: 15000
+    }).catch(async () => {
+      // Fallback: ricerca ed esecuzione del click sul link "Pagamenti in debito" nel menu laterale
+      console.log('[tasse] Fallback: ricerca click su "Pagamenti in debito"...');
+      for (const frame of page.frames()) {
+        const clicked = await frame.evaluate(() => {
+          const links = Array.from(document.querySelectorAll('a'));
+          const linkDebito = links.find(a => 
+            (a.innerText || '').toLowerCase().includes('pagamenti in debito') ||
+            (a.href || '').includes('azione=pagamentiDebito')
+          );
+          if (linkDebito) {
+            linkDebito.click();
+            return true;
+          }
+          return false;
+        });
+        if (clicked) break;
       }
+    });
+
+    // Verifica presenza del messaggio di assenza debiti
+    const pageText = await page.evaluate(() => document.body.innerText || '').catch(() => '');
+    if (pageText.includes('Non risultano pagamenti da effettuare')) {
+      console.log('[tasse] ✅ Riscontro ESIS: Nessun pagamento in debito da effettuare.');
     }
+
+    // Estrazione tabelle da tutti i frame
     const tables = await extractTables(page);
-    return findPaymentTables(tables);
-  } catch {
-    return { paid: [], pending: [], totalPaid: 0, totalPending: 0 };
+
+    if (DEBUG) {
+      console.log(`\n--- [DEBUG TASSE] TABELLE GREZZE: ${tables ? tables.length : 0} ---`);
+      console.log(JSON.stringify(tables, null, 2));
+      console.log('-----------------------------------------------------\n');
+    }
+    console.log(`[tasse] Tabelle lette: ${tables.length}`);
+
+    const result = findPaymentTables(tables);
+    // La pagina è stata letta con successo: anche senza debiti i dati sono validi.
+    result.available = true;
+    return result;
+
+  } catch (err) {
+    console.warn('[tasse] Errore estrazione:', err.message);
+    return {
+      available: false,
+      reason: 'TAXES_DATA_NOT_AVAILABLE',
+      paid: [],
+      pending: [],
+      summary: { totalPaid: 0, totalPending: 0, nextDeadline: null }
+    };
   } finally {
     await page.close().catch(() => {});
   }

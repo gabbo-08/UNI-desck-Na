@@ -1,0 +1,3884 @@
+# PARTE 2 DI 2
+===== FILE: scripts\seed-study-plan-l8-2025-26.js =====
+const { db: defaultDb } = require('../db');
+const { saveStudyPlan } = require('../db/repository');
+
+const SOURCE_URL = 'https://ingegneria-informatica.dieti.unina.it/images/files/GuideL-LM/Guida_LT_IngInf_2025-26_ITA_05122025.pdf';
+const VERSION = '2025-26';
+
+const COURSES = [
+  { courseName: 'Analisi matematica I', cfu: 9, studyYear: 1, semester: 1, prerequisites: [] },
+  { courseName: 'Geometria e algebra', cfu: 6, studyYear: 1, semester: 1, prerequisites: [] },
+  { courseName: 'Fondamenti di informatica', cfu: 12, studyYear: 1, semester: 1, prerequisites: [] },
+  { courseName: 'Architettura dei Calcolatori', cfu: 6, studyYear: 1, semester: 2, prerequisites: [] },
+  { courseName: 'Fisica generale I', cfu: 6, studyYear: 1, semester: 2, prerequisites: [] },
+  { courseName: 'Analisi matematica II', cfu: 9, studyYear: 1, semester: 2, prerequisites: ['Analisi matematica I'] },
+  { courseName: 'Lingua inglese', cfu: 3, studyYear: 1, semester: 2, prerequisites: [], courseType: 'other' },
+
+  { courseName: 'Fisica generale II', cfu: 6, studyYear: 2, semester: 1, prerequisites: ['Fisica generale I'] },
+  { courseName: 'Programmazione', cfu: 11, studyYear: 2, semester: 1, prerequisites: [] },
+  { courseName: 'Teoria dei segnali', cfu: 6, studyYear: 2, semester: 1, prerequisites: ['Analisi matematica I'] },
+  { courseName: 'Elettrotecnica', cfu: 9, studyYear: 2, semester: 2, prerequisites: ['Analisi matematica II'] },
+  { courseName: 'Fondamenti di sistemi dinamici', cfu: 9, studyYear: 2, semester: 2, prerequisites: ['Fisica generale II'] },
+  { courseName: 'Basi di dati', cfu: 6, studyYear: 2, semester: 2, prerequisites: [] },
+  { courseName: 'Sistemi a microprocessore', cfu: 6, studyYear: 2, semester: 2, prerequisites: [] },
+  { courseName: 'Fenomeni aleatori', cfu: 4, studyYear: 2, semester: 2, prerequisites: ['Analisi matematica I'] },
+
+  { courseName: 'Elettronica I', cfu: 9, studyYear: 3, semester: 1, prerequisites: ['Elettrotecnica'] },
+  { courseName: 'Reti di calcolatori', cfu: 9, studyYear: 3, semester: 1, prerequisites: ['Fondamenti di informatica'] },
+  { courseName: 'Controlli automatici', cfu: 6, studyYear: 3, semester: 1, prerequisites: ['Fondamenti di sistemi dinamici'] },
+  { courseName: 'Ingegneria del software', cfu: 9, studyYear: 3, semester: 2, prerequisites: ['Programmazione'] },
+  { courseName: 'Sistemi operativi', cfu: 9, studyYear: 3, semester: 2, prerequisites: ['Programmazione', 'Sistemi a microprocessore'] },
+  { courseName: 'Misure Elettriche ed Elettroniche', cfu: 6, studyYear: 3, semester: 2, prerequisites: [] },
+  { courseName: 'Ulteriori conoscenze: laboratori', cfu: 3, studyYear: 3, semester: 2, prerequisites: [], courseType: 'other' },
+  { courseName: 'Prova finale', cfu: 3, studyYear: 3, semester: null, prerequisites: [], courseType: 'other' },
+
+  { courseName: 'Intelligenza Artificiale', cfu: 9, studyYear: 3, semester: 2, prerequisites: ['Programmazione'], courseType: 'elective' },
+  { courseName: 'Sistemi multimediali', cfu: 9, studyYear: 3, semester: 2, prerequisites: ['Basi di dati'], courseType: 'elective' },
+  { courseName: 'Automazione Industriale', cfu: 9, studyYear: 3, semester: 2, prerequisites: ['Fondamenti di sistemi dinamici'], courseType: 'elective' },
+  { courseName: 'Advanced Computer Programming', cfu: 9, studyYear: 3, semester: 1, prerequisites: ['Programmazione'], courseType: 'elective' }
+].map(course => ({
+  ...course,
+  electiveGroup: course.courseType === 'elective' ? 'autonomous-18-cfu' : null,
+  electiveRequiredCfu: course.courseType === 'elective' ? 18 : null
+}));
+
+function seedL8Plan(database = defaultDb) {
+  const aliases = [
+    { courseId: 'DE3', courseName: 'Ingegneria Informatica L-8' },
+    { courseId: 'N46', courseName: 'Ingegneria Informatica L-8' }
+  ];
+
+  return aliases.map(alias => saveStudyPlan(database, {
+    ...alias,
+    cohortYear: 2025,
+    version: VERSION,
+    sourceName: 'Guida dello Studente Laurea Triennale N46, a.a. 2025/2026',
+    sourceUrl: SOURCE_URL
+  }, COURSES));
+}
+
+if (require.main === module) {
+  const plans = seedL8Plan();
+  console.log(`Importati ${plans.length} alias del piano L-8 2025/2026 (${COURSES.length} righe per alias).`);
+}
+
+module.exports = { seedL8Plan, COURSES, SOURCE_URL, VERSION };
+===== FINE: scripts\seed-study-plan-l8-2025-26.js =====
+
+===== FILE: scripts\testScraper.js =====
+const { getDatiCarriera } = require('../scraper/segrepass');
+
+async function testScraper() {
+  const codiceFiscale = process.env.SEGREPASS_CF;
+  const password = process.env.SEGREPASS_PASS;
+
+  if (!codiceFiscale || !password) {
+    console.error('⚠️ Inserisci Codice Fiscale e Password nelle variabili di ambiente.');
+    process.exit(1);
+  }
+
+  console.log('🚀 Avvio test dello scraper Segrepass...\n');
+  const startTime = Date.now();
+
+  try {
+    const data = await getDatiCarriera({ codiceFiscale, password });
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(2);
+
+    console.log(`\n✅ Scraping completato in ${elapsed}s!\n`);
+    
+    console.log('📌 1. ANAGRAFICA ESTRATTA:');
+    console.dir(data.anagrafica, { colors: true });
+
+    console.log('\n📌 2. SINTESI ESAMI:');
+    console.log(`Numero di esami trovati: ${data.tabellaEsami.rowCount}`);
+    if (data.tabellaEsami.records && data.tabellaEsami.records.length > 0) {
+      console.log('Ultimi 3 esami in libretto:');
+      console.dir(data.tabellaEsami.records.slice(0, 3), { colors: true });
+    }
+
+    console.log('\n📌 3. TASSE & PAGAMENTI:');
+    console.log(`- Disponibile: ${data.taxes.available}`);
+    console.log(`- Versamenti Pagati: ${data.taxes.paid.length} (Totale: € ${data.taxes.summary.totalPaid})`);
+    console.dir(data.taxes.paid, { colors: true });
+
+    console.log(`- Versamenti In Debito: ${data.taxes.pending.length} (Totale: € ${data.taxes.summary.totalPending})`);
+    console.dir(data.taxes.pending, { colors: true });
+
+  } catch (error) {
+    console.error('❌ Errore durante lo scraping:', error.message);
+  }
+}
+
+testScraper();
+===== FINE: scripts\testScraper.js =====
+
+===== FILE: services\career-cache.js =====
+const crypto = require('node:crypto');
+const { JWT_SECRET } = require('../lib/config');
+
+const DEFAULT_TTL_MS = 15 * 60 * 1000;
+const cache = new Map();
+const inFlight = new Map();
+
+function ttlMs() {
+  const configured = Number(process.env.CAREER_CACHE_TTL_MS);
+  return Number.isFinite(configured) && configured >= 0 ? configured : DEFAULT_TTL_MS;
+}
+
+/**
+ * Chiave per studente + credenziale. Della password resta solo un HMAC:
+ * una password errata non può quindi riutilizzare i dati in cache.
+ */
+function cacheKey(profileId, password) {
+  const fingerprint = crypto
+    .createHmac('sha256', JWT_SECRET)
+    .update(String(password || ''))
+    .digest('hex');
+  return `${profileId}:${fingerprint}`;
+}
+
+function prune(now = Date.now()) {
+  const ttl = ttlMs();
+  for (const [key, entry] of cache) {
+    if (now - entry.storedAt > ttl) cache.delete(key);
+  }
+}
+
+function getCachedCareer(profileId, password, now = Date.now()) {
+  const ttl = ttlMs();
+  if (ttl <= 0) return null;
+
+  const key = cacheKey(profileId, password);
+  const entry = cache.get(key);
+  if (!entry) return null;
+  if (now - entry.storedAt > ttl) {
+    cache.delete(key);
+    return null;
+  }
+  return { value: entry.value, storedAt: entry.storedAt };
+}
+
+function setCachedCareer(profileId, password, value, now = Date.now()) {
+  if (ttlMs() <= 0) return;
+  const key = cacheKey(profileId, password);
+  cache.set(key, { value, storedAt: now, profileId });
+  prune(now);
+}
+
+/**
+ * Restituisce i dati di carriera dalla cache oppure esegue il loader una sola
+ * volta, anche se arrivano più login contemporanei per lo stesso studente.
+ */
+async function getOrLoadCareer(profileId, password, loader) {
+  const cached = getCachedCareer(profileId, password);
+  if (cached) return { value: cached.value, fromCache: true };
+
+  const key = cacheKey(profileId, password);
+  if (inFlight.has(key)) {
+    return { value: await inFlight.get(key), fromCache: false, shared: true };
+  }
+
+  const task = Promise.resolve()
+    .then(loader)
+    .then(value => {
+      setCachedCareer(profileId, password, value);
+      return value;
+    })
+    .finally(() => inFlight.delete(key));
+
+  inFlight.set(key, task);
+  return { value: await task, fromCache: false };
+}
+
+function clearCareerCache(profileId) {
+  if (!profileId) {
+    cache.clear();
+    inFlight.clear();
+    return;
+  }
+  for (const key of cache.keys()) {
+    if (key.startsWith(`${profileId}:`)) cache.delete(key);
+  }
+}
+
+module.exports = { getCachedCareer, setCachedCareer, getOrLoadCareer, clearCareerCache };
+===== FINE: services\career-cache.js =====
+
+===== FILE: services\career-metrics.js =====
+// Trasforma le righe della tabella "Esami Sostenuti" di Segrepass in oggetti Esame
+// (stesso formato di api.ts) e calcola CFU, medie e base di laurea.
+
+const normalizeKey = value => String(value ?? '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase()
+  .trim();
+
+const cleanText = value => String(value ?? '').replace(/\s+/g, ' ').trim();
+
+/**
+ * Primo valore non vuoto la cui intestazione corrisponde a uno dei pattern (in ordine di priorita')
+ */
+function pickField(record, patterns, exclude = null) {
+  const entries = Object.entries(record);
+  for (const pattern of patterns) {
+    for (const [key, value] of entries) {
+      const normalized = normalizeKey(key);
+      if (exclude && exclude.test(normalized)) continue;
+      if (pattern.test(normalized) && cleanText(value)) return cleanText(value);
+    }
+  }
+  return null;
+}
+
+/**
+ * "28", "30 e lode", "30L", "28/30" -> voto; "IDONEO" -> giudizio
+ */
+function parseGrade(raw) {
+  const text = cleanText(raw).toUpperCase();
+  if (!text) return { voto: null, lode: false, giudizio: null };
+  const digits = text.match(/(\d{2})/);
+  const voto = digits ? Number(digits[1]) : null;
+  if (voto !== null && voto >= 18 && voto <= 30) {
+    return { voto, lode: voto === 30 && /LODE|30\s*L\b/.test(text), giudizio: null };
+  }
+  return { voto: null, lode: false, giudizio: cleanText(raw) };
+}
+
+const PASSED_JUDGMENT = /idone|approvat|superat|positiv|conseguit|riconosciut|convalid/i;
+
+/**
+ * Righe del libretto -> Esame[] (solo esami superati)
+ */
+function normalizeEsami(records = []) {
+  const hasGradeColumn = records.some(record =>
+    Object.keys(record).some(key => /voto|valutazione|esito|giudizio/.test(normalizeKey(key)))
+  );
+
+  const exams = [];
+  for (const record of records) {
+    const name = pickField(
+      record,
+      [/insegnamento/, /denominazione/, /attivita/, /descrizione/, /materia/, /^esame/],
+      /codice|^cod$/
+    );
+    if (!name) continue;
+
+    const gradeRaw = pickField(record, [/^voto/, /valutazione/, /esito/, /giudizio/]);
+    const { voto, lode, giudizio } = parseGrade(gradeRaw);
+    // Senza colonna dei voti nella tabella, tutte le righe sono considerate superate
+    const passed = !hasGradeColumn || voto !== null || (giudizio && PASSED_JUDGMENT.test(giudizio));
+    if (!passed) continue;
+
+    const cfuRaw = pickField(record, [/cfu/, /crediti/, /peso/]);
+    const cfu = cfuRaw ? Number((cfuRaw.replace(',', '.').match(/\d+(?:\.\d+)?/) || ['0'])[0]) : 0;
+
+    exams.push({
+      materia: name,
+      insegnamento: name,
+      cfu: Number.isFinite(cfu) ? cfu : 0,
+      voto,
+      giudizio: voto === null ? giudizio : null,
+      lode,
+      data: pickField(record, [/data/, /verbalizz/, /superamento/]) || undefined
+    });
+  }
+  return exams;
+}
+
+/**
+ * Metriche nel formato atteso dal frontend (tipo Metriche di api.ts)
+ */
+function buildMetriche(records = [], { cfuTotali = 180 } = {}) {
+  const esami = normalizeEsami(records);
+  const graded = esami.filter(exam => exam.voto !== null);
+
+  const cfuAcquisiti = esami.reduce((sum, exam) => sum + exam.cfu, 0);
+  const gradedCfu = graded.reduce((sum, exam) => sum + exam.cfu, 0);
+
+  const mediaAritmetica = graded.length
+    ? graded.reduce((sum, exam) => sum + exam.voto, 0) / graded.length
+    : null;
+  const mediaPonderata = gradedCfu > 0
+    ? graded.reduce((sum, exam) => sum + exam.voto * exam.cfu, 0) / gradedCfu
+    : null;
+
+  const format = value => (value === null ? null : value.toFixed(2));
+  return {
+    esami,
+    cfuAcquisiti,
+    cfuTotali,
+    avanzamentoCFU: Math.min(100, Math.round((cfuAcquisiti / cfuTotali) * 100)),
+    mediaAritmetica: format(mediaAritmetica),
+    mediaPonderata: format(mediaPonderata),
+    baseLaurea: mediaPonderata === null ? null : format((mediaPonderata * 110) / 30)
+  };
+}
+
+module.exports = { buildMetriche, normalizeEsami, parseGrade };
+===== FINE: services\career-metrics.js =====
+
+===== FILE: services\career-snapshots.js =====
+// services/career-snapshots.js
+const TTL_MS = 12 * 60 * 60 * 1000; // 12 ore di validità per la sessione in memoria
+
+const careerSnapshots = new Map();
+const docentiSnapshots = new Map();
+const taxesSnapshots = new Map(); // Aggiunto store per le tasse
+const slowSnapshots = new Map(); // Tasse + appelli caricati in background
+const docentiLoading = new Set();
+
+function prune(store) {
+  const now = Date.now();
+  for (const [key, entry] of store) {
+    if (now - entry.storedAt > TTL_MS) store.delete(key);
+  }
+}
+
+function readFresh(store, profileId) {
+  const entry = store.get(profileId);
+  if (!entry) return null;
+  if (Date.now() - entry.storedAt > TTL_MS) {
+    store.delete(profileId);
+    return null;
+  }
+  return entry.value;
+}
+
+// -- Esami --
+function setCareerSnapshot(profileId, esami) {
+  prune(careerSnapshots);
+  careerSnapshots.set(profileId, { value: Array.isArray(esami) ? esami : [], storedAt: Date.now() });
+}
+
+function getCareerSnapshot(profileId) {
+  return readFresh(careerSnapshots, profileId);
+}
+
+// -- Tasse (Nuovo) --
+function setTaxesSnapshot(profileId, data) {
+  prune(taxesSnapshots);
+  taxesSnapshots.set(profileId, { value: data || null, storedAt: Date.now() });
+}
+
+function getTaxesSnapshot(profileId) {
+  return readFresh(taxesSnapshots, profileId);
+}
+
+// -- Dati lenti (tasse + appelli) --
+function setSlowSnapshot(profileId, data) {
+  prune(slowSnapshots);
+  slowSnapshots.set(profileId, { value: data || null, storedAt: Date.now() });
+}
+
+function getSlowSnapshot(profileId) {
+  return readFresh(slowSnapshots, profileId);
+}
+
+// -- Docenti --
+function setDocentiSnapshot(profileId, data) {
+  prune(docentiSnapshots);
+  docentiSnapshots.set(profileId, { value: data, storedAt: Date.now() });
+}
+
+function getDocentiSnapshot(profileId) {
+  return readFresh(docentiSnapshots, profileId);
+}
+
+function markDocentiLoading(profileId) {
+  docentiLoading.add(profileId);
+}
+
+function clearDocentiLoading(profileId) {
+  docentiLoading.delete(profileId);
+}
+
+function isDocentiLoading(profileId) {
+  return docentiLoading.has(profileId);
+}
+
+function clearSnapshots(profileId) {
+  careerSnapshots.delete(profileId);
+  docentiSnapshots.delete(profileId);
+  taxesSnapshots.delete(profileId); // Svuota anche le tasse
+  slowSnapshots.delete(profileId);
+  docentiLoading.delete(profileId);
+}
+
+module.exports = {
+  setCareerSnapshot,
+  getCareerSnapshot,
+  setTaxesSnapshot,
+  getTaxesSnapshot,
+  setSlowSnapshot,
+  getSlowSnapshot,
+  setDocentiSnapshot,
+  getDocentiSnapshot,
+  markDocentiLoading,
+  clearDocentiLoading,
+  isDocentiLoading,
+  clearSnapshots
+};
+===== FINE: services\career-snapshots.js =====
+
+===== FILE: services\docenti-cache.js =====
+// Cache breve per i dati del portale Docenti: evita di riaprire un browser
+// a ogni chiamata del frontend (dashboard + annunci + iscrizioni + appelli).
+const crypto = require('node:crypto');
+const { getDocentiSnapshot, isDocentiLoading } = require('./career-snapshots');
+const { JWT_SECRET } = require('../lib/config');
+
+const TTL_MS = 5 * 60 * 1000;
+// Il login avvia l'acquisizione in background: le richieste che arrivano nel
+// frattempo attendono lo stesso job invece di avviare altri browser.
+const LOADING_WAIT_MS = 60000;
+const LOADING_POLL_MS = 500;
+const cache = new Map();
+const inFlight = new Map();
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function credentialFingerprint(credentials) {
+  if (!credentials) return '';
+  const username = credentials.username || credentials.codiceFiscale || '';
+  const password = credentials.password || '';
+  if (!username && !password) return '';
+  return crypto
+    .createHmac('sha256', JWT_SECRET)
+    .update(`${username}\u0000${password}`)
+    .digest('hex')
+    .slice(0, 16);
+}
+
+function cacheKey(profileId, credentials) {
+  const fingerprint = credentialFingerprint(credentials);
+  return fingerprint ? `${profileId}:${fingerprint}` : String(profileId);
+}
+
+async function waitForBackground(profileId) {
+  const deadline = Date.now() + LOADING_WAIT_MS;
+  while (Date.now() < deadline) {
+    const snapshot = getDocentiSnapshot(profileId);
+    if (snapshot) return snapshot;
+    if (!isDocentiLoading(profileId)) return null;
+    await delay(LOADING_POLL_MS);
+  }
+  return getDocentiSnapshot(profileId);
+}
+
+function normalizeArgs(profileId, second, third, fourth) {
+  if (typeof second === 'function') {
+    return { credentials: fourth || third || null, loader: second };
+  }
+  return { credentials: second || null, loader: third };
+}
+
+async function getDocentiCached(profileId, second, third, fourth) {
+  const { credentials, loader } = normalizeArgs(profileId, second, third, fourth);
+  const key = cacheKey(profileId, credentials);
+
+  const entry = cache.get(key);
+  if (entry && Date.now() - entry.storedAt < TTL_MS) return entry.value;
+
+  // Il login carica già i dati in background: se ci sono, usali subito.
+  const background = getDocentiSnapshot(profileId);
+  if (background) {
+    cache.set(key, { value: background, storedAt: Date.now() });
+    return background;
+  }
+
+  if (isDocentiLoading(profileId)) {
+    const loaded = await waitForBackground(profileId);
+    if (loaded) {
+      cache.set(key, { value: loaded, storedAt: Date.now() });
+      return loaded;
+    }
+  }
+
+  if (inFlight.has(key)) return inFlight.get(key);
+
+  const task = Promise.resolve()
+    .then(loader)
+    .then(value => {
+      cache.set(key, { value, storedAt: Date.now() });
+      return value;
+    })
+    .finally(() => inFlight.delete(key));
+
+  inFlight.set(key, task);
+  return task;
+}
+
+function clearDocentiCache(profileId) {
+  if (profileId) {
+    const prefix = String(profileId);
+    for (const key of [...cache.keys()]) {
+      if (key === prefix || key.startsWith(`${prefix}:`)) cache.delete(key);
+    }
+    for (const key of [...inFlight.keys()]) {
+      if (key === prefix || key.startsWith(`${prefix}:`)) inFlight.delete(key);
+    }
+  } else {
+    cache.clear();
+    inFlight.clear();
+  }
+}
+
+module.exports = { getDocentiCached, clearDocentiCache, TTL_MS, cacheKey };
+===== FINE: services\docenti-cache.js =====
+
+===== FILE: services\easyacademy-provider.js =====
+const { queueScrapingTask } = require('../scraper/pool');
+const { normalizeCourseName, nameSimilarity } = require('../lib/matching');
+
+const AGENDA_URL = 'https://easyacademy.unina.it/agendastudenti/index.php?view=easycourse&_lang=it&include=corso';
+const CACHE_TTL_MS = 5 * 60 * 1000;
+const timetableCache = new Map();
+const MONTHS = {
+  gennaio: '01', febbraio: '02', marzo: '03', aprile: '04', maggio: '05', giugno: '06',
+  luglio: '07', agosto: '08', settembre: '09', ottobre: '10', novembre: '11', dicembre: '12'
+};
+
+function normalizeLabel(value) {
+  return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+}
+
+function errorWithStatus(message, status, code) {
+  const error = new Error(message);
+  error.status = status;
+  error.code = code;
+  return error;
+}
+
+function parsePopupText(rawText) {
+  const text = String(rawText || '').replace(/\u00a0/g, ' ').replace(/\r/g, '');
+  const between = (start, end) => {
+    const startAt = text.indexOf(start);
+    if (startAt < 0) return '';
+    const valueStart = startAt + start.length;
+    const endAt = text.indexOf(end, valueStart);
+    return text.slice(valueStart, endAt < 0 ? text.length : endAt).trim();
+  };
+
+  const rawName = between('Nome insegnamento', 'Argomento lezione');
+  const teacherText = between('Docenti', 'Data e Ora');
+  const dateTime = between('Data e Ora', 'Aula').replace(/\s+/g, ' ').trim();
+  const room = (text.match(/Nome aula:\s*([\s\S]*?)(?=Capacità:|Sede:|Google Maps|$)/i)?.[1] || '').trim();
+  const campus = (text.match(/Sede:\s*([^\[]+)/i)?.[1] || '').trim();
+  const coursePath = between('Percorso didattico', 'Numero eventi collegati').replace(/\s+/g, ' ').trim();
+  const dateMatch = dateTime.match(/(?:\w+\s+)?(\d{1,2})\s+([a-zà-ù]+)\s+(\d{4})\s*(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})/i);
+  const month = dateMatch ? MONTHS[normalizeLabel(dateMatch[2])] : null;
+
+  return {
+    courseName: rawName.replace(/\s*\([^)]*\)\s*$/, '').trim(),
+    channel: rawName.match(/\(([^()]*)\)\s*$/)?.[1] || null,
+    teachers: teacherText.split('\n').map(name => name.trim()).filter(Boolean),
+    dateTime,
+    date: dateMatch && month ? `${dateMatch[3]}-${month}-${dateMatch[1].padStart(2, '0')}` : null,
+    startTime: dateMatch?.[4] || null,
+    endTime: dateMatch?.[5] || null,
+    room: room.replace(/\s+/g, ' ').trim() || null,
+    campus: campus || null,
+    coursePath: coursePath || null
+  };
+}
+
+function getCourseOptions(options, { courseId, courseName, studyYear }) {
+  const wantedName = normalizeCourseName(String(courseName || '')
+    .replace(/\[[^\]]+\]/g, '')
+    .replace(/\bL-?\s*8\b/i, ''));
+  const candidates = options.map(option => {
+    const text = String(option.text || '').trim();
+    const isThirdYear = /terzo anno/i.test(text);
+    const displayName = normalizeCourseName(text.replace(/\s*\([^)]*\)/g, '').replace(/\s*[-–]\s*terzo anno/i, ''));
+    const codeMatch = Boolean(courseId && String(option.value).toLowerCase() === String(courseId).toLowerCase());
+    const similarity = wantedName ? nameSimilarity(displayName, wantedName) : 0;
+    const yearMatch = (studyYear >= 3) === isThirdYear;
+    return { option, text, codeMatch, similarity, score: similarity + (yearMatch ? 0.25 : 0) + (codeMatch ? 0.1 : 0) };
+  }).filter(candidate => candidate.option.value && (candidate.codeMatch || candidate.similarity >= 0.72));
+
+  candidates.sort((left, right) => right.score - left.score);
+  return candidates[0] || null;
+}
+
+function extractGroupRange(text) {
+  const token = String(text || '').toUpperCase().match(/\b([A-Z])\s*[-–]\s*([A-Z]+)/);
+  if (!token) return null;
+  return { first: token[1], last: token[2][0] };
+}
+
+function matchesStudyGroup(optionText, channel, surnameInitial) {
+  const normalizedOption = normalizeLabel(optionText);
+  const channelToken = normalizeLabel(String(channel || '').split(':').pop().replace(/corso generico/i, ''));
+  if (channelToken && normalizedOption.includes(channelToken)) return true;
+
+  const channelPart = String(surnameInitial || channel || '').toUpperCase().split(':').pop();
+  const initial = channelPart.match(/[A-Z]/)?.[0];
+  const range = extractGroupRange(optionText);
+  return Boolean(initial && range && initial >= range.first && initial <= range.last);
+}
+
+function selectStudyGroup(options, studyYear, channel, surnameInitial) {
+  const relevant = options.filter(option => new RegExp(`^\\s*${studyYear}\\s*[-–]`).test(option.text));
+  const matches = relevant.filter(option => matchesStudyGroup(option.text, channel, surnameInitial));
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) {
+    const exact = matches.find(option => normalizeLabel(option.text).includes(normalizeLabel(channel || '')));
+    if (exact) return exact;
+  }
+  return null;
+}
+
+function cacheKey(filters) {
+  return JSON.stringify({
+    courseId: filters.courseId,
+    courseName: normalizeLabel(filters.courseName),
+    academicYear: filters.academicYear,
+    studyYear: filters.studyYear,
+    semester: filters.semester,
+    channel: normalizeLabel(filters.channel),
+    surnameInitial: normalizeLabel(filters.surnameInitial)
+  });
+}
+
+function readCache(key, now = Date.now()) {
+  const cached = timetableCache.get(key);
+  if (!cached || cached.expiresAt <= now) {
+    timetableCache.delete(key);
+    return null;
+  }
+  return cached.value;
+}
+
+function writeCache(key, value, now = Date.now()) {
+  for (const [entryKey, entry] of timetableCache) {
+    if (entry.expiresAt <= now) timetableCache.delete(entryKey);
+  }
+  timetableCache.set(key, { value, expiresAt: now + CACHE_TTL_MS });
+}
+
+async function scrapeTimetablePage(page, filters) {
+  const { courseId, courseName, academicYear, studyYear, semester, channel, surnameInitial, key } = filters;
+
+  try {
+    await page.goto(AGENDA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+    const academicYearOptions = await page.$$eval('#cdl_aa option', options => options.map(option => ({ value: option.value, text: option.text.trim() })));
+    const selectedAcademicYear = academicYear
+      ? academicYear.match(/\d{4}/)?.[0]
+      : academicYearOptions.map(option => option.value).filter(value => /^\d{4}$/.test(value)).sort().at(-1);
+    if (!selectedAcademicYear || !academicYearOptions.some(option => option.value === selectedAcademicYear)) {
+      throw errorWithStatus('Anno accademico non disponibile in EasyAcademy.', 400, 'ACADEMIC_YEAR_NOT_AVAILABLE');
+    }
+    await page.select('#cdl_aa', selectedAcademicYear);
+    await page.waitForFunction(() => Array.from(document.querySelector('#cdl_scuola')?.options || [])
+      .some(option => option.value), { timeout: 15000 });
+
+    let courseOptions = await page.$$eval('#cdl_co option', options => options.map(option => ({ value: option.value, text: option.text.trim() })));
+    let course = getCourseOptions(courseOptions, { courseId, courseName, studyYear });
+    if (!course) {
+      const schools = await page.$$eval('#cdl_scuola option', options => options.map(option => option.value).filter(Boolean));
+      const expectedName = normalizeCourseName(String(courseName || '').replace(/\[[^\]]+\]/g, '').replace(/\bL-?\s*8\b/i, ''));
+      for (const school of schools) {
+        await page.select('#cdl_scuola', school);
+        await page.waitForFunction(criteria => {
+          const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+            .toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+          return Array.from(document.querySelector('#cdl_co')?.options || []).some(option =>
+            (criteria.courseId && option.value.toLowerCase() === criteria.courseId.toLowerCase()) ||
+            (criteria.courseName && normalize(option.text).includes(criteria.courseName)));
+        }, { timeout: 4000 }, { courseId, courseName: expectedName }).catch(() => {});
+        courseOptions = await page.$$eval('#cdl_co option', options => options.map(option => ({ value: option.value, text: option.text.trim() })));
+        course = getCourseOptions(courseOptions, { courseId, courseName, studyYear });
+        if (course) break;
+      }
+    }
+    if (!course) throw errorWithStatus('Corso non trovato nell’offerta EasyAcademy.', 404, 'COURSE_NOT_FOUND');
+
+    await page.select('#cdl_co', course.option.value);
+    await page.waitForFunction(year => Array.from(document.querySelector('#cdl_a2_multi')?.options || [])
+      .some(option => new RegExp(`^\\s*${year}\\s*[-–]`).test(option.text)), { timeout: 15000 }, studyYear);
+    const groups = await page.$$eval('#cdl_a2_multi option', options => options.map(option => ({ value: option.value, text: option.text.trim() })));
+    const group = selectStudyGroup(groups, studyYear, channel, surnameInitial);
+    if (!group) throw errorWithStatus('Canale non trovato per l’anno di corso scelto.', 400, 'STUDY_GROUP_NOT_FOUND');
+    await page.select('#cdl_a2_multi', group.value);
+
+    if (semester !== null && semester !== undefined) {
+      const semesterValue = `S${semester}`;
+      const availableSemesters = await page.$$eval('#cdl_pd option', options => options.map(option => option.value));
+      if (!availableSemesters.includes(semesterValue)) {
+        throw errorWithStatus('Semestre non disponibile per il gruppo selezionato.', 400, 'SEMESTER_NOT_AVAILABLE');
+      }
+      await page.select('#cdl_pd', semesterValue);
+    }
+
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {}),
+      page.click('button[type="submit"]')
+    ]);
+    await page.waitForFunction(() => document.querySelectorAll('[id^="info-popup"]').length > 0 ||
+      /nessun evento|nessuna lezione/i.test(document.body.innerText), { timeout: 15000 }).catch(() => {});
+
+    const events = await page.$$eval('[id^="info-popup"]', elements => elements
+      .filter(element => /^info-popup\d+$/.test(element.id))
+      .map(element => ({ id: element.id, text: element.innerText || '' })));
+    const result = {
+      source: 'EasyAcademy Unina',
+      academicYear: academicYearOptions.find(option => option.value === selectedAcademicYear)?.text || selectedAcademicYear,
+      course: course.text,
+      studyYear,
+      semester: semester ?? null,
+      channel: group.text,
+      events: events.map(event => ({ id: event.id, ...parsePopupText(event.text) })).filter(event => event.courseName)
+    };
+    writeCache(key, result);
+    return result;
+  } catch (error) {
+    if (error.status) throw error;
+    throw errorWithStatus(`EasyAcademy non disponibile: ${error.message}`, 502, 'EASYACADEMY_REQUEST_FAILED');
+  }
+}
+
+async function getTimetable({ courseId, courseName, academicYear, studyYear, semester, channel, surnameInitial }) {
+  if (!courseName && !courseId) throw errorWithStatus('Imposta il corso nel profilo.', 409, 'PROFILE_ONBOARDING_REQUIRED');
+  const key = cacheKey({ courseId, courseName, academicYear, studyYear, semester, channel, surnameInitial });
+  const cached = readCache(key);
+  if (cached) return cached;
+
+  // EasyAcademy non richiede login: usa una pagina isolata del pool condiviso,
+  // così non si apre un secondo Chromium e non si esaurisce la memoria del server.
+  return queueScrapingTask({}, page => scrapeTimetablePage(page, {
+    courseId, courseName, academicYear, studyYear, semester, channel, surnameInitial, key
+  }));
+}
+
+function clearTimetableCache() {
+  timetableCache.clear();
+}
+
+module.exports = {
+  getTimetable,
+  parsePopupText,
+  getCourseOptions,
+  selectStudyGroup,
+  matchesStudyGroup,
+  clearTimetableCache,
+  CACHE_TTL_MS
+};
+===== FINE: services\easyacademy-provider.js =====
+
+===== FILE: services\profile-extractor.js =====
+const { normalizeName } = require('../db/repository');
+
+// Solo DE3 e' verificato (compare cosi' sul portale Docenti: "DE3 INGEGNERIA INFORMATICA").
+// Per gli altri corsi si usa il codice letto da Segrepass oppure il nome normalizzato:
+// i codici DE1, DE2, DE4 e DE5 della versione precedente erano inventati e sono stati tolti.
+const COURSE_CODE_MAP = {
+  'INGEGNERIA INFORMATICA': 'DE3'
+};
+
+// ATTENZIONE: solo "A-D" e' confermato dal tuo profilo. Gli altri intervalli sono un'ipotesi:
+// confrontali con i canali che mostra EasyAcademy per il tuo corso.
+const DEFAULT_CANALI = [
+  { da: 'A', a: 'D', canale: 'A-D' },
+  { da: 'E', a: 'O', canale: 'E-O' },
+  { da: 'P', a: 'Z', canale: 'P-Z' }
+];
+
+const MAX_COURSE_YEARS = 3;
+
+/**
+ * Anno di inizio dell'anno accademico in corso (l'anno accademico parte a settembre)
+ */
+function currentAcademicStart(now = new Date()) {
+  return now.getMonth() >= 8 ? now.getFullYear() : now.getFullYear() - 1;
+}
+
+/**
+ * Anno di corso dalla coorte, tenendo conto che l'anno accademico parte a settembre
+ * (con il calcolo sull'anno solare, a gennaio un iscritto del 2025 risultava gia' al 2° anno)
+ */
+function calculateCourseYear(cohortYear, maxYears = MAX_COURSE_YEARS, now = new Date()) {
+  if (!cohortYear) return 1;
+  const year = currentAcademicStart(now) - Number(cohortYear) + 1;
+  return Math.min(Math.max(year, 1), maxYears);
+}
+
+/**
+ * Canale dall'iniziale del cognome; null se il cognome non c'e' (nessun valore di ripiego)
+ */
+function determinaCanale(cognome, regole = DEFAULT_CANALI) {
+  const initial = String(cognome || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .charAt(0)
+    .toUpperCase();
+  if (!initial) return null;
+  const rule = regole.find(item => initial >= item.da && initial <= item.a);
+  return rule ? rule.canale : null;
+}
+
+/**
+ * Una coorte e' plausibile se non e' nel futuro e non e' di oltre 8 anni fa
+ */
+function sanitizeCohort(value, now = new Date()) {
+  const year = Number(value);
+  if (!Number.isInteger(year)) return null;
+  const start = currentAcademicStart(now);
+  return year >= start - 8 && year <= start ? year : null;
+}
+
+/**
+ * Stima della coorte dal primo anno accademico che compare nei versamenti
+ * (es. "2025/2026"): la prima tassa si paga all'immatricolazione.
+ */
+function inferCohortFromTaxes(taxes, now = new Date()) {
+  const items = [...(taxes?.paid || []), ...(taxes?.pending || [])];
+  const years = [];
+  for (const item of items) {
+    const text = typeof item === 'string' ? item : JSON.stringify(item);
+    for (const match of text.matchAll(/(20\d{2})\s*\/\s*(?:20)?\d{2}/g)) {
+      years.push(Number(match[1]));
+    }
+  }
+  const valid = years.map(year => sanitizeCohort(year, now)).filter(Boolean);
+  return valid.length ? Math.min(...valid) : null;
+}
+
+function cohortFromCourseYear(courseYear, now = new Date()) {
+  const year = Number(courseYear);
+  if (!Number.isInteger(year) || year < 1 || year > MAX_COURSE_YEARS) return null;
+  return sanitizeCohort(currentAcademicStart(now) - year + 1, now);
+}
+
+/**
+ * Maiuscolo, senza accenti, solo lettere e cifre separate da uno spazio
+ */
+function normalizeText(value) {
+  return String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .trim();
+}
+
+/**
+ * Tra i piani del database (listPlans(cohortYear) -> [{ course_id, course_code, course_name }]) cerca
+ * quello del corso. Corrispondenza esatta di nome o codice prima; se resta un solo candidato lo usa,
+ * se sono piu' d'uno non indovina (es. triennale e magistrale con nomi simili).
+ */
+function findPlanByName(courseName, codes, cohortYear, listPlans, findPlan) {
+  const target = normalizeText(courseName);
+  if (!target || typeof listPlans !== 'function') return null;
+  const wantedCodes = new Set(codes.map(normalizeText).filter(Boolean));
+
+  const plans = listPlans(cohortYear) || [];
+  const exact = [];
+  const partial = [];
+  for (const plan of plans) {
+    const name = normalizeText(plan.course_name);
+    const planCodes = [plan.course_code, plan.course_id].map(normalizeText).filter(Boolean);
+    if (name === target || planCodes.some(code => wantedCodes.has(code))) exact.push(plan);
+    else if (name.length >= 8 && (name.includes(target) || target.includes(name))) partial.push(plan);
+  }
+  const pool = exact.length ? exact : partial;
+  if (pool.length !== 1) return null;
+  const chosen = String(pool[0].course_id);
+  return findPlan(chosen, cohortYear) ? chosen : null;
+}
+
+/**
+ * Costruisce il profilo dai dati letti su Segrepass.
+ *  - nessun valore inventato: se un dato non si ricava resta null (e la UI lo chiede una volta sola);
+ *  - coorte: dato esplicito di Segrepass > profilo gia' salvato > stima dai versamenti > anno di corso;
+ *  - corso: si prova ogni candidato (codice, nome) contro i manifesti presenti nel database con
+ *    findPlan(courseId, cohortYear); se nessuno coincide si cerca per nome tra i piani (listPlans),
+ *    cosi' "scritto diversamente" non rompe piu' la ricerca e un id sbagliato salvato si corregge da solo;
+ *  - canale: se il profilo ne ha gia' uno (anche impostato a mano) resta quello.
+ *
+ * existing: profilo gia' salvato (colonne snake_case); findPlan: (courseId, cohortYear) => piano | null
+ */
+function buildStudentProfile(anagrafica = {}, { taxes = null, existing = null, findPlan = null, listPlans = null, now = new Date() } = {}) {
+  // Maiuscolo e spazi singoli: "Ingegneria  Informatica" e "INGEGNERIA INFORMATICA" sono lo stesso corso
+  const courseName = (anagrafica.corsoDiLaurea ? String(anagrafica.corsoDiLaurea).replace(/\s+/g, ' ').trim().toUpperCase() : null)
+    || existing?.course_name
+    || null;
+
+  const cohortYear = sanitizeCohort(anagrafica.annoImmatricolazione, now)
+    ?? sanitizeCohort(existing?.cohort_year, now)
+    ?? inferCohortFromTaxes(taxes, now)
+    ?? cohortFromCourseYear(anagrafica.annoCorso, now);
+
+  const normalized = courseName && typeof normalizeName === 'function' ? normalizeName(courseName) : courseName;
+  const candidates = [...new Set(
+    [
+      anagrafica.codiceCorso,
+      existing?.course_id,
+      courseName && COURSE_CODE_MAP[courseName],
+      normalized,
+      courseName
+    ]
+      .filter(Boolean)
+      .flatMap(value => [String(value).trim(), String(value).trim().toUpperCase()])
+  )];
+
+  let courseId = null;
+  if (typeof findPlan === 'function' && cohortYear) {
+    for (const candidate of candidates) {
+      const plan = findPlan(candidate, cohortYear);
+      if (plan) {
+        courseId = String(plan.course_id ?? candidate);
+        break;
+      }
+    }
+  }
+  // Nessun candidato coincide con un manifesto: si cerca per nome tra i piani presenti nel database
+  if (!courseId && typeof findPlan === 'function' && cohortYear && courseName) {
+    courseId = findPlanByName(courseName, [anagrafica.codiceCorso, existing?.course_id].filter(Boolean), cohortYear, listPlans, findPlan);
+  }
+  courseId = courseId ?? existing?.course_id ?? candidates[0] ?? null;
+
+  const surname = anagrafica.cognome ? String(anagrafica.cognome).trim().toUpperCase() : '';
+  const surnameInitial = surname.charAt(0) || existing?.surname_initial || null;
+  const channel = existing?.channel || determinaCanale(surname || existing?.surname_initial);
+
+  const currentCourseYear = cohortYear
+    ? calculateCourseYear(cohortYear, MAX_COURSE_YEARS, now)
+    : (existing?.current_course_year ?? null);
+
+  return { courseId, courseName, cohortYear, currentCourseYear, channel, surnameInitial };
+}
+
+/**
+ * Compatibilita' con il vecchio nome: stesso risultato, ma senza valori inventati
+ */
+function extractStudentProfile(anagrafica = {}, options = {}) {
+  return buildStudentProfile(anagrafica, options);
+}
+
+module.exports = {
+  calculateCourseYear,
+  determinaCanale,
+  extractStudentProfile,
+  buildStudentProfile,
+  inferCohortFromTaxes,
+  findPlanByName
+};
+===== FINE: services\profile-extractor.js =====
+
+===== FILE: services\slow-sync.js =====
+const snapshots = require('./career-snapshots');
+const { getDatiCarriera } = require('../scraper/segrepass');
+
+const statuses = new Map();
+const inFlight = new Set();
+
+// Dopo un errore non si ritenta a ogni poll: si evita di martellare il portale
+// (e di far risultare offline i nodi Segrepass) con login ripetuti.
+const RETRY_COOLDOWN_MS = 2 * 60 * 1000;
+
+function getSlowStatus(profileId) {
+  return statuses.get(profileId) || { state: 'idle' };
+}
+
+function resetSlowSync(profileId) {
+  statuses.delete(profileId);
+  snapshots.setSlowSnapshot(profileId, null);
+}
+
+/**
+ * Carica tasse e appelli in background. Non blocca il login: la UI mostra
+ * subito esami/profilo e interroga /api/career/slow-data per il resto.
+ */
+function startSlowSync(profileId, credentials, dependencies = {}) {
+  if (inFlight.has(profileId)) return getSlowStatus(profileId);
+  if (snapshots.getSlowSnapshot(profileId)) return getSlowStatus(profileId);
+
+  const scraper = dependencies.getDatiCarriera || getDatiCarriera;
+  inFlight.add(profileId);
+  statuses.set(profileId, { state: 'loading', startedAt: Date.now() });
+
+  Promise.resolve()
+    .then(() => scraper(credentials, { phase: 'slow' }))
+    .then(data => {
+      const taxes = data?.tasse || null;
+      const prenotazioni = Array.isArray(data?.prenotazioni) ? data.prenotazioni : [];
+
+      snapshots.setTaxesSnapshot(profileId, taxes);
+      snapshots.setSlowSnapshot(profileId, {
+        taxes,
+        prenotazioni,
+        updatedAt: Date.now()
+      });
+      statuses.set(profileId, { state: 'ready', finishedAt: Date.now() });
+    })
+    .catch(error => {
+      console.warn(`[slow-sync] Dati lenti non disponibili: ${error?.message || error}`);
+      statuses.set(profileId, {
+        state: 'error',
+        error: error?.code || 'SLOW_SYNC_FAILED',
+        finishedAt: Date.now()
+      });
+    })
+    .finally(() => inFlight.delete(profileId));
+
+  return getSlowStatus(profileId);
+}
+
+/**
+ * Avvia il caricamento se non c'è già un risultato o un job in corso.
+ * Utile dopo un riavvio del server: le credenziali sono ancora in memoria.
+ */
+function ensureSlowSync(profileId, credentials, dependencies = {}) {
+  const status = getSlowStatus(profileId);
+  if (status.state === 'loading') return status;
+  if (snapshots.getSlowSnapshot(profileId)) return status;
+  if (status.state === 'error' && Date.now() - (status.finishedAt || 0) < RETRY_COOLDOWN_MS) return status;
+  return startSlowSync(profileId, credentials, dependencies);
+}
+
+function clearSlowStatus(profileId) {
+  statuses.delete(profileId);
+}
+
+module.exports = {
+  startSlowSync,
+  ensureSlowSync,
+  getSlowStatus,
+  resetSlowSync,
+  clearSlowStatus
+};
+===== FINE: services\slow-sync.js =====
+
+===== FILE: services\student-session.js =====
+// services/student-session.js
+const jwt = require('jsonwebtoken');
+const { getDatiCarriera } = require('../scraper/segrepass');
+const { getDocentiData } = require('../scraper/docenti');
+const { buildStudentProfile } = require('./profile-extractor');
+const snapshots = require('./career-snapshots');
+const careerCache = require('./career-cache');
+const slowSync = require('./slow-sync');
+const { clearDocentiCache } = require('./docenti-cache');
+const dbModule = require('../db');
+const { upsertStudentProfile, getStudentProfile, getStudyPlan } = require('../db/repository');
+const { setCredentials } = require('../utils/sessionStore');
+const { JWT_SECRET, JWT_TTL } = require('../lib/config');
+const { seal } = require('../lib/secret-box');
+
+const db = dbModule.db || dbModule;
+const EMPTY_DOCENTI = Object.freeze({ subscriptions: [], bookedExams: [], announcements: [] });
+
+function hasProfileSetup(profile) {
+  const course = profile?.course_id || profile?.courseId;
+  const cohort = profile?.cohort_year || profile?.cohortYear;
+  return Boolean(course && cohort);
+}
+
+function listPlansForCohort(cohortYear, database = db) {
+  if (!cohortYear) return [];
+  for (const columns of ['course_id, course_code, course_name', 'course_id, course_name']) {
+    try {
+      return database.prepare(`SELECT ${columns} FROM StudyPlans WHERE cohort_year = ?`).all(cohortYear);
+    } catch {}
+  }
+  return [];
+}
+
+function docentiCredentials(dependencies = {}) {
+  // Nessun fallback globale: in produzione non esistono credenziali Docenti
+  // condivise. I servizi possono ancora ricevere credenziali esplicite per
+  // test o integrazioni, ma il default resta vuoto.
+  return dependencies.docentiCredentials || {};
+}
+
+function loadDocentiInBackground(profileId, dependencies = {}) {
+  // Un solo job per studente: due login ravvicinati non devono aprire due
+  // sessioni sullo stesso account (il portale invaliderebbe la prima).
+  if (snapshots.isDocentiLoading(profileId)) return Promise.resolve();
+
+  const credentials = docentiCredentials(dependencies);
+  if (!credentials.username || !credentials.password) {
+    snapshots.setDocentiSnapshot(profileId, {
+      available: false,
+      reason: 'DOCENTI_CREDENTIALS_REQUIRED',
+      ...EMPTY_DOCENTI
+    });
+    return Promise.resolve();
+  }
+
+  const scraper = dependencies.getDocentiData || getDocentiData;
+  snapshots.markDocentiLoading(profileId);
+
+  return Promise.resolve()
+    .then(() => scraper(credentials))
+    .then(data => snapshots.setDocentiSnapshot(profileId, data))
+    .catch(error => {
+      console.warn(`[docenti] Acquisizione per ${profileId} non riuscita: ${error?.message}`);
+      snapshots.setDocentiSnapshot(profileId, {
+        available: false,
+        reason: error?.code || 'DOCENTI_SCRAPE_FAILED',
+        ...EMPTY_DOCENTI
+      });
+    })
+    .finally(() => snapshots.clearDocentiLoading(profileId));
+}
+
+/**
+ * Email da usare per il portale Docenti: quella del profilo, oppure l'id
+ * stesso se l'utente ha fatto login con l'email istituzionale.
+ */
+function resolveDocentiEmail(profile, profileId) {
+  const fromProfile = profile?.email;
+  if (typeof fromProfile === 'string' && fromProfile.includes('@')) return fromProfile.trim().toLowerCase();
+  if (String(profileId).includes('@')) return String(profileId).trim().toLowerCase();
+  return null;
+}
+
+/**
+ * Accetta solo email ben formate (es. nome.cognome@studenti.unina.it).
+ */
+function normalizeEmail(value) {
+  const email = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : null;
+}
+
+async function createStudentSession({ codiceFiscale, password, email } = {}, dependencies = {}) {
+  if (typeof codiceFiscale !== 'string' || !codiceFiscale.trim() || typeof password !== 'string' || !password) {
+    const error = new Error('Inserisci codice fiscale e password.');
+    error.status = 400;
+    throw error;
+  }
+
+  const database = dependencies.database || db;
+  const scraper = dependencies.getDatiCarriera || getDatiCarriera;
+  const jwtSecret = dependencies.jwtSecret || JWT_SECRET;
+  const cfClean = codiceFiscale.trim().toUpperCase();
+
+  // Cache per studente: se i dati sono freschi si evita lo scraping completo.
+  // La chiave include un HMAC della password, così una password errata non
+  // può riutilizzare i dati di un login precedente.
+  const careerResult = await careerCache.getOrLoadCareer(
+    cfClean,
+    password,
+    () => scraper({ codiceFiscale: cfClean, password }, { phase: 'fast' })
+  );
+  const datiCarriera = careerResult.value;
+  const fromCache = careerResult.fromCache;
+
+  const esami = Array.isArray(datiCarriera.esami) ? datiCarriera.esami : [];
+  const tasse = datiCarriera.tasse || null;
+
+  const existing = getStudentProfile(database, cfClean);
+  const profile = buildStudentProfile(datiCarriera.anagrafica || {}, {
+    taxes: tasse,
+    existing,
+    findPlan: dependencies.findPlan || ((courseId, cohortYear) => getStudyPlan(database, courseId, cohortYear)),
+    listPlans: dependencies.listPlans || (cohortYear => listPlansForCohort(cohortYear, database))
+  });
+
+  // Se il piano è già a database, completa il nome corso mancante.
+  if (profile.courseId && profile.cohortYear && !profile.courseName) {
+    const plan = getStudyPlan(database, profile.courseId, profile.cohortYear);
+    if (plan?.course_name) profile.courseName = plan.course_name;
+  }
+
+  const storedProfile = upsertStudentProfile(database, {
+    id: cfClean,
+    ...profile,
+    esamiSostenuti: esami,
+    tasse
+  });
+
+  snapshots.setCareerSnapshot(cfClean, esami);
+  snapshots.setTaxesSnapshot(cfClean, tasse);
+  // Ogni login invalida i dati Docenti precedenti e forza un refresh completo.
+  snapshots.setDocentiSnapshot(cfClean, null);
+  clearDocentiCache(cfClean);
+  slowSync.resetSlowSync(cfClean);
+
+  // Tasse e appelli partono in background: il login non li attende.
+  const ensureSlow = dependencies.ensureSlowSync || slowSync.ensureSlowSync;
+  const slowStatus = ensureSlow(cfClean, { codiceFiscale: cfClean, password }, dependencies);
+
+  // Il portale Docenti richiede l'email istituzionale (@studenti.unina.it),
+  // non il codice fiscale. Quella inserita nel form ha la precedenza.
+  const docentiEmail = normalizeEmail(email) || resolveDocentiEmail(storedProfile || profile, cfClean);
+
+  // La password viaggia nel JWT in forma cifrata (campo "pw").
+  const token = jwt.sign(
+    { sub: cfClean, codiceFiscale: cfClean, email: docentiEmail || undefined, pw: seal(password) },
+    jwtSecret,
+    { expiresIn: JWT_TTL }
+  );
+
+  const configuredDocenti = docentiCredentials(dependencies);
+  const credentials = dependencies.docentiCredentials
+    || (configuredDocenti.username && configuredDocenti.password
+      ? configuredDocenti
+      : (docentiEmail ? { username: docentiEmail, password } : {}));
+
+  if (credentials.username && credentials.password) {
+    setCredentials(cfClean, credentials);
+  }
+
+  const docentiSnapshot = snapshots.getDocentiSnapshot(cfClean);
+  const alreadyLoading = snapshots.isDocentiLoading(cfClean);
+  if (!docentiSnapshot && !alreadyLoading) {
+    loadDocentiInBackground(cfClean, { ...dependencies, docentiCredentials: credentials });
+  }
+
+  const docentiLoading = !docentiSnapshot && (alreadyLoading || Boolean(credentials.username && credentials.password));
+  const docentiReason = docentiSnapshot
+    ? (docentiSnapshot.available ? null : docentiSnapshot.reason || 'DOCENTI_SCRAPE_FAILED')
+    : (docentiLoading ? null : 'DOCENTI_CREDENTIALS_REQUIRED');
+
+  return {
+    token,
+    expiresIn: JWT_TTL,
+    profileId: cfClean,
+    profile: storedProfile || profile,
+    onboardingRequired: !hasProfileSetup(storedProfile || profile),
+    fromCache,
+    slowSync: slowStatus.state,
+    docentiLoading,
+    docentiReason,
+    metriche: datiCarriera
+  };
+}
+
+module.exports = {
+  createStudentSession,
+  loadDocentiInBackground,
+  listPlansForCohort,
+  hasProfileSetup
+};
+===== FINE: services\student-session.js =====
+
+===== FILE: test\auth-routes.test.js =====
+process.env.DB_PATH = ':memory:';
+process.env.JWT_SECRET = '[REDATTO]';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const express = require('express');
+const jwt = require('jsonwebtoken');
+const authRoutes = require('../routes/auth');
+const { csrfProtection } = require('../lib/csrf');
+const { db } = require('../db');
+const { upsertStudentProfile } = require('../db/repository');
+
+const ORIGIN = 'http://localhost:3000';
+
+async function withAuthApi(t) {
+  const app = express();
+  app.use(express.json());
+  app.use(csrfProtection);
+  app.use('/api/auth', authRoutes);
+
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  const { port } = server.address();
+  return (path, options = {}) => fetch(`http://127.0.0.1:${port}/api/auth${path}`, options);
+}
+
+test('GET /session richiede il cookie httpOnly', async t => {
+  const request = await withAuthApi(t);
+  const response = await request('/session');
+  assert.equal(response.status, 401);
+});
+
+test('GET /session restituisce un nuovo token dal cookie', async t => {
+  const request = await withAuthApi(t);
+  const profileId = 'route-profile-1';
+  upsertStudentProfile(db, {
+    id: profileId,
+    courseId: 'DE3',
+    courseName: 'INGEGNERIA INFORMATICA',
+    cohortYear: 2025,
+    currentCourseYear: 2,
+    channel: 'A-D'
+  });
+
+  const cookieToken = jwt.sign({ sub: profileId }, 'route-test-secret', { expiresIn: '5m' });
+  const response = await request('/session', {
+    headers: { cookie: `segrepass_token=${cookieToken}` }
+  });
+  const body = await response.json();
+
+  assert.equal(response.status, 200);
+  assert.equal(body.profile.id, profileId);
+  assert.equal(body.onboardingRequired, false);
+  assert.equal(typeof body.token, 'string');
+  assert.match(response.headers.get('set-cookie') || '', /HttpOnly/i);
+});
+
+test('GET /session risponde 404 se il profilo non esiste', async t => {
+  const request = await withAuthApi(t);
+  const cookieToken = jwt.sign({ sub: 'missing-profile' }, 'route-test-secret');
+
+  const response = await request('/session', {
+    headers: { cookie: `segrepass_token=${cookieToken}` }
+  });
+  assert.equal(response.status, 404);
+});
+
+test('POST /logout cancella il cookie', async t => {
+  const request = await withAuthApi(t);
+  const response = await request('/logout', {
+    method: 'POST',
+    headers: { Origin: ORIGIN }
+  });
+
+  assert.equal(response.status, 204);
+  assert.match(response.headers.get('set-cookie') || '', /segrepass_token=;/);
+});
+
+test('POST /login senza Origin viene bloccato dal CSRF', async t => {
+  const request = await withAuthApi(t);
+  const response = await request('/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ codiceFiscale: 'AAABBB00A00A000A', password: 'x' })
+  });
+  const body = await response.json();
+
+  assert.equal(response.status, 403);
+  assert.equal(body.code, 'CSRF_ORIGIN_REQUIRED');
+});
+
+test('POST /login con Origin e body vuoto risponde 400 senza scraping', async t => {
+  const request = await withAuthApi(t);
+  const response = await request('/login', {
+    method: 'POST',
+    headers: { Origin: ORIGIN, 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  const body = await response.json();
+
+  assert.equal(response.status, 400);
+  assert.match(body.error, /codice fiscale/i);
+});
+
+test('POST /login con Origin non consentito risponde 403', async t => {
+  const request = await withAuthApi(t);
+  const response = await request('/login', {
+    method: 'POST',
+    headers: { Origin: 'https://evil.example', 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(response.status, 403);
+});
+===== FINE: test\auth-routes.test.js =====
+
+===== FILE: test\career-cache.test.js =====
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const {
+  getCachedCareer,
+  setCachedCareer,
+  getOrLoadCareer,
+  clearCareerCache
+} = require('../services/career-cache');
+
+const PROFILE = 'cache-profile-test';
+
+test('salva e rilegge i dati per studente', t => {
+  t.after(() => clearCareerCache(PROFILE));
+  const data = { esami: [{ materia: 'Analisi I' }] };
+
+  setCachedCareer(PROFILE, 'password-1', data);
+  const cached = getCachedCareer(PROFILE, 'password-1');
+
+  assert.deepEqual(cached.value, data);
+});
+
+test('una password diversa non accede alla cache', t => {
+  t.after(() => clearCareerCache(PROFILE));
+  setCachedCareer(PROFILE, 'password-1', { esami: [] });
+
+  assert.equal(getCachedCareer(PROFILE, 'password-2'), null);
+});
+
+test('la cache scade dopo il TTL configurato', t => {
+  const previous = process.env.CAREER_CACHE_TTL_MS;
+  process.env.CAREER_CACHE_TTL_MS = '10';
+  t.after(() => {
+    clearCareerCache(PROFILE);
+    if (previous === undefined) delete process.env.CAREER_CACHE_TTL_MS;
+    else process.env.CAREER_CACHE_TTL_MS = previous;
+  });
+
+  setCachedCareer(PROFILE, 'password-1', { esami: [] }, Date.now() - 50);
+  assert.equal(getCachedCareer(PROFILE, 'password-1'), null);
+});
+
+test('getOrLoadCareer esegue il loader una sola volta e poi usa la cache', async t => {
+  t.after(() => clearCareerCache(PROFILE));
+  let calls = 0;
+  const loader = async () => {
+    calls += 1;
+    return { esami: [{ materia: 'Analisi I' }] };
+  };
+
+  const first = await getOrLoadCareer(PROFILE, 'password-1', loader);
+  const second = await getOrLoadCareer(PROFILE, 'password-1', loader);
+
+  assert.equal(calls, 1);
+  assert.equal(first.fromCache, false);
+  assert.equal(second.fromCache, true);
+});
+
+test('getOrLoadCareer deduplica login concorrenti dello stesso studente', async t => {
+  t.after(() => clearCareerCache(PROFILE));
+  let calls = 0;
+  const loader = async () => {
+    calls += 1;
+    await new Promise(resolve => setTimeout(resolve, 10));
+    return { esami: [] };
+  };
+
+  const [first, second] = await Promise.all([
+    getOrLoadCareer(PROFILE, 'password-1', loader),
+    getOrLoadCareer(PROFILE, 'password-1', loader)
+  ]);
+
+  assert.equal(calls, 1);
+  assert.deepEqual(first.value, second.value);
+});
+
+test('clearCareerCache invalida i dati dello studente', async t => {
+  t.after(() => clearCareerCache(PROFILE));
+  let calls = 0;
+  const loader = async () => { calls += 1; return { esami: [] }; };
+
+  await getOrLoadCareer(PROFILE, 'password-1', loader);
+  clearCareerCache(PROFILE);
+  const afterClear = await getOrLoadCareer(PROFILE, 'password-1', loader);
+
+  assert.equal(calls, 2);
+  assert.equal(afterClear.fromCache, false);
+});
+
+test('CAREER_CACHE_TTL_MS=0 disattiva la cache', async t => {
+  const previous = process.env.CAREER_CACHE_TTL_MS;
+  process.env.CAREER_CACHE_TTL_MS = '0';
+  t.after(() => {
+    clearCareerCache(PROFILE);
+    if (previous === undefined) delete process.env.CAREER_CACHE_TTL_MS;
+    else process.env.CAREER_CACHE_TTL_MS = previous;
+  });
+
+  let calls = 0;
+  const loader = async () => { calls += 1; return { esami: [] }; };
+
+  await getOrLoadCareer(PROFILE, 'password-1', loader);
+  const second = await getOrLoadCareer(PROFILE, 'password-1', loader);
+
+  assert.equal(calls, 2);
+  assert.equal(second.fromCache, false);
+});
+===== FINE: test\career-cache.test.js =====
+
+===== FILE: test\careerMetrics.test.js =====
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { calcolaMetriche, simulaBaseLaurea, normalizzaEsame } = require('../lib/metriche');
+
+test('normalizzaEsame mappa un record grezzo con sinonimi di chiavi', () => {
+  const exam = normalizzaEsame({
+    'Codice Insegnamento': 'A123',
+    'Denominazione Attività': 'Ingeneria del Software',
+    'Valutazione/Voto': '30 e Lode',
+    'Crediti CFU': '9',
+    'Data Verbalizzazione': '12/02/2025'
+  });
+
+  assert.equal(exam.codice, 'A123');
+  assert.equal(exam.materia, 'Ingeneria del Software');
+  assert.equal(exam.voto, 30);
+  assert.equal(exam.lode, true);
+  assert.equal(exam.cfu, 9);
+  assert.equal(exam.data, '12/02/2025');
+});
+
+test('normalizzaEsame gestisce idoneità e giudizi non numerici', () => {
+  const exam = normalizzaEsame({ Insegnamento: 'Tirocinio', Esito: 'IDONEO', CFU: '3' });
+
+  assert.equal(exam.voto, null);
+  assert.equal(exam.giudizio, 'IDONEO');
+  assert.equal(exam.cfu, 3);
+});
+
+test('calcolaMetriche restituisce valori di default senza esami', () => {
+  const metrics = calcolaMetriche([]);
+
+  assert.equal(metrics.cfuAcquisiti, 0);
+  assert.equal(metrics.mediaAritmetica, '--');
+  assert.equal(metrics.mediaPonderata, '--');
+  assert.equal(metrics.baseLaurea, '--');
+});
+
+test('calcola media aritmetica, ponderata e base di laurea', () => {
+  const metrics = calcolaMetriche([
+    { Insegnamento: 'Esame A', Voto: '24', CFU: '6' },
+    { Insegnamento: 'Esame B', Voto: '30', CFU: '12' },
+    { Insegnamento: 'Inglese', Voto: 'IDONEO', CFU: '3' }
+  ], 180);
+
+  assert.equal(metrics.cfuAcquisiti, 21);
+  assert.equal(metrics.mediaAritmetica, 27);
+  assert.equal(metrics.mediaPonderata, 28);
+  assert.equal(metrics.baseLaurea, 102.67);
+  assert.equal(metrics.avanzamentoCFU, 12);
+});
+
+test('simulaBaseLaurea proietta gli esami futuri', () => {
+  assert.equal(simulaBaseLaurea([{ voto: 24, cfu: 6 }], [{ voto: 30, cfu: 6 }]), 99);
+  assert.equal(simulaBaseLaurea([], []), 0);
+});
+===== FINE: test\careerMetrics.test.js =====
+
+===== FILE: test\csrf.test.js =====
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const express = require('express');
+const {
+  csrfProtection,
+  normalizeOrigin,
+  requestOrigin,
+  allowedOrigins
+} = require('../lib/csrf');
+
+function execute(overrides = {}) {
+  const req = { method: 'POST', headers: {}, protocol: 'http', ...overrides };
+  const result = { statusCode: 200, body: null, nextCalled: false };
+
+  const res = {
+    status(code) { result.statusCode = code; return this; },
+    json(body) { result.body = body; return this; }
+  };
+
+  csrfProtection(req, res, () => { result.nextCalled = true; });
+  return result;
+}
+
+test('normalizeOrigin accetta solo origini http(s)', () => {
+  assert.equal(normalizeOrigin('http://localhost:3000'), 'http://localhost:3000');
+  assert.equal(normalizeOrigin('https://app.example.com/path?x=1'), 'https://app.example.com');
+  assert.equal(normalizeOrigin('javascript:alert(1)'), null);
+  assert.equal(normalizeOrigin('non-un-url'), null);
+  assert.equal(normalizeOrigin(undefined), null);
+});
+
+test('requestOrigin preferisce Origin e ricade su Referer', () => {
+  assert.equal(requestOrigin({ headers: { origin: 'https://a.example' } }), 'https://a.example');
+  assert.equal(requestOrigin({ headers: { referer: 'https://b.example/page' } }), 'https://b.example');
+  assert.equal(requestOrigin({ headers: {} }), null);
+});
+
+test('i metodi safe non richiedono Origin', () => {
+  for (const method of ['GET', 'HEAD', 'OPTIONS']) {
+    const result = execute({ method });
+    assert.equal(result.nextCalled, true);
+    assert.equal(result.statusCode, 200);
+  }
+});
+
+test('le richieste con Bearer esplicito sono esenti', () => {
+  const result = execute({ headers: { authorization: 'bearer abc123' } });
+  assert.equal(result.nextCalled, true);
+});
+
+test('una richiesta mutante senza Origin/Referer viene bloccata', () => {
+  const result = execute();
+  assert.equal(result.nextCalled, false);
+  assert.equal(result.statusCode, 403);
+  assert.equal(result.body.code, 'CSRF_ORIGIN_REQUIRED');
+});
+
+test('un origine non consentita viene bloccata', () => {
+  const result = execute({ headers: { origin: 'https://evil.example' } });
+  assert.equal(result.nextCalled, false);
+  assert.equal(result.statusCode, 403);
+  assert.equal(result.body.code, 'CSRF_ORIGIN_INVALID');
+});
+
+test('le origini del frontend e same-origin sono consentite', () => {
+  for (const origin of ['http://localhost:3000', 'http://127.0.0.1:3000']) {
+    assert.equal(execute({ headers: { origin } }).nextCalled, true, origin);
+  }
+
+  const sameOrigin = execute({
+    headers: { host: '127.0.0.1:3001', origin: 'http://127.0.0.1:3001' }
+  });
+  assert.equal(sameOrigin.nextCalled, true);
+});
+
+test('il Referer con path è un fallback valido', () => {
+  const result = execute({ headers: { referer: 'http://localhost:3000/dashboard' } });
+  assert.equal(result.nextCalled, true);
+});
+
+test('FRONTEND_URL aggiunge origini consentite', t => {
+  const previous = process.env.FRONTEND_URL;
+  process.env.FRONTEND_URL = 'https://app.example.com,https://second.example';
+  t.after(() => {
+    if (previous === undefined) delete process.env.FRONTEND_URL;
+    else process.env.FRONTEND_URL = previous;
+  });
+
+  assert.equal(execute({ headers: { origin: 'https://app.example.com' } }).nextCalled, true);
+  assert.equal(execute({ headers: { origin: 'https://second.example' } }).nextCalled, true);
+  assert.equal(execute({ headers: { origin: 'https://other.example' } }).statusCode, 403);
+});
+
+test('X-Forwarded-Host non è fidato senza TRUST_PROXY', () => {
+  const result = execute({
+    headers: {
+      host: '127.0.0.1:3001',
+      'x-forwarded-host': 'evil.example',
+      origin: 'http://evil.example'
+    }
+  });
+  assert.equal(result.statusCode, 403);
+});
+
+test('TRUST_PROXY=0 non abilita X-Forwarded-Host', t => {
+  const previous = process.env.TRUST_PROXY;
+  process.env.TRUST_PROXY = '0';
+  t.after(() => {
+    if (previous === undefined) delete process.env.TRUST_PROXY;
+    else process.env.TRUST_PROXY = previous;
+  });
+
+  const result = execute({
+    headers: {
+      host: '127.0.0.1:3001',
+      'x-forwarded-host': 'evil.example',
+      origin: 'http://evil.example'
+    }
+  });
+  assert.equal(result.statusCode, 403);
+});
+
+test('allowedOrigins include default, configurazione e same-origin', t => {
+  const previous = process.env.FRONTEND_URL;
+  process.env.FRONTEND_URL = 'https://app.example.com';
+  t.after(() => {
+    if (previous === undefined) delete process.env.FRONTEND_URL;
+    else process.env.FRONTEND_URL = previous;
+  });
+
+  const origins = allowedOrigins({ headers: { host: 'api.local:4000' }, protocol: 'http' });
+  assert.equal(origins.has('http://localhost:3000'), true);
+  assert.equal(origins.has('https://app.example.com'), true);
+  assert.equal(origins.has('http://api.local:4000'), true);
+});
+
+test('il middleware è realmente applicato in una app Express', async t => {
+  const app = express();
+  app.use(express.json());
+  app.use(csrfProtection);
+  app.post('/mutate', (_req, res) => res.json({ ok: true }));
+
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  const { port } = server.address();
+  const url = `http://127.0.0.1:${port}/mutate`;
+
+  const blocked = await fetch(url, { method: 'POST' });
+  assert.equal(blocked.status, 403);
+  assert.equal((await blocked.json()).code, 'CSRF_ORIGIN_REQUIRED');
+
+  const allowed = await fetch(url, {
+    method: 'POST',
+    headers: { Origin: 'http://localhost:3000', 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(allowed.status, 200);
+  assert.deepEqual(await allowed.json(), { ok: true });
+
+  const withBearer = await fetch(url, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer test-token', 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(withBearer.status, 200);
+});
+===== FINE: test\csrf.test.js =====
+
+===== FILE: test\database.test.js =====
+process.env.DB_PATH = ':memory:';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { createDatabase, SCHEMA_VERSION } = require('../db');
+const repository = require('../db/repository');
+
+test('creates the versioned local profile and study-plan schema', t => {
+  const db = createDatabase(':memory:');
+  t.after(() => db.close());
+
+  assert.equal(db.pragma('user_version', { simple: true }), SCHEMA_VERSION);
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map(row => row.name);
+  assert.deepEqual(tables.filter(name => ['StudentProfile', 'StudyPlans', 'PlanCourses', 'SelectedElectives'].includes(name)).sort(), [
+    'PlanCourses', 'SelectedElectives', 'StudentProfile', 'StudyPlans'
+  ]);
+});
+
+test('upserts profile fields without persisting login credentials', t => {
+  const db = createDatabase(':memory:');
+  t.after(() => db.close());
+
+  repository.upsertStudentProfile(db, { id: 'pseudonymous-id', courseId: 'DE3', cohortYear: 2025 });
+  repository.updateStudentProfile(db, 'pseudonymous-id', { channel: 'A-I' });
+  const updated = repository.upsertStudentProfile(db, { id: 'pseudonymous-id' });
+  assert.equal(updated.course_id, 'DE3');
+  assert.equal(updated.cohort_year, 2025);
+  assert.equal(updated.channel, 'A-I');
+  assert.equal(Object.hasOwn(updated, 'password'), false);
+  assert.equal(Object.hasOwn(updated, 'codice_fiscale'), false);
+});
+
+test('stores plan courses and only permits selecting elective rows', t => {
+  const db = createDatabase(':memory:');
+  t.after(() => db.close());
+  repository.upsertStudentProfile(db, { id: 'p1' });
+
+  const plan = repository.saveStudyPlan(db, {
+    courseId: 'DE3', cohortYear: 2025, courseName: 'Ingegneria Informatica', version: '2025.1'
+  }, [
+    { courseCode: 'MAT1', courseName: 'Analisi Matematica I', cfu: 9, studyYear: 1, semester: 1 },
+    { courseName: 'Sistemi Multimediali', cfu: 6, studyYear: 3, semester: 2, courseType: 'elective', electiveGroup: 'free', electiveRequiredCfu: 12 }
+  ]);
+  const courses = repository.getPlanCourses(db, plan.id);
+  assert.equal(courses.length, 2);
+  repository.replaceSelectedElectives(db, 'p1', plan.id, [courses[1].id]);
+  assert.deepEqual(repository.getSelectedElectiveIds(db, 'p1'), [courses[1].id]);
+  assert.throws(() => repository.replaceSelectedElectives(db, 'p1', plan.id, [courses[0].id]), { status: 400 });
+});
+===== FINE: test\database.test.js =====
+
+===== FILE: test\docenti-cache.test.js =====
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { getDocentiCached, clearDocentiCache } = require('../services/docenti-cache');
+const { setDocentiSnapshot } = require('../services/career-snapshots');
+
+function emptyData(available = true) {
+  return { available, subscriptions: [], bookedExams: [], announcements: [] };
+}
+
+test('usa lo snapshot caricato in background senza chiamare lo scraper', async t => {
+  const profileId = 'cache-background-1';
+  t.after(() => clearDocentiCache(profileId));
+  setDocentiSnapshot(profileId, emptyData(true));
+
+  let loaderCalled = false;
+  const value = await getDocentiCached(profileId, async () => {
+    loaderCalled = true;
+    return emptyData(false);
+  });
+
+  assert.equal(loaderCalled, false);
+  assert.equal(value.available, true);
+});
+
+test('deduplica richieste concorrenti e poi usa la cache', async t => {
+  const profileId = 'cache-dedupe-1';
+  t.after(() => clearDocentiCache(profileId));
+
+  let calls = 0;
+  const loader = async () => {
+    calls += 1;
+    await new Promise(resolve => setTimeout(resolve, 10));
+    return emptyData(true);
+  };
+
+  const [first, second] = await Promise.all([
+    getDocentiCached(profileId, loader),
+    getDocentiCached(profileId, loader)
+  ]);
+
+  assert.equal(calls, 1);
+  assert.deepEqual(first, second);
+
+  const third = await getDocentiCached(profileId, loader);
+  assert.equal(calls, 1);
+  assert.deepEqual(third, first);
+});
+
+test('clearDocentiCache forza un nuovo caricamento', async t => {
+  const profileId = 'cache-clear-1';
+  t.after(() => clearDocentiCache(profileId));
+
+  let calls = 0;
+  const loader = async () => {
+    calls += 1;
+    return emptyData(true);
+  };
+
+  await getDocentiCached(profileId, loader);
+  clearDocentiCache(profileId);
+  await getDocentiCached(profileId, loader);
+
+  assert.equal(calls, 2);
+});
+
+test('un errore del loader non viene messo in cache', async t => {
+  const profileId = 'cache-error-1';
+  t.after(() => clearDocentiCache(profileId));
+
+  await assert.rejects(getDocentiCached(profileId, async () => {
+    throw new Error('scrape failed');
+  }), /scrape failed/);
+
+  const value = await getDocentiCached(profileId, async () => emptyData(true));
+  assert.equal(value.available, true);
+});
+===== FINE: test\docenti-cache.test.js =====
+
+===== FILE: test\docenti-routes.test.js =====
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const express = require('express');
+const { createDocentiRouter } = require('../routes/docenti');
+
+async function withDocentiApi(t, loadDocenti) {
+  const app = express();
+  app.use('/api/docenti', (req, _res, next) => {
+    req.user = { sub: 'profile-test' };
+    next();
+  }, createDocentiRouter({ loadDocenti }));
+
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  const { port } = server.address();
+  return path => fetch(`http://127.0.0.1:${port}/api/docenti${path}`);
+}
+
+test('restituisce gli array attesi dal frontend', async t => {
+  const request = await withDocentiApi(t, async () => ({
+    available: true,
+    subscriptions: [{ courseName: 'Analisi I' }],
+    bookedExams: [{ courseName: 'Analisi I' }],
+    announcements: [{ title: 'Avviso' }]
+  }));
+
+  const subscriptions = await request('/subscriptions');
+  assert.equal(subscriptions.status, 200);
+  assert.deepEqual(await subscriptions.json(), [{ courseName: 'Analisi I' }]);
+
+  const announcements = await request('/announcements');
+  assert.deepEqual(await announcements.json(), [{ title: 'Avviso' }]);
+});
+
+test('restituisce 502 con codice quando lo scraping fallisce', async t => {
+  const request = await withDocentiApi(t, async () => {
+    const error = new Error('portale offline');
+    error.code = 'DOCENTI_TIMEOUT';
+    throw error;
+  });
+
+  const response = await request('/booked-exams');
+  const body = await response.json();
+
+  assert.equal(response.status, 502);
+  assert.equal(body.code, 'DOCENTI_TIMEOUT');
+});
+
+test('segnala con 424 quando i dati Docenti non sono disponibili', async t => {
+  const request = await withDocentiApi(t, async () => ({ available: false, reason: 'DOCENTI_DATA_NOT_FOUND' }));
+
+  const response = await request('/subscriptions');
+  const body = await response.json();
+
+  assert.equal(response.status, 424);
+  assert.equal(body.code, 'DOCENTI_DATA_NOT_FOUND');
+  assert.match(body.error, /Nessun dato Docenti/);
+});
+===== FINE: test\docenti-routes.test.js =====
+
+===== FILE: test\docenti.test.js =====
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const {
+  normalizeDocentiTables,
+  getDocentiData,
+  mapAnnouncement,
+  findTeacher,
+  fetchAnnouncementsForProfessors
+} = require('../scraper/docenti');
+
+function withoutDocentiEnv(t) {
+  const previousUsername = process.env.DOCENTI_USERNAME;
+  const previousPassword = process.env.DOCENTI_PASSWORD;
+  delete process.env.DOCENTI_USERNAME;
+  delete process.env.DOCENTI_PASSWORD;
+  t.after(() => {
+    if (previousUsername !== undefined) process.env.DOCENTI_USERNAME = previousUsername;
+    if (previousPassword !== undefined) process.env.DOCENTI_PASSWORD = previousPassword;
+  });
+}
+
+function fakePage() {
+  const inputs = [
+    { click: async () => {}, press: async () => {}, type: async () => {} },
+    { click: async () => {}, press: async () => {}, type: async () => {} }
+  ];
+  return {
+    goto: async () => {},
+    evaluate: async () => {},
+    waitForSelector: async () => inputs[0],
+    waitForFunction: async () => {},
+    $: async selector => (String(selector).includes('Password') || String(selector).includes('password') ? inputs[1] : inputs[0]),
+    $$: async () => inputs,
+    click: async () => {},
+    waitForNavigation: async () => null,
+    url: () => 'https://www.docenti.unina.it/personal-area/student/summaries',
+    frames: () => []
+  };
+}
+
+test('separa corsi sottoscritti e appelli prenotati', () => {
+  const result = normalizeDocentiTables([
+    {
+      headers: ['Codice', 'Insegnamento', 'Docente', 'Anno Accademico'],
+      records: [{ Codice: 'INF1', Insegnamento: 'Reti di calcolatori', Docente: 'Docente A', 'Anno Accademico': '2026/2027' }]
+    },
+    {
+      headers: ['Esame', 'Data Appello', 'Stato', 'Aula'],
+      records: [{ Esame: 'Reti di calcolatori', 'Data Appello': '10/01/2027', Stato: 'Prenotato', Aula: 'T1' }]
+    }
+  ]);
+
+  assert.equal(result.subscriptions.length, 1);
+  assert.equal(result.subscriptions[0].professor, 'Docente A');
+  assert.equal(result.bookedExams.length, 1);
+  assert.equal(result.bookedExams[0].examDate, '10/01/2027');
+});
+
+test('non interpreta lo stato del corso come prenotazione d\'esame', () => {
+  const result = normalizeDocentiTables([{
+    headers: ['Corso di laurea', 'Insegnamento', 'Docente', 'Stato corso'],
+    records: [{
+      'Corso di laurea': 'Ingegneria Informatica',
+      Insegnamento: 'Reti di calcolatori',
+      Docente: 'Docente A',
+      'Stato corso': 'Attivo'
+    }]
+  }]);
+
+  assert.equal(result.subscriptions.length, 1);
+  assert.equal(result.subscriptions[0].courseName, 'Reti di calcolatori');
+  assert.equal(result.bookedExams.length, 0);
+});
+
+test('mappa un avviso del backend webdocenti-be nel formato del frontend', () => {
+  const mapped = mapAnnouncement({
+    id: 26963614,
+    categoria: 'Esami',
+    titolo: 'Calendario esami',
+    testo: '<p>21 dicembre</p>',
+    dataPubb: '2026-10-20T00:00:00+0200',
+    allegati: [{ id: 'abc123' }]
+  });
+
+  assert.equal(mapped.id, '26963614');
+  assert.equal(mapped.title, 'Calendario esami');
+  assert.equal(mapped.content, '<p>21 dicembre</p>');
+  assert.equal(mapped.date, '2026-10-20T00:00:00+0200');
+  assert.equal(mapped.link, 'https://www.docenti.unina.it/webdocenti-be/allegati/avvisi/abc123');
+});
+
+test('findTeacher ignora nomi troppo corti senza fare richieste', async () => {
+  let called = false;
+  const teacher = await findTeacher('ab', {
+    fetchJson: async () => { called = true; return null; }
+  });
+
+  assert.equal(teacher, null);
+  assert.equal(called, false);
+});
+
+test('fetchAnnouncementsForProfessors raggruppa gli avvisi per docente', async () => {
+  const calls = [];
+  const groups = await fetchAnnouncementsForProfessors(
+    ['BOCCARUSSO LUCA', 'BOCCARUSSO LUCA', 'Docente Ignoto'],
+    {
+      fetchJson: async path => {
+        calls.push(path);
+        if (path.startsWith('/docenti?')) {
+          return path.includes('Ignoto')
+            ? { content: [] }
+            : { content: [{ id: 't1', nome: 'LUCA', cognome: 'BOCCARUSSO' }] };
+        }
+        if (path.includes('/avvisi')) {
+          return {
+            content: [{
+              id: 1,
+              titolo: 'Calendario esami',
+              testo: '<p>21 dicembre</p>',
+              dataPubb: '2026-10-20',
+              allegati: []
+            }]
+          };
+        }
+        return null;
+      }
+    }
+  );
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].professor, 'LUCA BOCCARUSSO');
+  assert.equal(groups[0].items[0].title, 'Calendario esami');
+  // Il nome duplicato produce una sola ricerca; il docente inesistente viene scartato.
+  assert.equal(calls.filter(path => path.startsWith('/docenti?')).length, 2);
+});
+
+test('fetchAnnouncementsForProfessors scarta risposte senza contenuto valido', async () => {
+  const groups = await fetchAnnouncementsForProfessors(['Docente Test'], {
+    fetchJson: async path => (path.includes('/avvisi') ? { content: [] } : { content: [{ id: 't1', nome: 'A', cognome: 'TEST' }] })
+  });
+
+  assert.deepEqual(groups, []);
+});
+
+test('senza credenziali non avvia il browser e non inventa avvisi', async t => {
+  withoutDocentiEnv(t);
+
+  const result = await getDocentiData({}, {
+    fetchAnnouncements: async () => { throw new Error('non deve essere chiamato'); },
+    queueScrapingTask: async () => { throw new Error('non deve essere chiamato'); }
+  });
+
+  assert.equal(result.available, false);
+  assert.equal(result.reason, 'DOCENTI_CREDENTIALS_REQUIRED');
+  assert.deepEqual(result.subscriptions, []);
+  assert.deepEqual(result.announcements, []);
+});
+
+test('con credenziali raccoglie iscrizioni e avvisi per docente', async () => {
+  const result = await getDocentiData({ username: 'u', password: 'p' }, {
+    queueScrapingTask: async (data, logic) => logic(fakePage(), data),
+    extractTables: async () => [{
+      headers: ['Insegnamento', 'Docente'],
+      records: [{ Insegnamento: 'Reti di calcolatori', Docente: 'Docente A' }]
+    }],
+    fetchAnnouncements: async professors => {
+      assert.deepEqual(professors, ['Docente A']);
+      return [{
+        professor: 'Docente A',
+        slug: 'teacher-1',
+        items: [{ id: '1', title: 'Avviso', content: '<p>Testo</p>', date: '2026-10-01' }]
+      }];
+    }
+  });
+
+  assert.equal(result.available, true);
+  assert.equal(result.reason, null);
+  assert.equal(result.subscriptions.length, 1);
+  assert.equal(result.announcements.length, 1);
+  assert.equal(result.announcements[0].professor, 'Docente A');
+});
+
+test('segnala l\'assenza di dati quando la pagina non contiene tabelle utili', async () => {
+  const result = await getDocentiData({ username: 'u', password: 'p' }, {
+    queueScrapingTask: async (data, logic) => logic(fakePage(), data),
+    extractTables: async () => [],
+    fetchAnnouncements: async () => []
+  });
+
+  assert.equal(result.available, false);
+  assert.equal(result.reason, 'DOCENTI_DATA_NOT_FOUND');
+  assert.deepEqual(result.subscriptions, []);
+});
+===== FINE: test\docenti.test.js =====
+
+===== FILE: test\easyacademy-provider.test.js =====
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { parsePopupText, getCourseOptions, selectStudyGroup } = require('../services/easyacademy-provider');
+
+test('parses course, teacher, date, time, room and campus from an EasyAcademy event', () => {
+  const event = parsePopupText('DettagliNome insegnamentoANALISI MATEMATICA I (FG1:A-DIL)  Argomento lezioneANALISI MATEMATICA I (FG1:A-DIL)DocentiPASSARELLI DI NAPOLI ANTONIAData e Oralunedì 12 ottobre 202608:30 - 10:30AulaNome aula: CL-T-1Capacità: 180Sede: Via Claudio [Via Claudio, 21, 80125 Napoli NA]Google MapsPercorso didatticoINGEGNERIA INFORMATICA [DE3] Laurea - 1 - Corso generico A-DILNumero eventi collegati40 eventi');
+  assert.equal(event.courseName, 'ANALISI MATEMATICA I');
+  assert.equal(event.channel, 'FG1:A-DIL');
+  assert.deepEqual(event.teachers, ['PASSARELLI DI NAPOLI ANTONIA']);
+  assert.equal(event.date, '2026-10-12');
+  assert.equal(event.startTime, '08:30');
+  assert.equal(event.endTime, '10:30');
+  assert.equal(event.room, 'CL-T-1');
+  assert.equal(event.campus, 'Via Claudio');
+});
+
+test('selects the course variant matching the requested study year', () => {
+  const options = [
+    { value: 'DE3', text: 'INGEGNERIA INFORMATICA (Laurea)' },
+    { value: 'N46', text: 'INGEGNERIA INFORMATICA (Terzo Anno) (Laurea)' }
+  ];
+  assert.equal(getCourseOptions(options, { courseId: 'N46', courseName: 'Ingegneria Informatica', studyYear: 2 }).option.value, 'DE3');
+  assert.equal(getCourseOptions(options, { courseId: 'DE3', courseName: 'Ingegneria Informatica', studyYear: 3 }).option.value, 'N46');
+});
+
+test('maps surname initials to EasyAcademy groups that vary by study year', () => {
+  const firstYear = [
+    { value: 'A-DIL|1', text: '1 - Corso generico A-DIL' },
+    { value: 'DIM-NES|1', text: '1 - Corso generico DIM-NES' },
+    { value: 'NET-Z|1', text: '1 - Corso generico NET-Z' }
+  ];
+  const secondYear = [
+    { value: 'A-I|2', text: '2 - Corso generico A-I' },
+    { value: 'J-Z|2', text: '2 - Corso generico J-Z' }
+  ];
+  assert.equal(selectStudyGroup(firstYear, 1, 'FG1:A-DIL', 'C').value, 'A-DIL|1');
+  assert.equal(selectStudyGroup(secondYear, 2, 'A-D', 'C').value, 'A-I|2');
+  assert.equal(selectStudyGroup(secondYear, 2, 'A-DIL', 'T').value, 'J-Z|2');
+});
+===== FINE: test\easyacademy-provider.test.js =====
+
+===== FILE: test\matching.test.js =====
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { matchStudyPlan, nameSimilarity } = require('../lib/matching');
+
+test('normalizes accents and Roman numerals for course names', () => {
+  assert.equal(nameSimilarity('Analisi Matematica II', 'Analisi Matematica 2'), 1);
+  assert.equal(nameSimilarity('Geometria e Algebra', 'Geometría ed Algebra'), 1);
+});
+
+test('matches by code before comparing the course name', () => {
+  const result = matchStudyPlan({
+    planCourses: [{ id: 1, courseCode: 'MAT02', courseName: 'Analisi II', cfu: 9, courseType: 'mandatory' }],
+    passedExams: [{ codice: 'MAT02', materia: 'Nome abbreviato', cfu: 9 }]
+  });
+  assert.equal(result.courses[0].status, 'passed');
+  assert.equal(result.courses[0].matchMethod, 'course_code');
+});
+
+test('uses fuzzy matching only when a course code is missing', () => {
+  const result = matchStudyPlan({
+    planCourses: [{ id: 1, courseName: 'Analisi Matematica II', cfu: 9, courseType: 'mandatory' }],
+    passedExams: [{ materia: 'Analisi Matematica 2', cfu: 9 }]
+  });
+  assert.equal(result.courses[0].status, 'passed');
+  assert.equal(result.courses[0].matchMethod, 'fuzzy_name');
+});
+
+test('marks close fuzzy candidates and credit mismatches for review', () => {
+  const ambiguous = matchStudyPlan({
+    planCourses: [{ id: 1, courseName: 'Analisi Matematica II', cfu: 9, courseType: 'mandatory' }],
+    passedExams: [
+      { materia: 'Analisi Matematica 2', cfu: 9 },
+      { materia: 'Analisi Matematica II', cfu: 9 }
+    ]
+  });
+  assert.equal(ambiguous.courses[0].status, 'needs_review');
+
+  const creditMismatch = matchStudyPlan({
+    planCourses: [{ id: 1, courseName: 'Analisi Matematica II', cfu: 9, courseType: 'mandatory' }],
+    passedExams: [{ materia: 'Analisi Matematica II', cfu: 6 }]
+  });
+  assert.equal(creditMismatch.courses[0].status, 'needs_review');
+});
+
+test('does not mark every optional course as mandatory', () => {
+  const result = matchStudyPlan({
+    planCourses: [
+      { id: 1, courseName: 'Sistemi multimediali', cfu: 6, courseType: 'elective', electiveGroup: 'free', electiveRequiredCfu: 12 },
+      { id: 2, courseName: 'Intelligenza artificiale', cfu: 6, courseType: 'elective', electiveGroup: 'free', electiveRequiredCfu: 12 }
+    ]
+  });
+  assert.equal(result.courses.every(course => course.status === 'elective_available'), true);
+  assert.equal(result.summary.mandatoryMissingCfu, 0);
+  assert.equal(result.electiveGroups[0].remainingCfu, 12);
+});
+===== FINE: test\matching.test.js =====
+
+===== FILE: test\piano.test.js =====
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { parsePianoHeader } = require('../scraper/piano');
+
+test('ricava coorte e codice corso dall\'intestazione del piano', () => {
+  const header = 'Insegnamenti del Piano: PIANO GENERALE (IMM. DAL 2025/26) (DE301)';
+
+  assert.deepEqual(parsePianoHeader(header), {
+    annoImmatricolazione: 2025,
+    codiceCorso: 'DE3'
+  });
+});
+
+test('supporta codici corso con lettere e cifre', () => {
+  const header = 'Insegnamenti del Piano: PIANO (IMM. DAL 2024/25) (N461)';
+
+  assert.deepEqual(parsePianoHeader(header), {
+    annoImmatricolazione: 2024,
+    codiceCorso: 'N46'
+  });
+});
+
+test('restituisce null quando i dati non sono presenti', () => {
+  assert.deepEqual(parsePianoHeader(''), {
+    annoImmatricolazione: null,
+    codiceCorso: null
+  });
+  assert.deepEqual(parsePianoHeader('Insegnamenti del Piano: PIANO GENERALE'), {
+    annoImmatricolazione: null,
+    codiceCorso: null
+  });
+});
+===== FINE: test\piano.test.js =====
+
+===== FILE: test\pool.test.js =====
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { queueScrapingTask, closeCluster } = require('../scraper/pool');
+
+test('queueScrapingTask fallisce in modo esplicito se il cluster non è inizializzato', async () => {
+  await assert.rejects(
+    queueScrapingTask({ codiceFiscale: 'AAABBB00A00A000A' }, async () => ({ ok: true })),
+    /Cluster non inizializzato/
+  );
+});
+
+test('closeCluster è idempotente e non avvia processi', async () => {
+  await assert.doesNotReject(closeCluster());
+  await assert.doesNotReject(closeCluster());
+});
+===== FINE: test\pool.test.js =====
+
+===== FILE: test\profile-extractor.test.js =====
+process.env.DB_PATH = ':memory:';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const {
+  buildStudentProfile,
+  calculateCourseYear,
+  determinaCanale
+} = require('../services/profile-extractor');
+
+const NOW = new Date('2026-10-15T00:00:00.000Z');
+
+test('costruisce il profilo dai dati anagrafici di Segrepass', () => {
+  const profile = buildStudentProfile({
+    codiceCorso: 'DE3',
+    corsoDiLaurea: 'Ingegneria Informatica',
+    annoImmatricolazione: 2025,
+    annoCorso: 2
+  }, { now: NOW });
+
+  assert.equal(profile.courseId, 'DE3');
+  assert.equal(profile.courseName, 'INGEGNERIA INFORMATICA');
+  assert.equal(profile.cohortYear, 2025);
+  assert.equal(profile.currentCourseYear, 2);
+  assert.equal(profile.channel, null);
+  assert.equal(profile.surnameInitial, null);
+});
+
+test('non inventa valori quando i dati mancano', () => {
+  assert.deepEqual(buildStudentProfile({}, { now: NOW }), {
+    courseId: null,
+    courseName: null,
+    cohortYear: null,
+    currentCourseYear: null,
+    channel: null,
+    surnameInitial: null
+  });
+});
+
+test('calcola anno di corso e canale senza valori di ripiego', () => {
+  assert.equal(calculateCourseYear(2025, 3, NOW), 2);
+  assert.equal(calculateCourseYear(null, 3, NOW), 1);
+  assert.equal(determinaCanale('Cacace'), 'A-D');
+  assert.equal(determinaCanale(''), null);
+});
+===== FINE: test\profile-extractor.test.js =====
+
+===== FILE: test\slow-sync.test.js =====
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const {
+  startSlowSync,
+  ensureSlowSync,
+  getSlowStatus,
+  resetSlowSync
+} = require('../services/slow-sync');
+const { getSlowSnapshot, getTaxesSnapshot, clearSnapshots } = require('../services/career-snapshots');
+
+const CREDENTIALS = { codiceFiscale: 'AAABBB00A00A000A', password: 'test' };
+
+function slowPayload() {
+  return {
+    tasse: {
+      available: true,
+      paid: [],
+      pending: [{ importo: 130, descrizione: 'Contributo' }],
+      summary: { totalPaid: 0, totalPending: 130, nextDeadline: null }
+    },
+    prenotazioni: [{ id: 'appello_1', materia: 'Analisi I', dataAppello: '10/01/2027' }]
+  };
+}
+
+test('carica tasse e appelli in background e aggiorna lo stato', async t => {
+  const profileId = 'slow-sync-profile-1';
+  t.after(() => clearSnapshots(profileId));
+
+  const status = startSlowSync(profileId, CREDENTIALS, {
+    getDatiCarriera: async (_credentials, options) => {
+      assert.equal(options.phase, 'slow');
+      return slowPayload();
+    }
+  });
+  assert.equal(status.state, 'loading');
+
+  await new Promise(resolve => setTimeout(resolve, 10));
+
+  assert.equal(getSlowStatus(profileId).state, 'ready');
+  assert.equal(getSlowSnapshot(profileId).prenotazioni.length, 1);
+  assert.equal(getSlowSnapshot(profileId).taxes.available, true);
+  assert.equal(getTaxesSnapshot(profileId).available, true);
+});
+
+test('non avvia due job contemporanei per lo stesso studente', async t => {
+  const profileId = 'slow-sync-profile-2';
+  t.after(() => clearSnapshots(profileId));
+
+  let calls = 0;
+  const deps = {
+    getDatiCarriera: async () => {
+      calls += 1;
+      await new Promise(resolve => setTimeout(resolve, 10));
+      return slowPayload();
+    }
+  };
+
+  startSlowSync(profileId, CREDENTIALS, deps);
+  startSlowSync(profileId, CREDENTIALS, deps);
+  await new Promise(resolve => setTimeout(resolve, 20));
+
+  assert.equal(calls, 1);
+  assert.equal(getSlowStatus(profileId).state, 'ready');
+});
+
+test('registra un errore stabile quando lo scraping lento fallisce', async t => {
+  const profileId = 'slow-sync-profile-3';
+  t.after(() => clearSnapshots(profileId));
+
+  startSlowSync(profileId, CREDENTIALS, {
+    getDatiCarriera: async () => {
+      const error = new Error('timeout');
+      error.code = 'SLOW_TIMEOUT';
+      throw error;
+    }
+  });
+
+  await new Promise(resolve => setTimeout(resolve, 10));
+
+  assert.equal(getSlowStatus(profileId).state, 'error');
+  assert.equal(getSlowStatus(profileId).error, 'SLOW_TIMEOUT');
+});
+
+test('ensureSlowSync non riavvia se i dati sono già pronti', async t => {
+  const profileId = 'slow-sync-profile-4';
+  t.after(() => clearSnapshots(profileId));
+
+  let calls = 0;
+  const deps = {
+    getDatiCarriera: async () => { calls += 1; return slowPayload(); }
+  };
+
+  startSlowSync(profileId, CREDENTIALS, deps);
+  await new Promise(resolve => setTimeout(resolve, 10));
+  ensureSlowSync(profileId, CREDENTIALS, deps);
+
+  assert.equal(calls, 1);
+  assert.equal(getSlowStatus(profileId).state, 'ready');
+});
+
+test('resetSlowSync riporta lo stato a idle e svuota lo snapshot', async t => {
+  const profileId = 'slow-sync-profile-5';
+  t.after(() => clearSnapshots(profileId));
+
+  startSlowSync(profileId, CREDENTIALS, {
+    getDatiCarriera: async () => slowPayload()
+  });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  resetSlowSync(profileId);
+
+  assert.equal(getSlowStatus(profileId).state, 'idle');
+  assert.equal(getSlowSnapshot(profileId), null);
+});
+===== FINE: test\slow-sync.test.js =====
+
+===== FILE: test\student-session.test.js =====
+process.env.DB_PATH = ':memory:';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const jwt = require('jsonwebtoken');
+const { createDatabase } = require('../db');
+const { createStudentSession } = require('../services/student-session');
+const { clearSnapshots, getCareerSnapshot, getTaxesSnapshot, getDocentiSnapshot } = require('../services/career-snapshots');
+const { clearCareerCache } = require('../services/career-cache');
+
+const CF = 'AAABBB00A00A000A';
+
+function careerData() {
+  return {
+    anagrafica: {
+      codiceCorso: 'DE3',
+      corsoDiLaurea: 'Ingegneria Informatica',
+      annoImmatricolazione: 2025,
+      annoCorso: 2
+    },
+    esami: [{ materia: 'Analisi I', cfu: 9, voto: 28 }],
+    tasse: { paid: [{ importo: 156 }], pending: [] }
+  };
+}
+
+function dependencies(db, overrides = {}) {
+  return {
+    database: db,
+    jwtSecret: '[REDATTO]',
+    getDatiCarriera: async () => careerData(),
+    ensureSlowSync: () => ({ state: 'idle' }),
+    findPlan: () => null,
+    listPlans: () => [],
+    docentiCredentials: {},
+    ...overrides
+  };
+}
+
+test('crea la sessione, salva profilo ed esami senza memorizzare credenziali', async t => {
+  const db = createDatabase(':memory:');
+  clearCareerCache(CF);
+  t.after(() => {
+    clearSnapshots(CF);
+    clearCareerCache(CF);
+    db.close();
+  });
+
+  const session = await createStudentSession({ codiceFiscale: CF, password: '[REDATTO]' }, dependencies(db));
+  assert.equal(session.fromCache, false);
+  const claims = jwt.verify(session.token, 'test-jwt-secret');
+  const storedProfile = db.prepare('SELECT * FROM StudentProfile WHERE id = ?').get(claims.sub);
+
+  assert.equal(claims.sub, CF);
+  assert.equal(session.profileId, CF);
+  assert.equal(session.onboardingRequired, false);
+  assert.equal(session.docentiReason, 'DOCENTI_CREDENTIALS_REQUIRED');
+  assert.equal(storedProfile.course_id, 'DE3');
+  assert.equal(storedProfile.cohort_year, 2025);
+  assert.equal(Object.hasOwn(storedProfile, 'password'), false);
+  assert.equal(Object.hasOwn(storedProfile, 'codice_fiscale'), false);
+  assert.equal(Object.hasOwn(JSON.parse(Buffer.from(session.token.split('.')[1], 'base64url').toString()), 'password'), false);
+
+  assert.equal(getCareerSnapshot(CF).length, 1);
+  assert.equal(getTaxesSnapshot(CF).paid.length, 1);
+});
+
+test('registra un motivo stabile quando lo scraper Docenti fallisce', async t => {
+  const db = createDatabase(':memory:');
+  clearCareerCache(CF);
+  t.after(() => {
+    clearSnapshots(CF);
+    clearCareerCache(CF);
+    db.close();
+  });
+
+  await createStudentSession({ codiceFiscale: CF, password: '[REDATTO]' }, dependencies(db, {
+    docentiCredentials: { username: 'docenti-user', password: '[REDATTO]' },
+    getDocentiData: async () => { throw null; }
+  }));
+
+  await new Promise(resolve => setTimeout(resolve, 0));
+  assert.equal(getDocentiSnapshot(CF).reason, 'DOCENTI_SCRAPE_FAILED');
+});
+
+test('riusa i dati in cache al secondo login dello stesso studente', async t => {
+  const db = createDatabase(':memory:');
+  clearCareerCache(CF);
+  t.after(() => {
+    clearSnapshots(CF);
+    clearCareerCache(CF);
+    db.close();
+  });
+
+  let calls = 0;
+  const deps = dependencies(db, {
+    getDatiCarriera: async () => { calls += 1; return careerData(); }
+  });
+
+  const first = await createStudentSession({ codiceFiscale: CF, password: '[REDATTO]' }, deps);
+  const second = await createStudentSession({ codiceFiscale: CF, password: '[REDATTO]' }, deps);
+
+  assert.equal(calls, 1);
+  assert.equal(first.fromCache, false);
+  assert.equal(second.fromCache, true);
+});
+
+test('una password diversa non riusa la cache', async t => {
+  const db = createDatabase(':memory:');
+  clearCareerCache(CF);
+  t.after(() => {
+    clearSnapshots(CF);
+    clearCareerCache(CF);
+    db.close();
+  });
+
+  let calls = 0;
+  const deps = dependencies(db, {
+    getDatiCarriera: async () => { calls += 1; return careerData(); }
+  });
+
+  await createStudentSession({ codiceFiscale: CF, password: '[REDATTO]' }, deps);
+  const second = await createStudentSession({ codiceFiscale: CF, password: '[REDATTO]' }, deps);
+
+  assert.equal(calls, 2);
+  assert.equal(second.fromCache, false);
+});
+
+test('rifiuta credenziali vuote prima di invocare lo scraper', async () => {
+  let scraperCalled = false;
+  await assert.rejects(
+    createStudentSession({}, { getDatiCarriera: async () => { scraperCalled = true; } }),
+    { status: 400 }
+  );
+  assert.equal(scraperCalled, false);
+});
+===== FINE: test\student-session.test.js =====
+
+===== FILE: test\studyPlanMatcher.test.js =====
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const {
+  matchStudyPlan,
+  normalizeCourseName,
+  nameSimilarity,
+  DEFAULT_THRESHOLD
+} = require('../lib/matching');
+
+test('normalizeCourseName converte in minuscolo, rimuove accenti e numerali romani', () => {
+  assert.equal(normalizeCourseName('CÀLCOLO DÌFFERENZIALE'), 'calcolo differenziale');
+  assert.equal(normalizeCourseName('Analisi Matematica III'), 'analisi matematica 3');
+  assert.equal(normalizeCourseName('Fisica Generale II'), 'fisica generale 2');
+  assert.equal(normalizeCourseName('Istituzioni di Diritto I'), 'istituzioni di diritto 1');
+  assert.equal(normalizeCourseName('Programmazione & Algoritmi (A-K)'), 'programmazione algoritmi a k');
+});
+
+test('nameSimilarity confronta nomi identici, simili e diversi', () => {
+  assert.equal(nameSimilarity('Fisica 1', 'Fisica 1'), 1);
+  assert.ok(nameSimilarity('SISTEMI OPERATIVI', 'Sistemi Operativi e Reti') > 0.5);
+  assert.ok(nameSimilarity('Chimica', 'Diritto Privato') < DEFAULT_THRESHOLD);
+  assert.equal(nameSimilarity('', null), 0);
+});
+
+const planCourses = [
+  { id: 1, courseCode: 'DE1001', courseName: 'Analisi Matematica I', cfu: 9, courseType: 'mandatory' },
+  { id: 2, courseCode: 'DE1002', courseName: 'Fisica I', cfu: 9, courseType: 'mandatory' },
+  {
+    id: 3,
+    courseCode: 'DE1003',
+    courseName: 'Reti di Calcolatori',
+    cfu: 6,
+    courseType: 'elective',
+    electiveGroup: 'grp1',
+    electiveRequiredCfu: 6
+  }
+];
+
+test('associa un esame tramite codice corso', () => {
+  const result = matchStudyPlan({
+    planCourses,
+    passedExams: [{ codice: 'DE1001', materia: 'Analisi Matematica I', cfu: 9, voto: 28 }]
+  });
+  const matched = result.courses.find(course => course.id === 1);
+
+  assert.equal(matched.status, 'passed');
+  assert.equal(matched.matchMethod, 'course_code');
+  assert.equal(result.summary.passedCourses, 1);
+});
+
+test('usa il fuzzy name quando il codice manca', () => {
+  const result = matchStudyPlan({
+    planCourses,
+    passedExams: [{ materia: 'ANALISI MATEMATICA 1', cfu: 9, voto: 30 }]
+  });
+  const matched = result.courses.find(course => course.id === 1);
+
+  assert.equal(matched.status, 'passed');
+  assert.equal(matched.matchMethod, 'fuzzy_name');
+});
+
+test('segnala needs_review quando i CFU non corrispondono', () => {
+  const result = matchStudyPlan({
+    planCourses,
+    passedExams: [{ codice: 'DE1001', materia: 'Analisi Matematica I', cfu: 6, voto: 25 }]
+  });
+  const matched = result.courses.find(course => course.id === 1);
+
+  assert.equal(matched.status, 'needs_review');
+  assert.equal(result.summary.reviewCourses, 1);
+});
+
+test('calcola il riepilogo degli esami a scelta', () => {
+  const result = matchStudyPlan({
+    planCourses,
+    passedExams: [{ codice: 'DE1003', materia: 'Reti di Calcolatori', cfu: 6, voto: 30 }],
+    selectedElectiveIds: [3]
+  });
+  const group = result.electiveGroups.find(item => item.id === 'grp1');
+
+  assert.equal(group.passedCfu, 6);
+  assert.equal(group.remainingCfu, 0);
+});
+===== FINE: test\studyPlanMatcher.test.js =====
+
+===== FILE: test\taxesParser.test.js =====
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { parseAmount, parseDate, findPaymentTables, buildTaxesSummary } = require('../lib/taxes');
+
+test('parseAmount converte formati europei e standard', () => {
+  assert.equal(parseAmount('1.250,50 €'), 1250.5);
+  assert.equal(parseAmount('€ 156,00'), 156);
+  assert.equal(parseAmount('140,00'), 140);
+  assert.equal(parseAmount('156.50'), 156.5);
+  assert.equal(parseAmount(200), 200);
+});
+
+test('parseAmount restituisce 0 per valori invalidi', () => {
+  assert.equal(parseAmount(''), 0);
+  assert.equal(parseAmount('N.D.'), 0);
+  assert.equal(parseAmount(null), 0);
+});
+
+test('parseDate converte date italiane e mantiene ISO', () => {
+  assert.equal(parseDate('15/10/2025'), '2025-10-15');
+  assert.equal(parseDate('05.01.2026'), '2026-01-05');
+  assert.equal(parseDate('2025-10-15'), '2025-10-15');
+  assert.equal(parseDate('non-una-data'), null);
+  assert.equal(parseDate(null), null);
+});
+
+test('findPaymentTables distingue pagamenti effettuati e debiti', () => {
+  const result = findPaymentTables([
+    {
+      headers: ['Causale Versamento', 'Data Pagamento', 'Importo Euro'],
+      records: [
+        { 'Causale Versamento': 'I Rata A.A. 2024/2025', 'Data Pagamento': '10/10/2024', 'Importo Euro': '156,00' }
+      ]
+    },
+    {
+      headers: ['Causale', 'Data Scadenza', 'Importo da Pagare'],
+      records: [
+        { Causale: 'II Rata A.A. 2024/2025', 'Data Scadenza': '30/04/2026', 'Importo da Pagare': '300,00' }
+      ]
+    }
+  ]);
+
+  assert.equal(result.paid.length, 1);
+  assert.equal(result.pending.length, 1);
+  assert.equal(result.paid[0].stato, 'PAGATO');
+  assert.equal(result.pending[0].stato, 'DA_PAGARE');
+  assert.equal(result.summary.totalPaid, 156);
+  assert.equal(result.summary.totalPending, 300);
+  assert.equal(result.summary.nextDeadline, '2026-04-30');
+});
+
+test('buildTaxesSummary normalizza snapshot paid/pending e alias italiani', () => {
+  const summary = buildTaxesSummary({
+    paid: [{ importo: '100' }, { importo: 25.5 }],
+    inDebito: [{ importo: 10 }]
+  });
+
+  assert.equal(summary.paid.length, 2);
+  assert.equal(summary.pending.length, 1);
+  assert.equal(summary.summary.totalPaid, 125.5);
+  assert.equal(summary.summary.totalPending, 10);
+});
+===== FINE: test\taxesParser.test.js =====
+
+===== FILE: test\wiring.test.js =====
+process.env.DB_PATH = ':memory:';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+test('i moduli critici si caricano senza dipendenze mancanti', () => {
+  assert.doesNotThrow(() => {
+    require('../routes/auth');
+    require('../routes/session');
+    require('../routes/docenti');
+    require('../routes/career-taxes');
+    require('../middleware/auth');
+    require('../services/student-session');
+    require('../scraper/docenti');
+  });
+});
+
+test('buildTaxesSummary normalizza paid/pending e calcola i totali', () => {
+  const { buildTaxesSummary } = require('../lib/taxes');
+  const result = buildTaxesSummary({
+    paid: [{ importo: '100' }, { importo: 25.5 }],
+    inDebito: [{ importo: 10 }]
+  });
+
+  assert.equal(result.paid.length, 2);
+  assert.equal(result.pending.length, 1);
+  assert.equal(result.summary.totalPaid, 125.5);
+  assert.equal(result.summary.totalPending, 10);
+});
+
+test('le credenziali di sessione scadono e non vengono restituite dopo il TTL', () => {
+  const store = require('../utils/sessionStore');
+  store.setCredentials('profile-test', { username: 'u', password: 'p' }, 1);
+
+  return new Promise(resolve => setTimeout(resolve, 10)).then(() => {
+    assert.equal(store.getCredentials('profile-test'), null);
+  });
+});
+===== FINE: test\wiring.test.js =====
+
+===== FILE: utils\sessionStore.js =====
+// Credenziali Segrepass tenute solo in memoria, per la durata della sessione.
+// Non vengono mai inserite nel token né restituite al client.
+const DEFAULT_TTL_MS = 12 * 60 * 60 * 1000;
+const credentials = new Map();
+
+function setCredentials(profileId, { username, password } = {}, ttlMs = DEFAULT_TTL_MS) {
+  if (!profileId || !username || !password) return false;
+  credentials.set(profileId, { username, password, expiresAt: Date.now() + ttlMs });
+  return true;
+}
+
+function getCredentials(profileId) {
+  const entry = credentials.get(profileId);
+  if (!entry) return null;
+  if (entry.expiresAt <= Date.now()) {
+    credentials.delete(profileId);
+    return null;
+  }
+  return { username: entry.username, password: entry.password };
+}
+
+function deleteCredentials(profileId) {
+  credentials.delete(profileId);
+}
+
+function clearCredentials() {
+  credentials.clear();
+}
+
+module.exports = { setCredentials, getCredentials, deleteCredentials, clearCredentials };
+===== FINE: utils\sessionStore.js =====
+
+===== FILE: .env.example =====
+# Segreto per firmare i JWT. Obbligatorio in produzione.
+JWT_SECRET=
+
+[REDATTO]
+PORT=3001
+HOST=0.0.0.0
+
+# Origine del frontend: usata per CORS e per la protezione CSRF.
+# Accetta più origini separate da virgola (es. https://app.example.com,https://www.example.com)
+FRONTEND_URL=
+
+# Impostare solo dietro un reverse proxy (numero di hop fidati)
+TRUST_PROXY=
+
+# Credenziali di servizio per l'acquisizione dei dati Docenti Unina.
+# Non inserire credenziali reali in questo file.
+DOCENTI_USERNAME=
+DOCENTI_PASSWORD=
+
+[REDATTO]
+CAREER_CACHE_TTL_MS=900000
+
+# Scraping appelli: concorrenza (pagine parallele) e budget massimo.
+SCRAPER_APPELLI_CONCURRENCY=3
+SCRAPER_APPELLI_MAX_MS=60000
+
+# Log dettagliati degli scraper (contengono dati personali: solo in sviluppo).
+DEBUG_SCRAPER=
+===== FINE: .env.example =====
+
+===== FILE: bundle-code.js =====
+const fs = require('fs');
+const path = require('path');
+
+const outputFile = 'tutto_il_progetto.txt';
+const excludeDirs = ['node_modules', '.next', '.git', 'dist', 'build', 'coverage'];
+const includeExtensions = ['.js', '.ts', '.tsx', '.json', '.env'];
+
+let outputContent = '';
+
+function walkDir(dir) {
+  const files = fs.readdirSync(dir);
+  for (const file of files) {
+    const fullPath = path.join(dir, file);
+    const stat = fs.statSync(fullPath);
+
+    if (stat.isDirectory()) {
+      if (!excludeDirs.includes(file)) {
+        walkDir(fullPath);
+      }
+    } else {
+      const ext = path.extname(file);
+      if (includeExtensions.includes(ext) || file === '.env') {
+        const relativePath = path.relative(process.cwd(), fullPath);
+        try {
+          const content = fs.readFileSync(fullPath, 'utf8');
+          outputContent += `\n\n==================================================\n`;
+          outputContent += `FILE: ${relativePath}\n`;
+          outputContent += `==================================================\n\n`;
+          outputContent += content;
+          console.log(`[OK] Aggiunto: ${relativePath}`);
+        } catch (err) {
+          console.log(`[SKIP] Impossibile leggere: ${relativePath}`);
+        }
+      }
+    }
+  }
+}
+
+console.log('Scansione e unione di tutti i file del progetto in corso...');
+walkDir(process.cwd());
+
+fs.writeFileSync(outputFile, outputContent, 'utf8');
+console.log(`\nFatto! Il file cumulativo è pronto: ${path.resolve(outputFile)}`);
+===== FINE: bundle-code.js =====
+
+===== FILE: check-env.js =====
+require('dotenv').config();
+
+const isProduction = process.env.NODE_ENV === 'production';
+const checks = [];
+
+function check(name, ok, message) {
+  checks.push({ name, ok, message });
+}
+
+check('JWT_SECRET', Boolean(process.env.JWT_SECRET && process.env.JWT_SECRET.trim()),
+  isProduction ? 'obbligatorio in produzione' : 'mancante: verrà usato il segreto di sviluppo');
+
+const username = process.env.DOCENTI_USERNAME || '';
+const password = process.env.DOCENTI_PASSWORD || '';
+const hasDocentiCredentials = Boolean(username && password);
+check('DOCENTI_USERNAME', !username || username === username.trim(), 'presenta spazi ai bordi');
+check('DOCENTI_PASSWORD', !password || password === password.trim(), 'presenta spazi ai bordi');
+
+check('PORT', !process.env.PORT || /^\d+$/.test(process.env.PORT), 'deve essere un numero');
+check('FRONTEND_URL', !process.env.FRONTEND_URL || /^https?:\/\//.test(process.env.FRONTEND_URL), 'deve essere un URL http(s)');
+
+for (const { name, ok, message } of checks) {
+  console.log(`${ok ? '[OK]' : '[!]'} ${name}: ${ok ? 'valida' : message}`);
+}
+
+console.log(`\nDocenti: ${hasDocentiCredentials ? 'credenziali presenti' : 'credenziali assenti (solo avvisi pubblici)'}`);
+console.log(`Ambiente: ${process.env.NODE_ENV || 'development'}`);
+
+const fatal = isProduction && !checks.find(item => item.name === 'JWT_SECRET').ok;
+process.exit(fatal ? 1 : 0);
+===== FINE: check-env.js =====
+
+===== FILE: codici_da_inviare.txt =====
+
+========== INIZIO db/index.js ==========
+const Database = require('better-sqlite3');
+const path = require('path');
+
+const db = new Database(path.join(__dirname, 'app.db'));
+db.pragma('journal_mode = WAL');
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS StudentProfile (
+    id TEXT PRIMARY KEY,
+    course_id TEXT,
+    course_name TEXT,
+    cohort_year INTEGER,
+    current_course_year INTEGER,
+    channel TEXT,
+    surname_initial TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS StudyPlans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    course_id TEXT NOT NULL,
+    cohort_year INTEGER NOT NULL,
+    course_name TEXT NOT NULL,
+    version TEXT DEFAULT '1',
+    source_name TEXT,
+    source_url TEXT,
+    imported_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(course_id, cohort_year, version)
+  );
+
+  CREATE TABLE IF NOT EXISTS PlanCourses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    plan_id INTEGER NOT NULL,
+    course_code TEXT,
+    course_name TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    cfu INTEGER NOT NULL,
+    study_year INTEGER,
+    semester INTEGER,
+    course_type TEXT DEFAULT 'mandatory',
+    elective_group TEXT,
+    elective_required_cfu INTEGER,
+    prerequisites_json TEXT DEFAULT '[]',
+    FOREIGN KEY (plan_id) REFERENCES StudyPlans(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS SelectedElectives (
+    profile_id TEXT NOT NULL,
+    plan_course_id INTEGER NOT NULL,
+    PRIMARY KEY (profile_id, plan_course_id),
+    FOREIGN KEY (profile_id) REFERENCES StudentProfile(id) ON DELETE CASCADE,
+    FOREIGN KEY (plan_course_id) REFERENCES PlanCourses(id) ON DELETE CASCADE
+  );
+
+  CREATE TABLE IF NOT EXISTS UserSessions (
+    token TEXT PRIMARY KEY,
+    profile_id TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    expires_at DATETIME NOT NULL,
+    FOREIGN KEY (profile_id) REFERENCES StudentProfile(id) ON DELETE CASCADE
+  );
+`);
+
+module.exports = { db };
+========== FINE db/index.js ==========
+
+========== INIZIO db/repository.js ==========
+function normalizeName(value) {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function parsePlanCourse(row) {
+  if (!row) return null;
+  let prerequisites = [];
+  try {
+    prerequisites = JSON.parse(row.prerequisites_json || '[]');
+  } catch {}
+  return {
+    ...row,
+    courseCode: row.course_code,
+    courseName: row.course_name,
+    studyYear: row.study_year,
+    courseType: row.course_type,
+    electiveGroup: row.elective_group,
+    electiveRequiredCfu: row.elective_required_cfu,
+    prerequisites
+  };
+}
+
+function getStudentProfile(db, profileId) {
+  return db.prepare('SELECT * FROM StudentProfile WHERE id = ?').get(profileId) || null;
+}
+
+function upsertStudentProfile(db, profile) {
+  db.prepare(`
+    INSERT INTO StudentProfile (id, course_id, course_name, cohort_year, current_course_year, channel, surname_initial)
+    VALUES (@id, @courseId, @courseName, @cohortYear, @currentCourseYear, @channel, @surnameInitial)
+    ON CONFLICT(id) DO UPDATE SET
+      course_id = COALESCE(excluded.course_id, StudentProfile.course_id),
+      course_name = COALESCE(excluded.course_name, StudentProfile.course_name),
+      cohort_year = COALESCE(excluded.cohort_year, StudentProfile.cohort_year),
+      current_course_year = COALESCE(excluded.current_course_year, StudentProfile.current_course_year),
+      channel = COALESCE(excluded.channel, StudentProfile.channel),
+      surname_initial = COALESCE(excluded.surname_initial, StudentProfile.surname_initial),
+      updated_at = CURRENT_TIMESTAMP
+  `).run({
+    id: profile.id,
+    courseId: profile.courseId || null,
+    courseName: profile.courseName || null,
+    cohortYear: profile.cohortYear || null,
+    currentCourseYear: profile.currentCourseYear || null,
+    channel: profile.channel || null,
+    surnameInitial: profile.surnameInitial || null
+  });
+  return getStudentProfile(db, profile.id);
+}
+
+function updateStudentProfile(db, profileId, updates) {
+  const columns = {
+    courseId: 'course_id',
+    courseName: 'course_name',
+    cohortYear: 'cohort_year',
+    currentCourseYear: 'current_course_year',
+    channel: 'channel',
+    surnameInitial: 'surname_initial'
+  };
+  const entries = Object.entries(columns).filter(([key]) => Object.hasOwn(updates, key));
+  if (entries.length === 0) return getStudentProfile(db, profileId);
+
+  const assignments = entries.map(([, column]) => `${column} = @${column}`).join(', ');
+  const values = Object.fromEntries(entries.map(([key, column]) => [column, updates[key] ?? null]));
+  db.prepare(`UPDATE StudentProfile SET ${assignments}, updated_at = CURRENT_TIMESTAMP WHERE id = @id`)
+    .run({ ...values, id: profileId });
+  return getStudentProfile(db, profileId);
+}
+
+function saveStudyPlan(db, plan, courses) {
+  const save = db.transaction(() => {
+    db.prepare(`
+      INSERT INTO StudyPlans (course_id, cohort_year, course_name, version, source_name, source_url)
+      VALUES (@courseId, @cohortYear, @courseName, @version, @sourceName, @sourceUrl)
+      ON CONFLICT(course_id, cohort_year, version) DO UPDATE SET
+        course_name = excluded.course_name,
+        source_name = excluded.source_name,
+        source_url = excluded.source_url,
+        imported_at = CURRENT_TIMESTAMP
+    `).run({
+      courseId: plan.courseId,
+      cohortYear: plan.cohortYear,
+      courseName: plan.courseName,
+      version: String(plan.version || '1'),
+      sourceName: plan.sourceName || null,
+      sourceUrl: plan.sourceUrl || null
+    });
+
+    const storedPlan = db.prepare(`
+      SELECT * FROM StudyPlans
+      WHERE course_id = ? AND cohort_year = ? AND version = ?
+    `).get(plan.courseId, plan.cohortYear, String(plan.version || '1'));
+
+    db.prepare('DELETE FROM PlanCourses WHERE plan_id = ?').run(storedPlan.id);
+    const insertCourse = db.prepare(`
+      INSERT INTO PlanCourses (
+        plan_id, course_code, course_name, normalized_name, cfu, study_year, semester,
+        course_type, elective_group, elective_required_cfu, prerequisites_json
+      ) VALUES (
+        @planId, @courseCode, @courseName, @normalizedName, @cfu, @studyYear, @semester,
+        @courseType, @electiveGroup, @electiveRequiredCfu, @prerequisitesJson
+      )
+    `);
+
+    for (const course of courses) {
+      insertCourse.run({
+        planId: storedPlan.id,
+        courseCode: course.courseCode || null,
+        courseName: course.courseName,
+        normalizedName: normalizeName(course.courseName),
+        cfu: course.cfu,
+        studyYear: course.studyYear ?? null,
+        semester: course.semester ?? null,
+        courseType: course.courseType || 'mandatory',
+        electiveGroup: course.electiveGroup || null,
+        electiveRequiredCfu: course.electiveRequiredCfu ?? null,
+        prerequisitesJson: JSON.stringify(course.prerequisites || [])
+      });
+    }
+
+    return storedPlan;
+  });
+
+  return save();
+}
+
+function getStudyPlan(db, courseIdOrName, cohortYear) {
+  if (!courseIdOrName || !cohortYear) return null;
+
+  // 1. Cerca per codice esatto del corso
+  let plan = db.prepare(`
+    SELECT * FROM StudyPlans
+    WHERE course_id = ? AND cohort_year = ?
+    ORDER BY imported_at DESC, id DESC
+    LIMIT 1
+  `).get(courseIdOrName, cohortYear);
+
+  if (plan) return plan;
+
+  // 2. Fallback: cerca confrontando il nome normalizzato del corso
+  const searchNormalized = normalizeName(courseIdOrName);
+  return db.prepare(`
+    SELECT * FROM StudyPlans
+    WHERE LOWER(REPLACE(course_name, ' ', '')) LIKE '%' || REPLACE(?, ' ', '') || '%'
+      AND cohort_year = ?
+    ORDER BY imported_at DESC, id DESC
+    LIMIT 1
+  `).get(searchNormalized, cohortYear) || null;
+}
+
+function getPlanCourses(db, planId) {
+  return db.prepare(`
+    SELECT * FROM PlanCourses WHERE plan_id = ?
+    ORDER BY study_year IS NULL, study_year, semester IS NULL, semester, course_name
+  `).all(planId).map(parsePlanCourse);
+}
+
+function getSelectedElectiveIds(db, profileId) {
+  return db.prepare('SELECT plan_course_id FROM SelectedElectives WHERE profile_id = ?')
+    .all(profileId).map(row => row.plan_course_id);
+}
+
+function replaceSelectedElectives(db, profileId, planId, courseIds) {
+  const uniqueIds = [...new Set(courseIds)];
+  if (uniqueIds.length > 0) {
+    const placeholders = uniqueIds.map(() => '?').join(', ');
+    const valid = db.prepare(`
+      SELECT COUNT(*) AS count FROM PlanCourses
+      WHERE plan_id = ? AND course_type = 'elective' AND id IN (${placeholders})
+    `).get(planId, ...uniqueIds).count;
+    if (valid !== uniqueIds.length) {
+      const error = new Error('Una o più scelte non appartengono al piano o non sono esami a scelta.');
+      error.status = 400;
+      throw error;
+    }
+  }
+
+  const replace = db.transaction(() => {
+    db.prepare('DELETE FROM SelectedElectives WHERE profile_id = ?').run(profileId);
+    const insert = db.prepare('INSERT INTO SelectedElectives (profile_id, plan_course_id) VALUES (?, ?)');
+    for (const courseId of uniqueIds) insert.run(profileId, courseId);
+  });
+  replace();
+  return uniqueIds;
+}
+
+function clearSelectedElectives(db, profileId) {
+  db.prepare('DELETE FROM SelectedElectives WHERE profile_id = ?').run(profileId);
+}
+
+module.exports = {
+  normalizeName,
+  getStudentProfile,
+  upsertStudentProfile,
+  updateStudentProfile,
+  saveStudyPlan,
+  getStudyPlan,
+  getPlanCourses,
+  getSelectedElectiveIds,
+  replaceSelectedElectives,
+  clearSelectedElectives
+};
+========== FINE db/repository.js ==========
+===== FINE: codici_da_inviare.txt =====
+
+===== FILE: debug-docenti.js =====
+const puppeteer = require('puppeteer');
+const { getDocentiData } = require('./scraper/docenti');
+
+// Credenziali UNINA (usa le variabili d'ambiente o il fallback)
+const USERNAME = process.env.UNINA_USER || 'gabr.cacace@studenti.unina.it';
+const PASSWORD = process.env.UNINA_PASS || 'mas801@A';
+
+/**
+ * Mock della coda: esegue la funzione dello scraper direttamente 
+ * aprendo un browser Puppeteer locale invece di passare per il pool.
+ */
+async function mockQueueScrapingTask(data, taskFn) {
+  console.log('🧪 [TEST] Avvio browser Puppeteer locale...');
+  const browser = await puppeteer.launch({
+    headless: false, // Imposta a true se non vuoi vedere la finestra del browser
+    defaultViewport: { width: 1280, height: 800 }
+  });
+  const page = await browser.newPage();
+
+  try {
+    return await taskFn(page, data);
+  } finally {
+    console.log('🧹 [TEST] Chiusura browser...');
+    await browser.close();
+  }
+}
+
+(async () => {
+  console.log('🚀 Esecuzione test isolato per getDocentiData...\n');
+
+  const start = Date.now();
+  
+  const result = await getDocentiData(
+    { username: USERNAME, password: PASSWORD },
+    { queueScrapingTask: mockQueueScrapingTask }
+  );
+
+  const duration = ((Date.now() - start) / 1000).toFixed(2);
+
+  console.log(`\n✅ Test completato in ${duration}s!`);
+  console.log('📊 --- RISULTATO RESTITUITO ---');
+  console.log(JSON.stringify(result, null, 2));
+})();
+===== FINE: debug-docenti.js =====
+
+===== FILE: debug-iscrizione.js =====
+const puppeteer = require('puppeteer');
+const fs = require('fs');
+
+const USERNAME = process.env.UNINA_USER || 'gabr.cacace@studenti.unina.it';
+const PASSWORD = process.env.UNINA_PASS || 'mas801@A';
+
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+(async () => {
+  console.log('🚀 Avvio debug iscrizioni WebDocenti...');
+  const browser = await puppeteer.launch({ headless: false, defaultViewport: { width: 1280, height: 800 } });
+  const page = await browser.newPage();
+
+  const interceptedRequests = [];
+
+  page.on('response', async response => {
+    const url = response.url();
+    if (url.includes('/webdocenti-be/')) {
+      let body = '';
+      try { body = await response.text(); } catch (e) {}
+      interceptedRequests.push({
+        url,
+        status: response.status(),
+        bodyPreview: body.slice(0, 300)
+      });
+    }
+  });
+
+  // 1. Pagina di Login
+  await page.goto('https://www.docenti.unina.it/login', { waitUntil: 'domcontentloaded' });
+  await sleep(1500);
+
+  // 2. Seleziona ed esegui il click sul tab "STUDENTE"
+  console.log('🔄 Selezione tab Studente...');
+  const tabClicked = await page.evaluate(() => {
+    const elements = Array.from(document.querySelectorAll('a, button, li, .nav-link, span, div'));
+    const studentEl = elements.find(el => (el.textContent || '').trim().toLowerCase() === 'studente');
+    if (studentEl) {
+      (studentEl.closest('a, button, li') || studentEl).click();
+      return true;
+    }
+    return false;
+  });
+
+  console.log(`Tab studente cliccato: ${tabClicked}`);
+  await sleep(1500);
+
+  // 3. Compilazione credenziali
+  await page.waitForSelector('input[placeholder="Username"], input[type="text"]', { timeout: 10000 });
+  await page.type('input[placeholder="Username"], input[type="text"]', USERNAME, { delay: 20 });
+  await page.type('input[placeholder="Password"], input[type="password"]', PASSWORD, { delay: 20 });
+
+  // 4. Click Accedi
+  console.log('🔑 Invio form di login...');
+  await page.evaluate(() => {
+    const btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
+    const btn = btns.find(b => (b.textContent || b.value || '').trim().toLowerCase().startsWith('accedi'));
+    if (btn) btn.click();
+  });
+
+  await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 20000 }).catch(() => {});
+  await sleep(2000);
+
+  console.log(`📍 URL post-login: ${page.url()}`);
+
+  // 5. Navigazione a RIEPILOGO
+  console.log('📌 Navigazione a /personal-area/student/summaries...');
+  await page.goto('https://www.docenti.unina.it/personal-area/student/summaries', { waitUntil: 'networkidle2' });
+  await sleep(3000);
+
+  await page.screenshot({ path: 'iscrizioni-debug.png', fullPage: true });
+  fs.writeFileSync('iscrizioni-debug.html', await page.content());
+
+  console.log('\n📡 --- CHIAMATE API INTERCETTATE IN BACKGROUND ---');
+  interceptedRequests.forEach(req => {
+    console.log(`\n[${req.status}] ${req.url}`);
+    console.log(`   Body: ${req.bodyPreview}`);
+  });
+
+  await browser.close();
+})();
+===== FINE: debug-iscrizione.js =====
+
+===== FILE: iscrizioni-debug.html =====
+<!DOCTYPE html><html lang="it"><head>
+  <!-- Set title -->
+  <title>Docenti | Università degli Studi di Napoli Federico II</title>
+
+  <!-- Set charset -->
+  <meta charset="utf-8">
+
+  <!-- Set generic metadata -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#000000">
+
+  <!-- App icons -->
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon.ico">
+  <link rel="apple-touch-icon" href="./logo192.png">
+
+  <!-- Font Awesome PRO -->
+
+
+  <!-- Google Font INTER -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&amp;display=swap" rel="stylesheet">
+
+  <!--
+      Manifest.json provides metadata used when your web app is installed mobile or desktop.
+      See https://developers.google.com/web/fundamentals/web-app-manifest/
+    -->
+  <link rel="manifest" href="./manifest.json">
+
+  <!-- JQUERY SCRIPTS -->
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/js-cookie@3.0.5/dist/js.cookie.min.js"></script>
+  <script type="module" crossorigin="" src="/index.js"></script>
+  <link rel="stylesheet" crossorigin="" href="/assets/index.css">
+<style id="_goober"> @keyframes go2264125279{from{transform:scale(0) rotate(45deg);opacity:0;}to{transform:scale(1) rotate(45deg);opacity:1;}}@keyframes go3020080000{from{transform:scale(0);opacity:0;}to{transform:scale(1);opacity:1;}}@keyframes go463499852{from{transform:scale(0) rotate(90deg);opacity:0;}to{transform:scale(1) rotate(90deg);opacity:1;}}@keyframes go1268368563{from{transform:rotate(0deg);}to{transform:rotate(360deg);}}@keyframes go1310225428{from{transform:scale(0) rotate(45deg);opacity:0;}to{transform:scale(1) rotate(45deg);opacity:1;}}@keyframes go651618207{0%{height:0;width:0;opacity:0;}40%{height:0;width:6px;opacity:1;}100%{opacity:1;height:10px;}}@keyframes go901347462{from{transform:scale(0.6);opacity:0.4;}to{transform:scale(1);opacity:1;}}.go4109123758{z-index:9999;}.go4109123758 > *{pointer-events:auto;}</style><style data-styled="active" data-styled-version="6.1.19"></style></head>
+
+<body style="overflow-y: visible;" id="idBody">
+  <!-- Fallback error -->
+  <noscript>You need to enable JavaScript to run this app!</noscript>
+
+  <!-- SPA entrypoint -->
+  <div id="michoro-app-root"><div class="" style="position: fixed; top: 0px; left: 0px; height: 5px; background: transparent; z-index: 2147483647; width: 100%;"><div class="" style="height: 100%; background: white; width: 92.7624%; opacity: 1; transition: 500ms;"></div></div><div class="sc-dntSTA eHgfFn"><div class="header-wrapper"><div class="sc-lgpSej jJFtjk"><div class="sc-fhHczv dQmlJo"><a href="/"><img class="logo" src="/assets/header-logo-unina.svg"></a></div><div class="sc-dTvVRJ dyekow nav-desktop-only"><span class="sc-jwTyAe fUEBJE  as-h6">Cerca</span></div><div class="sc-dTvVRJ dyekow nav-desktop-only"><span class="sc-jwTyAe fUEBJE  as-h6">Area Personale</span></div><div class="sc-hvigdm kKKvVj"></div><div class="sc-jJLAfE jFPEGs"><div class="dropdown"><div class="title-menu"><span class="sc-jwTyAe fUEBJE  as-button">it</span></div><div class="title-drop"><i class="fa-solid fa-chevron-down"></i></div></div><div class="overlay-menu"><span><div class="sc-hwkwBN gWVNJ"><span class="sc-jwTyAe fUEBJE  as-normal"><div style="text-align: center;">IT</div></span></div></span><span><div class="sc-hwkwBN gWVNJ"><span class="sc-jwTyAe fUEBJE  as-normal"><div style="text-align: center;">EN</div></span></div></span></div></div><button class="mobile-hamburger-btn" aria-label="Apri menu"><i class="fa-solid fa-bars"></i></button><div class="sc-hjsuWn honpub"><i class="fa-solid fa-envelope"></i></div><div class="sc-jJLAfE jFPEGs"><div class="dropdown"><div class="title-menu"><span class="sc-jwTyAe fUEBJE  as-button"><div class="sc-kcLKEh iSZAxE"><div class="avatar"><img src="/assets/no-profile-available.png"></div><div class="userinfo"><div class="fullname">CACACE GABRIELE</div><div class="role">Studente DE3000397</div></div></div></span></div><div class="title-drop"><i class="fa-solid fa-chevron-down"></i></div></div><div class="overlay-menu anchor-right"><span><div class="sc-kNOymR fIeheF"><div class="active-item"><span class="sc-jwTyAe fUEBJE  as-normal"><i class="fa-solid fa-check mr-3"></i>DE3000397</span></div><div class="container-items"></div></div><div class="sc-dYwGCk kmMggZ"><div class="separator"></div></div></span><span><div class="sc-hwkwBN gWVNJ"><span class="sc-jwTyAe fUEBJE  as-normal"><i class="fa-solid fa-arrow-right-from-bracket mr-3"></i>Disconnetti</span></div></span></div></div></div></div><div class="body-wrapper"><div class="sc-goiVcJ ceZyrF"><div class="sc-dntSTA eHgfFn"><div class="header-wrapper"><div class="sc-lgpSej jJFtjk"><div class="sc-fhHczv dQmlJo"><a href="/"><img class="logo" src="/assets/header-logo-unina.svg"></a></div><div class="sc-dTvVRJ dyekow nav-desktop-only"><span class="sc-jwTyAe fUEBJE  as-h6">Cerca</span></div><div class="sc-dTvVRJ dyekow nav-desktop-only"><span class="sc-jwTyAe fUEBJE  as-h6">Area Personale</span></div><div class="sc-hvigdm kKKvVj"></div><div class="sc-jJLAfE jFPEGs"><div class="dropdown"><div class="title-menu"><span class="sc-jwTyAe fUEBJE  as-button">it</span></div><div class="title-drop"><i class="fa-solid fa-chevron-down"></i></div></div><div class="overlay-menu"><span><div class="sc-hwkwBN gWVNJ"><span class="sc-jwTyAe fUEBJE  as-normal"><div style="text-align: center;">IT</div></span></div></span><span><div class="sc-hwkwBN gWVNJ"><span class="sc-jwTyAe fUEBJE  as-normal"><div style="text-align: center;">EN</div></span></div></span></div></div><button class="mobile-hamburger-btn" aria-label="Apri menu"><i class="fa-solid fa-bars"></i></button><div class="sc-hjsuWn honpub"><i class="fa-solid fa-envelope"></i></div><div class="sc-jJLAfE jFPEGs"><div class="dropdown"><div class="title-menu"><span class="sc-jwTyAe fUEBJE  as-button"><div class="sc-kcLKEh iSZAxE"><div class="avatar"><img src="/assets/no-profile-available.png"></div><div class="userinfo"><div class="fullname">CACACE GABRIELE</div><div class="role">Studente DE3000397</div></div></div></span></div><div class="title-drop"><i class="fa-solid fa-chevron-down"></i></div></div><div class="overlay-menu anchor-right"><span><div class="sc-kNOymR fIeheF"><div class="active-item"><span class="sc-jwTyAe fUEBJE  as-normal"><i class="fa-solid fa-check mr-3"></i>DE3000397</span></div><div class="container-items"></div></div><div class="sc-dYwGCk kmMggZ"><div class="separator"></div></div></span><span><div class="sc-hwkwBN gWVNJ"><span class="sc-jwTyAe fUEBJE  as-normal"><i class="fa-solid fa-arrow-right-from-bracket mr-3"></i>Disconnetti</span></div></span></div></div></div></div><div class="body-wrapper"><div class="sc-VLMBG lliQdH"><div class="hero-search"><div class="container"><div class="breadcrumb">&nbsp;</div><div class="student-info"><div class="sc-bbbBoY ddlEXB"><div class="user-card-no-avatar"><img class="watermark" src="/assets/watermark.png" title="user-card-no-avatar-watermark"></div><div class="user-card-info"><div class="title-wrapper"><div class="title"><span class="sc-jwTyAe fUEBJE  as-h1">GABRIELE CACACE</span></div></div><div class="subtitle"><span class="sc-jwTyAe fUEBJE  as-h6">Matricola N° DE3000397</span></div></div></div></div><div class="tabmenu"><div class="sc-jaXbil bmkNhB  "><div class=""><span class="sc-jwTyAe fUEBJE  as-h6"><div>Libretto Elettronico</div></span></div><div class="active"><span class="sc-jwTyAe fUEBJE  as-h6"><div>Riepilogo Iscrizioni</div></span></div></div></div></div></div><div class="container"><div class="sc-gXbNzB ekRcbK"><div class="sc-hdBJTi kypwgz"><div class="title" style="width: 95%;"><span class="sc-jwTyAe fUEBJE  as-h3">Lezioni</span></div></div><div class="sc-fszimp dQYrDP table-section"><div class="panel-message"><div class="sc-fbQrwq dBhVQi"><table class="table-root"><thead><tr><th><span class="sc-jwTyAe fUEBJE  as-normal">Cod</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Nome insegnamento</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Anno accademico</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Docente</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Mailing list</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Link teams</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Codice teams</span></th><th style="text-align: center;"><span class="sc-jwTyAe fUEBJE  as-normal">Azioni</span></th></tr></thead><tbody><tr><td>00117</td><td>FISICA GENERALE II</td><td>2026/2027</td><td>DAVIDE MASSAROTTI</td><td>S</td><td>--</td><td>--</td><td style="text-align: center;"><div class="sc-gGKoUb gXHtFJ  default"><div class="label"><span class="sc-jwTyAe fUEBJE  as-button">Dettagli</span></div></div></td></tr><tr><td>U7220</td><td>TECNICHE DI PROGRAMMAZIONE</td><td>2026/2027</td><td>VALERIA VITTORINI</td><td>S</td><td>--</td><td>--</td><td style="text-align: center;"><div class="sc-gGKoUb gXHtFJ  default"><div class="label"><span class="sc-jwTyAe fUEBJE  as-button">Dettagli</span></div></div></td></tr><tr><td>00229</td><td>TEORIA DEI SEGNALI</td><td>2026/2027</td><td>MARCO LOPS</td><td>S</td><td>--</td><td>--</td><td style="text-align: center;"><div class="sc-gGKoUb gXHtFJ  default"><div class="label"><span class="sc-jwTyAe fUEBJE  as-button">Dettagli</span></div></div></td></tr><tr><td>00103</td><td>FISICA GENERALE I</td><td>2025/2026</td><td>OFELIA PISANTI</td><td>S</td><td>--</td><td>--</td><td style="text-align: center;"><div class="sc-gGKoUb gXHtFJ  default"><div class="label"><span class="sc-jwTyAe fUEBJE  as-button">Dettagli</span></div></div></td></tr><tr><td>05481</td><td>GEOMETRIA ED ALGEBRA</td><td>2025/2026</td><td>MATTIA BRESCIA</td><td>S</td><td>--</td><td>--</td><td style="text-align: center;"><div class="sc-gGKoUb gXHtFJ  default"><div class="label"><span class="sc-jwTyAe fUEBJE  as-button">Dettagli</span></div></div></td></tr></tbody></table></div></div></div><br><div class="sc-hdBJTi kypwgz"><div class="title" style="width: 95%;"><span class="sc-jwTyAe fUEBJE  as-h3">Gruppi</span></div></div><div class="sc-fszimp dQYrDP table-section"><div class="panel-message"><div class="sc-fbQrwq dBhVQi"><table class="table-root"><thead><tr><th><span class="sc-jwTyAe fUEBJE  as-normal">Nome gruppo</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Anno accademico</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Docente</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Data iscrizione</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Mailing list</span></th><th style="text-align: center;"><span class="sc-jwTyAe fUEBJE  as-normal">Azioni</span></th></tr></thead><tbody><tr><td colspan="6"><span class="sc-jwTyAe fUEBJE  as-normal">Non sono presenti iscrizioni...	</span></td></tr></tbody></table></div></div></div><br><div class="sc-hdBJTi kypwgz"><div class="title" style="width: 95%;"><span class="sc-jwTyAe fUEBJE  as-h3">Test</span></div></div><div class="sc-fszimp dQYrDP table-section"><div class="panel-message"><div class="sc-fbQrwq dBhVQi"><table class="table-root"><thead><tr><th><span class="sc-jwTyAe fUEBJE  as-normal">Nome test</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Anno acc.</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Docente</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Data iscrizione</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Data test</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Ora test</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Mailing list</span></th><th style="text-align: center;"><span class="sc-jwTyAe fUEBJE  as-normal">Azioni</span></th></tr></thead><tbody><tr><td colspan="8"><span class="sc-jwTyAe fUEBJE  as-normal">Non sono presenti iscrizioni...	</span></td></tr></tbody></table></div></div></div><br><div class="sc-hdBJTi kypwgz"><div class="title" style="width: 95%;"><span class="sc-jwTyAe fUEBJE  as-h3">Appelli di esame</span></div></div><div class="sc-fszimp dQYrDP table-section"><div class="panel-message"><div class="sc-fbQrwq dBhVQi"><table class="table-root"><thead><tr><th><span class="sc-jwTyAe fUEBJE  as-normal">Codice insegnamento</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Nome insegnamento</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Nome corso</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Anno accademico</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Docente</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Data prenotazione</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Data esame</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Sessione</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Link teams</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Codice teams</span></th><th><span class="sc-jwTyAe fUEBJE  as-normal">Altro</span></th></tr></thead><tbody><tr><td>00103</td><td>FISICA GENERALE I</td><td>DE3 INGEGNERIA INFORMATICA</td><td>2025/2026</td><td>OFELIA PISANTI</td><td>23/09/2026</td><td>02/10/2026</td><td>Autunnale</td><td>--</td><td>--</td><td>--</td></tr><tr><td>U6966</td><td>ARCHITETTURA DEI CALCOLATORI</td><td>DE3 INGEGNERIA INFORMATICA</td><td>2025/2026</td><td>ALESSANDRA DE BENEDICTIS</td><td>05/07/2026</td><td>21/07/2026</td><td>Estiva</td><td>--</td><td>--</td><td>--</td></tr><tr><td>U6966</td><td>ARCHITETTURA DEI CALCOLATORI</td><td>DE3 INGEGNERIA INFORMATICA</td><td>2025/2026</td><td>ALESSANDRA DE BENEDICTIS</td><td>15/06/2026</td><td>23/06/2026</td><td>Estiva</td><td>--</td><td>--</td><td>--</td></tr><tr><td>U6966</td><td>ARCHITETTURA DEI CALCOLATORI</td><td>DE3 INGEGNERIA INFORMATICA</td><td>2025/2026</td><td>ALESSANDRA DE BENEDICTIS</td><td>22/05/2026</td><td>11/06/2026</td><td>Estiva</td><td>--</td><td>--</td><td>--</td></tr><tr><td>00499</td><td>FONDAMENTI DI INFORMATICA</td><td>DE3 INGEGNERIA INFORMATICA</td><td>2025/2026</td><td>LUIGI DE SIMONE</td><td>27/02/2026</td><td>30/03/2026</td><td>Anticipata</td><td>--</td><td>--</td><td>--</td></tr><tr><td>00102</td><td>ANALISI MATEMATICA I</td><td>DE3 INGEGNERIA INFORMATICA</td><td>2025/2026</td><td>RAFFAELE SCANDONE</td><td>21/01/2026</td><td>24/02/2026</td><td>Anticipata</td><td>--</td><td>--</td><td>--</td></tr><tr><td>00102</td><td>ANALISI MATEMATICA I</td><td>DE3 INGEGNERIA INFORMATICA</td><td>2025/2026</td><td>RAFFAELE SCANDONE</td><td>21/12/2025</td><td>21/01/2026</td><td>Anticipata</td><td>--</td><td>--</td><td>--</td></tr></tbody></table></div></div></div><br><div class="sc-hdBJTi kypwgz"><div class="title" style="width: 95%;"><span class="sc-jwTyAe fUEBJE  as-h3">Gestione notifiche</span></div></div><div class="notifications-content"><div class="sc-fszimp dQYrDP"><div class="panel-title">Avvisi&nbsp;</div><div class="panel-message"><div>DAVIDE MASSAROTTI</div><hr><div>LUIGI DE SIMONE</div><hr><div>MATTIA BRESCIA</div><hr><div>RAFFAELE SCANDONE</div></div></div><div class="sc-fszimp dQYrDP"><div class="panel-title">Appelli&nbsp;</div><div class="panel-message"><div>ALESSANDRA DE BENEDICTIS</div><hr><div>LUIGI DE SIMONE</div><hr><div>RAFFAELE SCANDONE</div></div></div><div class="sc-fszimp dQYrDP"><div class="panel-title">Didattica&nbsp;</div><div class="panel-message"><div>ALESSANDRA DE BENEDICTIS</div><hr><div>LUIGI DE SIMONE</div><hr><div>MATTIA BRESCIA</div></div></div></div><div class="sc-dcMTLQ jKAuau"></div><div class="sc-dcMTLQ jKAuau"></div></div></div></div></div><div class="footer-wrapper"><div class="sc-eqYatC efizwm"><div class="copyright"><span class="sc-jwTyAe fUEBJE  as-tiny">© Università degli Studi di Napoli Federico II</span></div><div class="link-items"><span class="sc-jwTyAe fUEBJE  as-tiny"><a href="/cookies-privacy/">Cookies e Privacy</a><a href="/contacts/">Contatti</a><a href="/accessibility/">Accessibilità</a><a href="/sitemap/">Mappa del Sito</a></span></div></div></div><div></div><div id="_rht_toaster" style="position: fixed; z-index: 9999; inset: 16px; pointer-events: none;"></div></div></div></div><div class="footer-wrapper"><div class="sc-eqYatC efizwm"><div class="copyright"><span class="sc-jwTyAe fUEBJE  as-tiny">© Università degli Studi di Napoli Federico II</span></div><div class="link-items"><span class="sc-jwTyAe fUEBJE  as-tiny"><a href="/cookies-privacy/">Cookies e Privacy</a><a href="/contacts/">Contatti</a><a href="/accessibility/">Accessibilità</a><a href="/sitemap/">Mappa del Sito</a></span></div></div></div><div></div><div id="_rht_toaster" style="position: fixed; z-index: 9999; inset: 16px; pointer-events: none;"></div></div></div>
+
+  <!-- Load ENV data -->
+  <script type="application/javascript" src="/assets/settings.js"></script>
+  <script type="application/javascript" src="./settings.js"></script>
+
+  <!--
+      This HTML file is a template.
+      If you open it directly in the browser, you will see an empty page.
+
+      You can add webfonts, meta tags, or analytics to this file.
+      The build step will place the bundled scripts into the <body> tag.
+
+      To begin the development, run `npm start` or `yarn start`.
+      To create a production bundle, use `npm run build` or `yarn build`.
+    -->
+
+
+
+
+</body></html>
+===== FINE: iscrizioni-debug.html =====
+
+===== FILE: package.json =====
+{
+  "name": "segrepass-api",
+  "version": "1.0.0",
+  "description": "Backend API per Segrepass 2.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test",
+    "test:watch": "node --test --watch",
+    "test:coverage": "node --test --experimental-test-coverage",
+    "test:wiring": "node --test test/wiring.test.js",
+    "check:env": "node check-env.js",
+    "check": "npm run check:env && npm test",
+    "seed:plan:l8-2025-26": "node scripts/seed-study-plan-l8-2025-26.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "author": "Gabriele Cacace",
+  "license": "ISC",
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.6.2",
+    "helmet": "^8.3.0",
+    "jsonwebtoken": "^9.0.3",
+    "puppeteer": "^25.8.0",
+    "puppeteer-cluster": "^0.25.0"
+  }
+}
+===== FINE: package.json =====
+
+===== FILE: seed.js =====
+const { db } = require('./db/index');
+const { saveStudyPlan } = require('./db/repository');
+
+const planTest = {
+  courseId: 'DE3',
+  cohortYear: 2024,
+  courseName: 'INGEGNERIA INFORMATICA',
+  version: '1',
+  sourceName: 'Manifesto Ufficiale DIETI',
+  sourceUrl: 'https://www.dieti.unina.it'
+};
+
+const coursesTest = [
+  { courseCode: '001', courseName: 'ANALISI MATEMATICA I', cfu: 9, studyYear: 1, semester: 1, courseType: 'mandatory' },
+  { courseCode: '002', courseName: 'GEOMETRIA E ALGEBRA', cfu: 6, studyYear: 1, semester: 1, courseType: 'mandatory' },
+  { courseCode: '003', courseName: 'FONDAMENTI DI INFORMATICA', cfu: 9, studyYear: 1, semester: 2, courseType: 'mandatory' }
+];
+
+saveStudyPlan(db, planTest, coursesTest);
+console.log('Manifesto DE3 / 2024 caricato con successo nel DB!');
+===== FINE: seed.js =====
+
+===== FILE: server.js =====
+require('dotenv').config();
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+
+// Router Modules
+const authRoutes = require('./routes/auth');
+const careerRoutes = require('./routes/career');
+const sessionRoutes = require('./routes/session');
+const profileRoutes = require('./routes/profile');
+const careerPlanRoutes = require('./routes/career-plan');
+const studyPlanRoutes = require('./routes/study-plans');
+const timetableRoutes = require('./routes/timetable');
+const careerTaxesRoutes = require('./routes/career-taxes');
+const docentiRoutes = require('./routes/docenti');
+const metricheRoutes = require('./routes/metriche');
+
+const authModule = require('./middleware/auth');
+const authMiddleware = authModule.authMiddleware || authModule;
+const { csrfProtection } = require('./lib/csrf');
+
+const { db } = require('./db');
+const { initCluster, closeCluster } = require('./scraper/pool');
+
+const app = express();
+const PORT = process.env.PORT || 3001;
+const HOST = process.env.HOST || '0.0.0.0';
+
+if (process.env.TRUST_PROXY) {
+  app.set('trust proxy', Number(process.env.TRUST_PROXY) || 1);
+}
+
+// 🛡️ Sicurezza Intestazioni HTTP
+app.use(helmet());
+
+// 🌐 Configurazione CORS
+const frontendOrigins = [...new Set([
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  process.env.FRONTEND_URL
+].filter(Boolean))];
+
+app.use(cors({ origin: frontendOrigins, credentials: true }));
+
+// 🔑 Protezione CSRF
+app.use(csrfProtection);
+
+// 🩺 Health Check (Senza Rate Limit)
+app.get('/health', (_, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
+
+// ⏱️ Rate Limiting Generale
+app.use(rateLimit({ windowMs: 60 * 1000, max: 100, message: { error: 'Troppe richieste.' } }));
+
+// 🔒 Rate Limiting Severo per i Login
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Troppi tentativi di accesso. Riprova tra qualche minuto.' }
+});
+app.use(['/api/auth/login'], loginLimiter);
+
+// 📦 Body Parser JSON
+app.use(express.json({ limit: '200kb', strict: false }));
+app.use((req, _res, next) => {
+  if (req.body === undefined) req.body = {};
+  next();
+});
+
+/* ------------------------------------------------------------------ */
+/* 🔓 ROTTE PUBBLICHE                                                 */
+/* ------------------------------------------------------------------ */
+app.use('/api/session', sessionRoutes);
+app.use('/api/auth', authRoutes);
+
+/* ------------------------------------------------------------------ */
+/* 🔒 ROTTE PROTETTE DA AUTHENTICATION MIDDLEWARE                     */
+/* ------------------------------------------------------------------ */
+app.use('/api/profile', authMiddleware, profileRoutes);
+app.use('/api/career-plan', authMiddleware, careerPlanRoutes);
+app.use('/api/career', authMiddleware, careerRoutes);
+app.use('/api/career-taxes', authMiddleware, careerTaxesRoutes);
+app.use('/api/metriche', authMiddleware, metricheRoutes);
+app.use('/api/study-plans', authMiddleware, studyPlanRoutes);
+app.use('/api/timetable', authMiddleware, timetableRoutes);
+
+/* ------------------------------------------------------------------ */
+/* 🔀 ROTTE IBRIDE (Avvisi Pubblici + Area Riservata Protetta)       */
+/* ------------------------------------------------------------------ */
+app.use('/api/docenti', docentiRoutes);
+
+/* ------------------------------------------------------------------ */
+/* ❌ HANDLER ERRORE 404 & GLOBALE 500                                */
+/* ------------------------------------------------------------------ */
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: `Endpoint API non trovato: ${req.originalUrl}` });
+});
+
+app.use((err, req, res, next) => {
+  console.error('[Server Error]', err);
+  const status = err.status || 500;
+  res.status(status).json({
+    error: status >= 500 ? 'Errore interno del server.' : (err.message || 'Richiesta non valida.')
+  });
+});
+
+/* ------------------------------------------------------------------ */
+/* 🚀 AVVIO ED ESECUZIONE SERVER CON GRACEFUL SHUTDOWN                */
+/* ------------------------------------------------------------------ */
+let server = null;
+let shuttingDown = false;
+
+async function start() {
+  await initCluster();
+  server = app.listen(PORT, HOST, () => {
+    console.log(`[System] API attive su http://${HOST}:${PORT}`);
+  });
+}
+
+async function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\n[System] ${signal} ricevuto: spegnimento sicuro...`);
+
+  const forceExit = setTimeout(() => {
+    console.error('[System] Spegnimento forzato dopo 10s.');
+    process.exit(1);
+  }, 10000);
+  forceExit.unref();
+
+  try {
+    await closeCluster();
+  } catch (error) {
+    console.error('[System] Errore chiusura cluster:', error.message);
+  }
+
+  try {
+    db.close();
+  } catch (error) {
+    console.error('[System] Errore chiusura database:', error.message);
+  }
+
+  if (!server) {
+    clearTimeout(forceExit);
+    process.exit(0);
+    return;
+  }
+
+  server.close(() => {
+    clearTimeout(forceExit);
+    console.log('[System] Server HTTP chiuso.');
+    process.exit(0);
+  });
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+start().catch(error => {
+  console.error('[System] Fallimento critico avvio:', error);
+  process.exit(1);
+});
+===== FINE: server.js =====
+
+===== FILE: test-all-scrapers.js =====
+/**
+ * Test Diagnostico Unificato per tutti gli Scraper UNINA (Segrepass + WebDocenti)
+ * Uso: node test-all-scrapers.js
+ */
+
+const { initCluster, closeCluster } = require('./scraper/pool');
+const { getDatiCarriera } = require('./scraper/segrepass');
+const { getDocentiData, fetchAnnouncementsForProfessors } = require('./scraper/docenti');
+
+// Credenziali di test
+const USER_CREDENTIALS = {
+  codiceFiscale: process.env.UNINA_CF || 'GABR.CACACE@STUDENTI.UNINA.IT',
+  username: process.env.UNINA_USER || 'gabr.cacace@studenti.unina.it',
+  password: process.env.UNINA_PASS || 'mas801@A'
+};
+
+async function runDiagnosticTest() {
+  console.log('======================================================================');
+  console.log('🧪   AVVIO DIAGNOSTICA COMPLETA ALL-IN-ONE DEGLI SCRAPER UNINA       ');
+  console.log('======================================================================\n');
+
+  const report = {
+    timestamp: new Date().toISOString(),
+    credentials: {
+      username: USER_CREDENTIALS.username,
+      passwordLength: USER_CREDENTIALS.password ? USER_CREDENTIALS.password.length : 0
+    },
+    scrapers: {}
+  };
+
+  const startTime = Date.now();
+
+  try {
+    console.log('⚙️  Inizializzazione Puppeteer Cluster...');
+    await initCluster();
+    console.log('✅ Cluster Puppeteer pronto.\n');
+
+    // ------------------------------------------------------------------
+    // 1. TEST SCRAPER SEGREPASS (Carriera, Esami, Tasse, Appelli)
+    // ------------------------------------------------------------------
+    console.log('----------------------------------------------------------------------');
+    console.log('📌 [1/3] Test Scraper SEGREPASS...');
+    console.log('----------------------------------------------------------------------');
+    const segrepassStart = Date.now();
+
+    try {
+      const segrepassData = await getDatiCarriera({
+        codiceFiscale: USER_CREDENTIALS.codiceFiscale,
+        password: USER_CREDENTIALS.password
+      }, { phase: 'full' });
+
+      const segrepassDuration = ((Date.now() - segrepassStart) / 1000).toFixed(2);
+      console.log(`✅ Segrepass completato in ${segrepassDuration}s.`);
+
+      report.scrapers.segrepass = {
+        status: 'OK',
+        durationSeconds: Number(segrepassDuration),
+        extractedCounts: {
+          esami: segrepassData?.esami?.length || 0,
+          cfuAcquisiti: segrepassData?.cfuAcquisiti || 0,
+          mediaPonderata: segrepassData?.mediaPonderata || '0.00',
+          tasseInDebito: segrepassData?.tasse?.pending?.length || 0,
+          tassePagate: segrepassData?.tasse?.paid?.length || 0,
+          appelliDisponibili: segrepassData?.prenotazioni?.length || 0
+        },
+        rawData: segrepassData
+      };
+    } catch (err) {
+      const segrepassDuration = ((Date.now() - segrepassStart) / 1000).toFixed(2);
+      console.error(`❌ Errore durante lo scraping di Segrepass: ${err.message}`);
+
+      report.scrapers.segrepass = {
+        status: 'ERROR',
+        durationSeconds: Number(segrepassDuration),
+        error: err.message,
+        stack: err.stack,
+        rawData: null
+      };
+    }
+
+    // ------------------------------------------------------------------
+    // 2. TEST SCRAPER WEBDOCENTI PRIVATO (Login + Iscrizioni/Appelli)
+    // ------------------------------------------------------------------
+    console.log('\n----------------------------------------------------------------------');
+    console.log('📌 [2/3] Test Scraper WEBDOCENTI PRIVATO (Puppeteer)...');
+    console.log('----------------------------------------------------------------------');
+    const docentiStart = Date.now();
+
+    try {
+      const docentiData = await getDocentiData({
+        username: USER_CREDENTIALS.username,
+        password: USER_CREDENTIALS.password
+      });
+
+      const docentiDuration = ((Date.now() - docentiStart) / 1000).toFixed(2);
+
+      if (docentiData && docentiData.available !== false) {
+        console.log(`✅ WebDocenti Privato completato in ${docentiDuration}s.`);
+        report.scrapers.webdocentiPrivato = {
+          status: 'OK',
+          durationSeconds: Number(docentiDuration),
+          extractedCounts: {
+            iscrizioniCorsi: docentiData?.subscriptions?.length || 0,
+            esamiPrenotati: docentiData?.bookedExams?.length || 0,
+            gruppiAvvisiDocenti: docentiData?.announcements?.length || 0
+          },
+          rawData: docentiData
+        };
+      } else {
+        console.warn(`⚠️ WebDocenti Privato ha terminato con esito negativo: ${docentiData?.reason}`);
+        report.scrapers.webdocentiPrivato = {
+          status: 'FAILED_NO_DATA',
+          durationSeconds: Number(docentiDuration),
+          reason: docentiData?.reason || 'UNKNOWN_REASON',
+          rawData: docentiData
+        };
+      }
+    } catch (err) {
+      const docentiDuration = ((Date.now() - docentiStart) / 1000).toFixed(2);
+      console.error(`❌ Errore durante lo scraping di WebDocenti Privato: ${err.message}`);
+
+      report.scrapers.webdocentiPrivato = {
+        status: 'ERROR',
+        durationSeconds: Number(docentiDuration),
+        error: err.message,
+        stack: err.stack,
+        rawData: null
+      };
+    }
+
+    // ------------------------------------------------------------------
+    // 3. TEST WEBDOCENTI AVVISI REST PUBBLICI (No Browser)
+    // ------------------------------------------------------------------
+    console.log('\n----------------------------------------------------------------------');
+    console.log('📌 [3/3] Test WEBDOCENTI AVVISI REST PUBBLICI...');
+    console.log('----------------------------------------------------------------------');
+    const restStart = Date.now();
+
+    const sampleProfessors = [
+      'DAVIDE MASSAROTTI',
+      'VALERIA VITTORINI',
+      'MARCO LOPS',
+      'OFELIA PISANTI',
+      'MATTIA BRESCIA'
+    ];
+
+    try {
+      const avvisiData = await fetchAnnouncementsForProfessors(sampleProfessors);
+      const restDuration = ((Date.now() - restStart) / 1000).toFixed(2);
+
+      console.log(`✅ WebDocenti Avvisi REST completato in ${restDuration}s.`);
+
+      const totalAnnouncements = avvisiData.reduce((acc, g) => acc + (g.items?.length || 0), 0);
+
+      report.scrapers.webdocentiRestAvvisi = {
+        status: 'OK',
+        durationSeconds: Number(restDuration),
+        extractedCounts: {
+          professoriRichiesti: sampleProfessors.length,
+          professoriTrovati: avvisiData.length,
+          totaleAvvisiScaricati: totalAnnouncements
+        },
+        rawData: avvisiData
+      };
+    } catch (err) {
+      const restDuration = ((Date.now() - restStart) / 1000).toFixed(2);
+      console.error(`❌ Errore durante il recupero REST degli Avvisi: ${err.message}`);
+
+      report.scrapers.webdocentiRestAvvisi = {
+        status: 'ERROR',
+        durationSeconds: Number(restDuration),
+        error: err.message,
+        rawData: null
+      };
+    }
+
+  } finally {
+    console.log('\n🧹 Chiusura Puppeteer Cluster...');
+    await closeCluster();
+  }
+
+  const totalDuration = ((Date.now() - startTime) / 1000).toFixed(2);
+
+  // ------------------------------------------------------------------
+  // REPORT DIAGNOSTICO FINALE IN CONSOLE
+  // ------------------------------------------------------------------
+  console.log('\n======================================================================');
+  console.log('📊                   STATO DIAGNOSTICO FINALE                         ');
+  console.log('======================================================================');
+  console.log(`⏱️  Tempo totale diagnostica: ${totalDuration}s\n`);
+
+  for (const [key, val] of Object.entries(report.scrapers)) {
+    const icon = val.status === 'OK' ? '🟢' : (val.status === 'FAILED_NO_DATA' ? '🟡' : '🔴');
+    console.log(`${icon} [${key.toUpperCase()}] -> Stato: ${val.status} (${val.durationSeconds}s)`);
+
+    if (val.extractedCounts) {
+      console.log('   📦 Dati estratti:', JSON.stringify(val.extractedCounts));
+    }
+    if (val.error) {
+      console.log(`   🚨 Errore: ${val.error}`);
+    }
+    if (val.reason) {
+      console.log(`   ⚠️ Motivo fallimento: ${val.reason}`);
+    }
+  }
+
+  console.log('\n======================================================================');
+  console.log('🔍                 DETTAGLIO COMPLETO DEI DATI ESTRATTI               ');
+  console.log('======================================================================\n');
+
+  console.log(JSON.stringify(report, null, 2));
+}
+
+runDiagnosticTest().catch(err => {
+  console.error('💥 Errore fatale nello script di diagnostica:', err);
+  process.exit(1);
+});
+===== FINE: test-all-scrapers.js =====
+
+===== FILE: test-avvisi.js =====
+const { fetchAnnouncementsForProfessors } = require('./scraper/docenti');
+
+// Uso:
+//   node test-avvisi.js                       → ultimi 3 avvisi di ogni docente, TESTO COMPLETO
+//   node test-avvisi.js "MARCO LOPS"          → solo quel docente
+//   node test-avvisi.js --tutti               → tutti gli avvisi (non solo gli ultimi 3)
+const DEFAULT_PROFESSORS = [
+  'DAVIDE MASSAROTTI',
+  'VALERIA VITTORINI',
+  'MARCO LOPS',
+  'OFELIA PISANTI',
+  'MATTIA BRESCIA'
+];
+
+const args = process.argv.slice(2);
+const showAll = args.includes('--tutti');
+const names = args.filter(a => !a.startsWith('--'));
+const professors = names.length ? names : DEFAULT_PROFESSORS;
+const LIMIT = showAll ? Infinity : 3;
+
+(async () => {
+  const start = Date.now();
+  const groups = await fetchAnnouncementsForProfessors(professors);
+
+  console.log(`\n===== AVVISI (${groups.length}/${professors.length} docenti trovati) =====`);
+
+  for (const group of groups) {
+    console.log(`\n${'='.repeat(70)}\n${group.professor} — ${group.items.length} avvisi\nBacheca: ${group.boardUrl}\n${'='.repeat(70)}`);
+
+    for (const item of group.items.slice(0, LIMIT)) {
+      console.log(`\n▶ ${item.title}`);
+      console.log(`  Data: ${item.date}${item.updatedAt && item.updatedAt !== item.date ? ` (aggiornato ${item.updatedAt})` : ''}`);
+      if (item.category) console.log(`  Categoria: ${item.category}`);
+
+      console.log('  ' + '-'.repeat(60));
+      console.log(item.contentText
+        ? item.contentText.split('\n').map(l => '  ' + l).join('\n')
+        : '  (testo non presente: apri la bacheca per leggerlo)');
+      console.log('  ' + '-'.repeat(60));
+
+      if (item.attachments.length) {
+        console.log('  Allegati:');
+        item.attachments.forEach(a => console.log(`   - ${a.name}: ${a.url}`));
+      }
+    }
+  }
+
+  console.log(`\nCompletato in ${((Date.now() - start) / 1000).toFixed(1)}s`);
+})().catch(err => {
+  console.error('Errore nel test:', err);
+  process.exit(1);
+});
+===== FINE: test-avvisi.js =====
+

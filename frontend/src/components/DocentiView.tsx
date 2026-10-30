@@ -1,12 +1,13 @@
 ﻿'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { Megaphone, BookOpenCheck, CalendarCheck, CalendarDays, MapPin, ExternalLink, RefreshCw, User, Search, Calendar } from 'lucide-react';
 import {
   fetchDocentiAnnouncements,
   fetchDocentiSubscriptions,
   fetchDocentiBookedExams,
-  type DocenteAnnouncements,
+  type DocenteAnnouncementGroup,
+  type DocenteAnnouncementItem,
   type SubscriptionDocenti,
   type BookedExamDocenti,
 } from '@/lib/api';
@@ -24,6 +25,11 @@ const EMPTY = `${CARD} p-8 text-center text-sm text-slate-400`;
 function readableError(err: unknown): string {
   const message = err instanceof Error ? err.message : '';
   if (message === 'SESSION_EXPIRED') return 'Sessione scaduta. Esci e accedi di nuovo.';
+  if (/CREDENTIALS_REQUIRED/i.test(message)) {
+    return 'Credenziali Docenti non disponibili nella sessione. Esci e accedi di nuovo con l\u2019email istituzionale.';
+  }
+  if (/non valide/i.test(message)) return 'Credenziali Docenti non valide.';
+  if (/Nessun dato Docenti/i.test(message)) return 'Nessun dato Docenti trovato sul portale. Riprova più tardi.';
   return message || 'Errore durante il caricamento dei dati Docenti.';
 }
 
@@ -57,23 +63,39 @@ function stripTags(html?: string | null) {
 
 export default function DocentiView({ token }: DocentiViewProps) {
   const [activeTab, setActiveTab] = useState<Tab>('announcements');
-  const [announcements, setAnnouncements] = useState<DocenteAnnouncements[]>([]);
+  const [announcements, setAnnouncements] = useState<DocenteAnnouncementGroup[]>([]);
   const [subscriptions, setSubscriptions] = useState<SubscriptionDocenti[]>([]);
   const [bookedExams, setBookedExams] = useState<BookedExamDocenti[]>([]);
   const [loading, setLoading] = useState(true);
   const [errors, setErrors] = useState<string[]>([]);
   const [search, setSearch] = useState('');
+  const mounted = useRef(true);
 
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  // Una sola sincronizzazione: il backend condivide la stessa acquisizione tra
+  // le tre chiamate e un errore qui NON azzera la sessione globale.
   const loadData = useCallback(async () => {
+    await Promise.resolve();
+    if (!mounted.current) return;
     setLoading(true);
     setErrors([]);
+
     const [ann, sub, exams] = await Promise.allSettled([
       fetchDocentiAnnouncements(token),
       fetchDocentiSubscriptions(token),
       fetchDocentiBookedExams(token),
     ]);
 
+    if (!mounted.current) return;
+
     const found: string[] = [];
+
     if (ann.status === 'fulfilled') setAnnouncements(ann.value);
     else found.push(readableError(ann.reason));
 
@@ -88,7 +110,8 @@ export default function DocentiView({ token }: DocentiViewProps) {
   }, [token]);
 
   useEffect(() => {
-    if (token) loadData();
+    if (!token) return;
+    void loadData();
   }, [token, loadData]);
 
   const safeAnnouncements = useMemo(() => {
@@ -117,7 +140,7 @@ export default function DocentiView({ token }: DocentiViewProps) {
       .map(doc => ({
         ...doc,
         items: (doc.items || []).filter(
-          (item: any) =>
+          (item: DocenteAnnouncementItem) =>
             (doc.professor || '').toLowerCase().includes(query) ||
             stripTags(item.title).toLowerCase().includes(query) ||
             stripTags(item.content).toLowerCase().includes(query)
@@ -152,7 +175,7 @@ export default function DocentiView({ token }: DocentiViewProps) {
           <p className="text-xs text-slate-400">Avvisi, corsi seguiti ed esami prenotati da docenti.unina.it</p>
         </div>
         <button
-          onClick={loadData}
+          onClick={() => void loadData()}
           disabled={loading}
           aria-label="Ricarica dati docenti"
           title="Ricarica dati docenti"
@@ -206,7 +229,7 @@ export default function DocentiView({ token }: DocentiViewProps) {
         </div>
       )}
 
-      {loading && <div className={EMPTY}>Sincronizzazione dei dati docenti in corso...</div>}
+      {loading && <div className={EMPTY}>Sincronizzazione dei dati docenti in corso (può richiedere fino a un minuto)...</div>}
 
       {!loading && activeTab === 'announcements' && (
         <div className="space-y-4">
@@ -225,7 +248,7 @@ export default function DocentiView({ token }: DocentiViewProps) {
 
                 {doc.items && doc.items.length > 0 ? (
                   <div className="space-y-2.5">
-                    {doc.items.map((item: any, itemIdx: number) => (
+                    {doc.items.map((item: DocenteAnnouncementItem, itemIdx: number) => (
                       <div key={itemIdx} className="space-y-1.5 rounded-xl border border-white/10 bg-[#050E1C]/70 p-3.5">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
                           <h4 className="text-sm font-medium text-slate-100">{stripTags(item.title)}</h4>

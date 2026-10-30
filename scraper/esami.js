@@ -1,64 +1,50 @@
-const { acquireBrowserContext } = require('./pool');
-
-async function enableFastMode(page) {
-  try {
-    await page.setRequestInterception(true);
-    page.on('request', (req) => {
-      if (req.isInterceptResolutionHandled()) return;
-      if (['image', 'font', 'media'].includes(req.resourceType())) {
-        req.abort().catch(() => {});
-      } else {
-        req.continue().catch(() => {});
-      }
-    });
-  } catch {}
-}
-
-async function extractTables(targetPage) {
-  const results = [];
-  for (const frame of targetPage.frames()) {
-    try {
-      const tables = await frame.evaluate(() => {
-        const c = s => (s || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
-        return Array.from(document.querySelectorAll('table')).map(t => {
-          const rows = Array.from(t.querySelectorAll('tr')).map(tr => ({
-            cells: Array.from(tr.querySelectorAll('th, td')).map(td => c(td.innerText)),
-          }));
-          if (rows.length < 2) return null;
-          const headers = rows[0].cells;
-          const records = rows.slice(1)
-            .map(row => row.cells)
-            .filter(row => row.some(cell => cell !== ''))
-            .map(row => Object.fromEntries(headers.map((h, i) => [h || `col_${i}`, row[i] ?? ''])));
-          return { headers, records, rowCount: records.length };
-        }).filter(Boolean);
-      });
-      if (tables && tables.length > 0) results.push(...tables);
-    } catch {}
-  }
-  return results;
-}
+const { enableFastMode, extractTables } = require('./utils');
 
 async function scrapeEsamiSostenuti(context, esisUrl) {
   const page = await context.newPage();
   await enableFastMode(page);
+  
   try {
-    await page.goto(esisUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
-    // Cerca link esami sostenuti
+    await page.goto(esisUrl, { waitUntil: 'networkidle2', timeout: 15000 });
+    
+    let clicked = false;
     for (const frame of page.frames()) {
-      const clicked = await frame.evaluate(() => {
-        const link = Array.from(document.querySelectorAll('a')).find(a => a.href.includes('esamiSostenuti') || (a.innerText || '').toLowerCase().includes('esami sostenuti'));
-        if (link) { link.click(); return true; }
-        return false;
+      const hasLink = await frame.evaluate(() => {
+        const link = Array.from(document.querySelectorAll('a')).find(a => 
+          a.href.includes('esamiSostenuti') || (a.innerText || '').toLowerCase().includes('esami sostenuti')
+        );
+        return !!link;
       });
-      if (clicked) {
-        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 6000 }).catch(() => {});
+
+      if (hasLink) {
+        const navPromise = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 10000 }).catch(() => {});
+        await frame.evaluate(() => {
+          const link = Array.from(document.querySelectorAll('a')).find(a => 
+            a.href.includes('esamiSostenuti') || (a.innerText || '').toLowerCase().includes('esami sostenuti')
+          );
+          if (link) link.click();
+        });
+        await navPromise;
+        clicked = true;
         break;
       }
     }
+    
+    if (clicked) {
+      for (let i = 0; i < 20; i++) {
+        let ready = false;
+        for (const frame of page.frames()) {
+          if (await frame.$('table').catch(() => null)) { ready = true; break; }
+        }
+        if (ready) break;
+        await new Promise(r => setTimeout(r, 250));
+      }
+    }
+    
     const tables = await extractTables(page);
     return tables[0] || { headers: [], records: [], rowCount: 0 };
-  } catch {
+  } catch (err) {
+    console.warn('[esami] Errore estrazione:', err.message);
     return { headers: [], records: [], rowCount: 0 };
   } finally {
     await page.close().catch(() => {});

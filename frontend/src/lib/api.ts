@@ -1,274 +1,398 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:3001';
+// src/lib/api.ts
 
-// --- Auth Helpers ---
-export function getToken(): string | null {
-  if (typeof window !== 'undefined') {
-    return localStorage.getItem('token');
-  }
-  return null;
+export type CredenzialiSegrepass = {
+  codiceFiscale: string;
+  password: string;
+  /** Email istituzionale (@studenti.unina.it), necessaria per il portale Docenti. */
+  email?: string;
+};
+
+export type Anagrafica = {
+  matricola?: string | null;
+  nomeCompleto?: string;
+  corsoDiLaurea?: string;
+  codiceCorso?: string;
+  annoCorso?: number;
+  annoImmatricolazione?: number;
+};
+
+export type Esame = {
+  codice?: string | null;
+  materia?: string;
+  insegnamento?: string;
+  voto?: number | null;
+  giudizio?: string | null;
+  lode?: boolean;
+  cfu: number;
+  data?: string | null;
+};
+
+export type TassaItem = {
+  codice?: string;
+  descrizione?: string;
+  causale?: string;
+  description?: string;
+  importo?: number;
+  amount?: number;
+  scadenza?: string;
+  dueDate?: string;
+  paidAt?: string;
+  dataPagamento?: string;
+  stato?: string;
+  status?: string;
+  academicYear?: string;
+  iuv?: string;
+  paymentCode?: string;
+  paymentLink?: string;
+};
+
+export type TassaSnapshot = {
+  paid?: TassaItem[];
+  pagati?: TassaItem[];
+  pending?: TassaItem[];
+  inDebito?: TassaItem[];
+  summary?: {
+    totalPaid?: number;
+    totalPending?: number;
+    nextDeadline?: string | null;
+  };
+};
+
+export type Prenotazione = {
+  id?: string;
+  materia?: string;
+  docente?: string;
+  dataAppello?: string;
+  ora?: string;
+  aula?: string;
+  isMyProfessor?: boolean;
+  note?: string;
+};
+
+export type Metriche = {
+  anagrafica?: Anagrafica;
+  esami?: Esame[];
+  tasse?: TassaSnapshot;
+  prenotazioni?: Prenotazione[];
+  mediaPonderata?: string | number;
+  mediaAritmetica?: string | number;
+  baseLaurea?: string | number;
+  cfuAcquisiti?: number;
+  cfuTotali?: number;
+};
+
+export type ProfiloStudente = {
+  id?: string;
+  matricola?: string | null;
+  name?: string;
+  courseName?: string;
+  courseId?: string;
+  cohortYear?: number;
+  currentCourseYear?: number;
+  channel?: string;
+  surnameInitial?: string;
+};
+
+export type ProfiloRecord = ProfiloStudente & {
+  course_name?: string | null;
+  course_id?: string | null;
+  cohort_year?: number | null;
+  current_course_year?: number | null;
+  surname_initial?: string | null;
+  updated_at?: string;
+};
+
+export type PlanCourse = {
+  id: number;
+  courseCode?: string;
+  courseName: string;
+  course_name?: string;
+  cfu: number;
+  studyYear?: number;
+  study_year?: number;
+  semester?: number;
+  courseType?: string;
+  course_type?: string;
+  electiveRequiredCfu?: number;
+  elective_required_cfu?: number;
+  prerequisites?: string[];
+};
+
+export type CareerPlanCourse = PlanCourse & {
+  course_name?: string;
+  study_year?: number;
+  status?: string;
+  matchMethod?: string;
+  selected?: boolean;
+  passedExam?: Esame | null;
+  prerequisites?: string[];
+};
+
+export type ElectiveGroup = {
+  id: string;
+  requiredCfu: number;
+  passedCfu: number;
+  selectedPendingCfu: number;
+  remainingCfu: number;
+  courses: CareerPlanCourse[];
+};
+
+export type CareerPlan = {
+  profile?: ProfiloRecord;
+  plan?: {
+    courseName?: string;
+    course_name?: string;
+    source_name?: string | null;
+    source_url?: string | null;
+  };
+  courses: CareerPlanCourse[];
+  electiveGroups: ElectiveGroup[];
+  summary: {
+    passedCourses: number;
+    missingCourses: number;
+    reviewCourses: number;
+    mandatoryMissingCfu: number;
+    electiveRemainingCfu: number;
+  };
+};
+
+export type StudyPlan = {
+  plan?: { courseName?: string; course_name?: string };
+  courses: PlanCourse[];
+  selectedElectiveIds?: number[];
+};
+
+export type TimetableFilters = {
+  studyYear: number;
+  semester: number | null;
+  channel: string;
+  academicYear?: string;
+};
+
+export type TimetableEvent = {
+  date: string | null;
+  dateTime?: string;
+  startTime?: string | null;
+  endTime?: string | null;
+  courseName?: string;
+  teachers?: string[];
+  room?: string | null;
+  campus?: string | null;
+};
+
+export type Timetable = {
+  academicYear?: string;
+  course?: string;
+  channel?: string;
+  events: TimetableEvent[];
+};
+
+export type TimetableResponse = {
+  filters?: TimetableFilters;
+  timetable: Timetable;
+};
+
+export type DocenteAnnouncementItem = {
+  id: string;
+  title: string;
+  content: string;
+  date?: string | null;
+  category?: string | null;
+  link?: string | null;
+};
+
+export type DocenteAnnouncementGroup = {
+  professor?: string;
+  slug?: string;
+  items: DocenteAnnouncementItem[];
+  latestDate?: number;
+  count?: number;
+};
+
+export type SubscriptionDocenti = {
+  courseName?: string;
+  courseCode?: string;
+  professor?: string;
+  section?: string;
+  academicYear?: string;
+};
+
+export type BookedExamDocenti = {
+  courseName?: string;
+  examDate?: string;
+  bookingDate?: string;
+  location?: string;
+  status?: string;
+};
+
+export type ProfileUpdatePayload = {
+  courseId?: string;
+  courseName?: string;
+  cohortYear?: number;
+  currentCourseYear?: number;
+  channel?: string;
+  surnameInitial?: string;
+  selectedElectiveIds?: number[];
+};
+
+export type ProfileUpdateResponse = {
+  profile: ProfiloRecord;
+  selectedElectiveIds: number[];
+  onboardingRequired: boolean;
+};
+
+export type SlowSyncStatus = 'idle' | 'loading' | 'ready' | 'error';
+
+export type SlowData = {
+  status: SlowSyncStatus;
+  error?: string | null;
+  updatedAt?: number | null;
+  taxes?: TassaSnapshot | null;
+  prenotazioni?: Prenotazione[];
+};
+
+export type LoginResponse = {
+  token: string;
+  profileId: string;
+  profile: ProfiloRecord;
+  onboardingRequired: boolean;
+  metriche: Metriche;
+};
+
+export type RestoreSessionResponse = {
+  token: string;
+  profile: ProfiloRecord;
+  onboardingRequired: boolean;
+};
+
+const API_BASE = (process.env.NEXT_PUBLIC_BACKEND_URL || '').replace(/\/+$/, '');
+
+export function apiUrl(path: string): string {
+  return `${API_BASE}${path}`;
 }
 
-export async function fetchWithAuth(endpoint: string, options: RequestInit = {}): Promise<Response> {
-  const token = getToken();
-  const headers = {
-    'Content-Type': 'application/json',
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    ...options.headers,
-  };
+function authHeaders(token?: string): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
 
-  const res = await fetch(`${API_BASE}${endpoint}`, {
+async function fetchWithAuth(url: string, token: string, options: RequestInit = {}) {
+  const res = await fetch(url, {
     ...options,
-    headers,
-    cache: 'no-store',
+    credentials: 'include',
+    headers: {
+      ...authHeaders(token),
+      ...(options.headers || {})
+    }
   });
 
-  if (res.status === 401) {
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('token');
-    }
+  if (res.status === 401 || res.status === 403) {
     throw new Error('SESSION_EXPIRED');
   }
 
-  return res;
-}
-
-async function parseResponse<T>(res: Response): Promise<T> {
-  const body = (await res.json().catch(() => ({}))) as { error?: string };
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    if (res.status === 401) throw new Error('SESSION_EXPIRED');
-    throw new Error(body.error || 'Errore nella comunicazione con il server.');
-  }
-  return body as T;
-}
-
-// --- Interfaces & Types ---
-export interface CredenzialiSegrepass {
-  codiceFiscale: string;
-  password: string;
-}
-
-export interface ProfiloStudente {
-  codiceFiscale?: string;
-  anagrafica?: {
-    nome?: string;
-    cognome?: string;
-    matricola?: string;
-    codiceCorso?: string;
-    corsoDiLaurea?: string;
-    annoImmatricolazione?: number;
-    annoCorso?: number;
-    canale?: string;
-  };
-  carriera?: Record<string, any>;
-  esamiSostenuti?: Esame[];
-  tasse?: TasseData;
-}
-
-export interface Esame {
-  codice?: string;
-  nome: string;
-  cfu: number;
-  voto?: number | string;
-  data?: string;
-  stato?: string;
-}
-
-export interface PlanCourse {
-  id?: number;
-  courseCode?: string;
-  courseName: string;
-  cfu: number;
-  studyYear?: number;
-  semester?: number;
-  courseType?: 'mandatory' | 'elective';
-}
-
-export interface Metriche {
-  mediaAritmetica?: number;
-  mediaPonderata?: number;
-  cfuAcquisiti?: number;
-  cfuTotali?: number;
-  esamiSuperati?: number;
-  esamiTotali?: number;
-  votoBaseLaurea?: number;
-  [key: string]: any;
-}
-
-export interface TasseData {
-  importoTotale?: number;
-  statoPagamento?: string;
-  dettagli?: any[];
-}
-
-export interface Prenotazione {
-  esame?: string;
-  dataAppello?: string;
-  aula?: string;
-  stato?: string;
-}
-
-export interface AvvisoDocente {
-  title: string;
-  date: string | null;
-  content: string;
-  link: string | null;
-}
-
-export interface DocenteAnnouncements {
-  professor: string;
-  slug: string;
-  count: number;
-  items: AvvisoDocente[];
-}
-
-export interface SubscriptionDocenti {
-  courseName: string | null;
-  courseCode: string | null;
-  academicYear: string | null;
-  professor: string | null;
-  section: string | null;
-}
-
-export interface BookedExamDocenti {
-  courseName: string | null;
-  courseCode: string | null;
-  academicYear: string | null;
-  examDate: string | null;
-  bookingDate?: string | null;
-  status: string | null;
-  location: string | null;
-}
-
-export interface DocentiDataResponse {
-  available: boolean;
-  reason?: string | null;
-  retrievedAt?: string;
-  announcements: DocenteAnnouncements[];
-  subscriptions: SubscriptionDocenti[];
-  bookedExams: BookedExamDocenti[];
-}
-
-// --- API Functions ---
-
-export async function loginAPI(credentials: CredenzialiSegrepass) {
-  const res = await fetch(`${API_BASE}/api/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(credentials),
-  });
-
-  if (!res.ok) {
-    const errorData = await res.json().catch(() => ({}));
-    throw new Error(errorData.error || 'Login fallito. Verificare le credenziali.');
-  }
-
-  const data = await res.json();
-  if (data.token && typeof window !== 'undefined') {
-    localStorage.setItem('token', data.token);
+    throw new Error(data.error || 'Errore di comunicazione con il server.');
   }
   return data;
 }
 
-export async function updateProfile(updates: Partial<ProfiloStudente>, token?: string) {
-  const authToken = token || getToken() || '';
-  const res = await fetch(`${API_BASE}/api/profile`, {
-    method: 'PUT',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${authToken}`,
-    },
-    body: JSON.stringify(updates),
+export async function loginAPI(credentials: CredenzialiSegrepass): Promise<LoginResponse> {
+  const res = await fetch(apiUrl('/api/auth/login'), {
+    method: 'POST',
+    credentials: 'include',
+    headers: authHeaders(),
+    body: JSON.stringify(credentials)
   });
-  return parseResponse<ProfiloStudente>(res);
-}
 
-export async function fetchStudyPlan(token?: string) {
-  const authToken = token || getToken() || '';
-  const res = await fetch(`${API_BASE}/api/study-plans`, {
-    headers: { Authorization: `Bearer ${authToken}` },
-    cache: 'no-store',
-  });
-  return parseResponse<any>(res);
-}
+  const data = await res.json().catch(() => ({}));
 
-export async function fetchCareerPlan(token?: string) {
-  const authToken = token || getToken() || '';
-  const res = await fetch(`${API_BASE}/api/career/plan`, {
-    headers: { Authorization: `Bearer ${authToken}` },
-    cache: 'no-store',
-  });
-  return parseResponse<{
-    profile: ProfiloStudente;
-    plan: { course_name: string; cohort_year: number; source_name: string; source_url: string };
-    courses: Array<
-      PlanCourse & {
-        status: 'passed' | 'missing' | 'elective_available' | 'needs_review';
-        confidence?: number;
-        passedExam?: Esame;
-        selected?: boolean;
-      }
-    >;
-    electiveGroups: Array<{
-      id: string;
-      requiredCfu: number;
-      passedCfu: number;
-      selectedPendingCfu: number;
-      remainingCfu: number;
-      courses: Array<
-        PlanCourse & {
-          status: 'passed' | 'missing' | 'elective_available' | 'needs_review';
-          selected?: boolean;
-        }
-      >;
-    }>;
-    summary: {
-      passedCourses: number;
-      missingCourses: number;
-      reviewCourses: number;
-      mandatoryMissingCfu: number;
-      electiveRemainingCfu: number;
-    };
-  }>(res);
-}
-
-export async function fetchMetriche(): Promise<Metriche> {
-  const res = await fetchWithAuth('/api/career');
   if (!res.ok) {
-    const errorData = await res.json().catch(() => ({}));
-    throw new Error(errorData.error || 'Impossibile recuperare le metriche di carriera.');
+    throw new Error(data.error || 'Credenziali non valide o login fallito.');
   }
-  return res.json();
+
+  return data as LoginResponse;
 }
 
-export async function fetchTimetable(token?: string) {
-  const authToken = token || getToken() || '';
-  const res = await fetch(`${API_BASE}/api/timetable`, {
-    headers: { Authorization: `Bearer ${authToken}` },
-    cache: 'no-store',
+export async function restoreSession(): Promise<RestoreSessionResponse | null> {
+  const res = await fetch(apiUrl('/api/auth/session'), {
+    method: 'GET',
+    credentials: 'include',
+    headers: authHeaders()
   });
-  return parseResponse<any>(res);
+  if (!res.ok) return null;
+  return (await res.json()) as RestoreSessionResponse;
 }
 
-export async function fetchDocentiData(token?: string): Promise<DocentiDataResponse> {
-  const authToken = token || getToken() || '';
-  const res = await fetch(`${API_BASE}/api/docenti`, {
-    headers: { Authorization: `Bearer ${authToken}` },
-    cache: 'no-store',
+export async function logoutAPI(): Promise<void> {
+  await fetch(apiUrl('/api/auth/logout'), {
+    method: 'POST',
+    credentials: 'include',
+    headers: authHeaders()
+  }).catch(() => undefined);
+}
+
+export async function fetchMetriche(token: string): Promise<Metriche> {
+  return fetchWithAuth(apiUrl('/api/metriche'), token) as Promise<Metriche>;
+}
+
+export async function fetchSlowData(token: string): Promise<SlowData> {
+  return fetchWithAuth(apiUrl('/api/career/slow-data'), token) as Promise<SlowData>;
+}
+
+export async function fetchStudyPlan(token: string, courseId: string, cohortYear: number): Promise<StudyPlan> {
+  return fetchWithAuth(
+    apiUrl(`/api/study-plans/${encodeURIComponent(courseId)}/${encodeURIComponent(String(cohortYear))}`),
+    token
+  ) as Promise<StudyPlan>;
+}
+
+export async function updateProfile(token: string, profileData: ProfileUpdatePayload): Promise<ProfileUpdateResponse> {
+  return fetchWithAuth(apiUrl('/api/profile'), token, {
+    method: 'PUT',
+    body: JSON.stringify(profileData)
+  }) as Promise<ProfileUpdateResponse>;
+}
+
+export async function fetchCareerPlan(token: string): Promise<CareerPlan> {
+  return fetchWithAuth(apiUrl('/api/career-plan'), token) as Promise<CareerPlan>;
+}
+
+export async function fetchTimetable(token: string, filters: TimetableFilters): Promise<TimetableResponse> {
+  const params = new URLSearchParams({
+    studyYear: String(filters.studyYear),
+    channel: filters.channel,
+    ...(filters.semester ? { semester: String(filters.semester) } : {}),
+    ...(filters.academicYear ? { academicYear: filters.academicYear } : {})
   });
-  return parseResponse<DocentiDataResponse>(res);
+  return fetchWithAuth(apiUrl(`/api/timetable?${params.toString()}`), token) as Promise<TimetableResponse>;
 }
 
-export async function fetchDocentiAnnouncements(token?: string): Promise<DocenteAnnouncements[]> {
-  const data = await fetchDocentiData(token);
-  return data.announcements || [];
+/* ------------------------------------------------------------------ */
+/* WebDocenti                                                          */
+/* Le credenziali Docenti stanno nel JWT (cifrate): il frontend non    */
+/* invia mai la password. Il backend risponde { success, <campo> } e   */
+/* qui si estrae l'array corrispondente.                               */
+/* ------------------------------------------------------------------ */
+
+export async function fetchDocentiAnnouncements(token: string): Promise<DocenteAnnouncementGroup[]> {
+  const res = (await fetchWithAuth(apiUrl('/api/docenti/announcements'), token)) as {
+    announcements?: DocenteAnnouncementGroup[];
+  };
+  return Array.isArray(res.announcements) ? res.announcements : [];
 }
 
-export async function fetchDocentiSubscriptions(token?: string): Promise<SubscriptionDocenti[]> {
-  const data = await fetchDocentiData(token);
-  return data.subscriptions || [];
+export async function fetchDocentiSubscriptions(token: string): Promise<SubscriptionDocenti[]> {
+  const res = (await fetchWithAuth(apiUrl('/api/docenti/subscriptions'), token)) as {
+    subscriptions?: SubscriptionDocenti[];
+  };
+  return Array.isArray(res.subscriptions) ? res.subscriptions : [];
 }
 
-export async function fetchDocentiBookedExams(token?: string): Promise<BookedExamDocenti[]> {
-  const data = await fetchDocentiData(token);
-  return data.bookedExams || [];
+export async function fetchDocentiBookedExams(token: string): Promise<BookedExamDocenti[]> {
+  const res = (await fetchWithAuth(apiUrl('/api/docenti/booked-exams'), token)) as {
+    bookedExams?: BookedExamDocenti[];
+  };
+  return Array.isArray(res.bookedExams) ? res.bookedExams : [];
 }

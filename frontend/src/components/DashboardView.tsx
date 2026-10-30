@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   House,
   BookOpen,
@@ -26,18 +26,27 @@ import {
   UserCheck,
 } from 'lucide-react';
 import {
+  fetchDocentiBookedExams,
   fetchMetriche,
+  fetchSlowData,
   loginAPI,
+  logoutAPI,
+  restoreSession,
+  type BookedExamDocenti,
   type CredenzialiSegrepass,
+  type Esame,
   type Metriche,
-  type ProfiloStudente,
-  type TasseData,
   type Prenotazione,
+  type ProfiloRecord,
+  type ProfiloStudente,
+  type SlowData,
+  type TassaItem,
 } from '@/lib/api';
 import ProfileSetupView from '@/components/ProfileSetupView';
 import StudyPlanView from '@/components/StudyPlanView';
 import TimetableView from '@/components/TimetableView';
 import DocentiView from '@/components/DocentiView';
+import ThemeSwitch from '@/components/ThemeSwitch';
 
 type View = 'home' | 'career' | 'prenotazioni' | 'taxes' | 'docenti' | 'timetable' | 'plan';
 
@@ -80,62 +89,77 @@ function formatDate(dateStr?: string | null) {
   return dateStr;
 }
 
+// Converte una data dd/mm/yyyy (o yyyy-mm-dd) in timestamp; 0 se non riconosciuta.
+function dataItalianaTs(value?: string | null): number {
+  if (!value) return 0;
+  const testo = String(value);
+  const it = testo.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (it) return new Date(Number(it[3]), Number(it[2]) - 1, Number(it[1])).getTime();
+  const iso = testo.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])).getTime();
+  return 0;
+}
+
+function isAppelloPassato(p: Prenotazione): boolean {
+  const t = dataItalianaTs(p.dataAppello);
+  if (!t) return false;
+  const oggi = new Date();
+  oggi.setHours(0, 0, 0, 0);
+  return t < oggi.getTime();
+}
+
+// Date leggibili anche quando arrivano come timestamp in millisecondi.
+function dataLeggibile(value?: string | null): string {
+  if (!value) return '—';
+  const testo = String(value).trim();
+  if (/^\d{12,14}$/.test(testo)) {
+    const data = new Date(Number(testo));
+    if (!Number.isNaN(data.getTime())) {
+      return data.toLocaleDateString('it-IT', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    }
+  }
+  return formatDate(testo);
+}
+
 export default function DashboardView() {
   const [token, setToken] = useState<string | null>(null);
+  const [checkingSession, setCheckingSession] = useState(true);
+
   const [profile, setProfile] = useState<ProfiloStudente | null>(null);
   const [credentials, setCredentials] = useState<CredenzialiSegrepass>({ codiceFiscale: '', password: '' });
-  const [sessionCredentials, setSessionCredentials] = useState<CredenzialiSegrepass | null>(null);
   const [data, setData] = useState<Metriche | null>(null);
   const [loading, setLoading] = useState(false);
+  const [loginStep, setLoginStep] = useState('');
   const [error, setError] = useState('');
   const [onboardingRequired, setOnboardingRequired] = useState(false);
   const [editingProfile, setEditingProfile] = useState(false);
   const [activeView, setActiveView] = useState<View>('home');
 
-  // Filtri UI
   const [searchExam, setSearchExam] = useState('');
   const [searchPrenotazione, setSearchPrenotazione] = useState('');
   const [taxTab, setTaxTab] = useState<'pending' | 'paid'>('pending');
+  const [slowNotice, setSlowNotice] = useState<'loading' | 'ready' | 'error' | null>(null);
 
-  useEffect(() => {
-    localStorage.removeItem('segrepass_jwt');
-  }, []);
-
-  const handleLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!credentials.codiceFiscale.trim() || !credentials.password) {
-      setError('Inserisci codice fiscale e password Segrepass.');
-      return;
-    }
-    setLoading(true);
-    setError('');
-    try {
-      const access = await loginAPI(credentials);
-      setToken(access.token);
-      setProfile(access.profile);
-      setOnboardingRequired(access.onboardingRequired);
-      setSessionCredentials(credentials);
-      setData(access.metriche);
-      setCredentials({ codiceFiscale: '', password: '' });
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Accesso Segrepass non riuscito.');
-    } finally {
-      setLoading(false);
-    }
+  const clearSession = () => {
+    setToken(null);
+    setProfile(null);
+    setData(null);
+    setOnboardingRequired(false);
+    setEditingProfile(false);
+    setActiveView('home');
+    setCredentials({ codiceFiscale: '', password: '', email: '' });
   };
 
-  const caricaDati = async (jwtToken: string, loginCredentials: CredenzialiSegrepass) => {
+  const caricaDati = async (jwtToken: string) => {
+    await Promise.resolve();
     setLoading(true);
     setError('');
     try {
-      const metriche = await fetchMetriche(jwtToken, loginCredentials);
+      const metriche = await fetchMetriche(jwtToken);
       setData(metriche);
     } catch (err: unknown) {
       if (err instanceof Error && err.message === 'SESSION_EXPIRED') {
-        setToken(null);
-        setSessionCredentials(null);
-        setData(null);
-        setCredentials({ codiceFiscale: '', password: '' });
+        clearSession();
         setError('Sessione scaduta. Inserisci di nuovo le credenziali.');
       } else {
         setError(err instanceof Error ? err.message : 'Impossibile sincronizzare i dati.');
@@ -145,15 +169,135 @@ export default function DashboardView() {
     }
   };
 
-  const handleLogout = () => {
-    setToken(null);
-    setProfile(null);
-    setSessionCredentials(null);
-    setData(null);
-    setOnboardingRequired(false);
-    setEditingProfile(false);
-    setActiveView('home');
-    setCredentials({ codiceFiscale: '', password: '' });
+  useEffect(() => {
+    let active = true;
+
+    restoreSession()
+      .then(async session => {
+        if (!active || !session) return;
+        setToken(session.token);
+        setProfile(session.profile);
+        setOnboardingRequired(session.onboardingRequired);
+        await caricaDati(session.token);
+      })
+      .finally(() => {
+        if (active) setCheckingSession(false);
+      });
+
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!token) {
+      Promise.resolve().then(() => setSlowNotice(null));
+      return;
+    }
+
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const poll = async () => {
+      try {
+        const slow: SlowData = await fetchSlowData(token);
+        if (!active) return;
+
+        if (slow.status === 'ready') {
+          setData(prev => (prev ? {
+            ...prev,
+            tasse: slow.taxes ?? prev.tasse,
+            prenotazioni: slow.prenotazioni ?? prev.prenotazioni
+          } : prev));
+          setSlowNotice('ready');
+          timer = setTimeout(() => { if (active) setSlowNotice(null); }, 5000);
+          return;
+        }
+
+        if (slow.status === 'error') {
+          setSlowNotice('error');
+          return;
+        }
+
+        setSlowNotice('loading');
+        timer = setTimeout(poll, 3000);
+      } catch (error) {
+        if (!active) return;
+        if (error instanceof Error && error.message === 'SESSION_EXPIRED') return;
+        setSlowNotice('error');
+        timer = setTimeout(poll, 10000);
+      }
+    };
+
+    Promise.resolve().then(() => {
+      if (!active) return;
+      setSlowNotice('loading');
+      return poll();
+    });
+
+    return () => {
+      active = false;
+      if (timer) clearTimeout(timer);
+    };
+  }, [token]);
+
+const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+
+    const emailIstituzionale = credentials.email?.trim() || '';
+
+    // 1. Controllo che email e password siano inserite
+    if (!emailIstituzionale || !credentials.password) {
+      setError('Inserisci email istituzionale e password.');
+      return;
+    }
+
+    // 2. Controllo che l'email abbia un formato valido
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailIstituzionale)) {
+      setError('Inserisci una email istituzionale valida (es. nome.cognome@studenti.unina.it).');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+    setLoginStep('Connessione ai servizi Unina...');
+    
+    const steps = [
+      'Connessione a Segrepass...',
+      'Lettura carriera e profilo...',
+      'Estrazione esami e metriche...',
+      'Preparazione dashboard...',
+      'Avvio acquisizione dati Docenti...'
+    ];
+    let stepIndex = 0;
+    const stepTimer = setInterval(() => {
+      stepIndex = Math.min(stepIndex + 1, steps.length - 1);
+      setLoginStep(steps[stepIndex]);
+    }, 2200);
+
+    try {
+      // 3. IL TRUCCO: Inviamo l'email sia come codice fiscale (Segrepass lo accetta!) sia come email per i Docenti
+      const access = await loginAPI({
+        codiceFiscale: emailIstituzionale, 
+        password: credentials.password,
+        email: emailIstituzionale
+      });
+      
+      setLoginStep('Finalizzazione sessione...');
+      setToken(access.token);
+      setProfile(access.profile);
+      setOnboardingRequired(access.onboardingRequired);
+      setData(access.metriche);
+      setCredentials({ codiceFiscale: '', password: '', email: '' });
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Accesso non riuscito. Controlla le credenziali.');
+    } finally {
+      clearInterval(stepTimer);
+      setLoginStep('');
+      setLoading(false);
+    }
+  };
+  const handleLogout = async () => {
+    await logoutAPI();
+    clearSession();
     setError('');
   };
 
@@ -163,60 +307,134 @@ export default function DashboardView() {
     setEditingProfile(false);
   };
 
-  // Dati elaborati dell'Anagrafica
+  const extProfile: ProfiloRecord = profile ?? {};
   const anagrafica = data?.anagrafica;
-  const matricola = anagrafica?.matricola || profile?.matricola || null;
-  const nomeCompleto = anagrafica?.nomeCompleto || profile?.name || 'Studente';
-  const corsoDiLaurea = anagrafica?.corsoDiLaurea || profile?.course_name || 'Corso non specificato';
-  const codiceCorso = anagrafica?.codiceCorso || profile?.course_id || null;
 
-  // Dati elaborati delle Tasse
-  const taxesObj = data?.tasse || (data as unknown as { taxes?: TasseData })?.taxes;
-  const paidTaxes = taxesObj?.paid || taxesObj?.pagati || [];
-  const pendingTaxes = taxesObj?.pending || taxesObj?.inDebito || [];
+  const matricola = anagrafica?.matricola || extProfile?.matricola || null;
+  const nomeCompleto = anagrafica?.nomeCompleto || extProfile?.name || 'Studente';
+  const corsoDiLaurea = anagrafica?.corsoDiLaurea || extProfile?.courseName || extProfile?.course_name || 'Corso non specificato';
+  const codiceCorso = anagrafica?.codiceCorso || extProfile?.courseId || extProfile?.course_id || null;
+  const annoCorso = anagrafica?.annoCorso || academicYearIndex(extProfile?.cohortYear || extProfile?.cohort_year);
+  const coorte = anagrafica?.annoImmatricolazione || extProfile?.cohortYear || extProfile?.cohort_year || '—';
+  const canale = extProfile?.channel || 'Da impostare';
+
+  const taxesObj = data?.tasse;
+  const paidTaxes: TassaItem[] = taxesObj?.paid || taxesObj?.pagati || [];
+  const pendingTaxes: TassaItem[] = taxesObj?.pending || taxesObj?.inDebito || [];
+
   const totalPaid = taxesObj?.summary?.totalPaid ?? paidTaxes.reduce((sum, item) => sum + (item.amount ?? item.importo ?? 0), 0);
   const totalPending = taxesObj?.summary?.totalPending ?? pendingTaxes.reduce((sum, item) => sum + (item.amount ?? item.importo ?? 0), 0);
   const nextDeadline = taxesObj?.summary?.nextDeadline || pendingTaxes.map(t => t.dueDate || t.scadenza).filter(Boolean).sort()[0];
 
-  // Dati delle Prenotazioni Mergiate
-  const listaPrenotazioni: Prenotazione[] = data?.prenotazioni || (data as unknown as { prenotazioni?: Prenotazione[] })?.prenotazioni || [];
+  // Prenotazioni del portale Docenti: caricate al login e mostrate insieme agli appelli Segrepass.
+  const [docentiBookings, setDocentiBookings] = useState<BookedExamDocenti[]>([]);
 
-  // Dati della Carriera
+ const fetchingDocentiRef = useRef(false);
+
+  useEffect(() => {
+    if (!token) return;
+    if (fetchingDocentiRef.current) return; // Blocca le chiamate parallele
+
+    let active = true;
+    fetchingDocentiRef.current = true; // Segnala che la chiamata è in corso
+
+    fetchDocentiBookedExams(token)
+      .then((list) => { if (active) setDocentiBookings(list); })
+      .catch(() => { if (active) setDocentiBookings([]); })
+      .finally(() => { 
+         // Aspetta 2 secondi prima di sbloccare, evitando il rimbalzo di React Strict Mode
+         setTimeout(() => { fetchingDocentiRef.current = false; }, 2000); 
+      });
+
+    return () => { active = false; };
+  }, [token]);
+
+  const listaPrenotazioni = useMemo<Prenotazione[]>(() => {
+    const daPortale: Prenotazione[] = docentiBookings.map((b: any, idx: number) => ({
+      id: `docenti-${idx}`,
+      materia: b.courseName || b.descrInse || JSON.stringify(b),
+      docente: b.professor || b.docente || b.cognomeDocente || 'Non specificato',
+      dataAppello: b.examDate || b.dataAppello,
+      aula: b.location || b.aula,
+      note: b.bookingDate ? `Prenotato il ${b.bookingDate}` : undefined,
+      isMyProfessor: true,
+    }));
+
+    const visti = new Set<string>();
+    const unite = [...(data?.prenotazioni || []), ...daPortale].filter((p) => {
+      const chiave = `${(p.materia || '').toLowerCase()}|${p.dataAppello || ''}`;
+      if (visti.has(chiave)) return false;
+      visti.add(chiave);
+      return true;
+    });
+
+    // Prima le prenotazioni future (dalla più vicina), poi quelle passate (dalla più recente).
+    return unite.sort((a, b) => {
+      const passataA = isAppelloPassato(a);
+      const passataB = isAppelloPassato(b);
+      if (passataA !== passataB) return passataA ? 1 : -1;
+      const tA = dataItalianaTs(a.dataAppello);
+      const tB = dataItalianaTs(b.dataAppello);
+      return passataA ? tB - tA : tA - tB;
+    });
+  }, [data, docentiBookings]);
+
+  // Per la home: solo le prenotazioni ancora future.
+  const prossimePrenotazioni = useMemo(
+    () => listaPrenotazioni.filter((p) => !isAppelloPassato(p)),
+    [listaPrenotazioni]
+  );
+
   const mediaPond = data?.mediaPonderata ?? '--';
   const mediaArit = data?.mediaAritmetica ?? '--';
   const baseLaurea = data?.baseLaurea ?? '--';
   const cfuConseguiti = data?.cfuAcquisiti ?? 0;
   const cfuTotali = data?.cfuTotali ?? 180;
   const percCFU = Math.min(100, Math.round((Number(cfuConseguiti) / cfuTotali) * 100)) || 0;
-  const listaEsami = Array.isArray(data?.esami) ? data.esami : [];
-  const annoCorso = anagrafica?.annoCorso || academicYearIndex(profile?.cohort_year);
+  const listaEsami = useMemo<Esame[]>(() => (Array.isArray(data?.esami) ? data.esami : []), [data]);
 
-  // Esami filtrati
   const esamiFiltrati = useMemo(() => {
     if (!searchExam.trim()) return listaEsami;
     const query = searchExam.toLowerCase();
-    return listaEsami.filter((esame) => {
+    return listaEsami.filter(esame => {
       const mat = (esame.materia || esame.insegnamento || '').toLowerCase();
       const cod = (esame.codice || '').toLowerCase();
       return mat.includes(query) || cod.includes(query);
     });
   }, [listaEsami, searchExam]);
 
-  // Prenotazioni filtrate
   const prenotazioniFiltrate = useMemo(() => {
     if (!searchPrenotazione.trim()) return listaPrenotazioni;
     const query = searchPrenotazione.toLowerCase();
-    return listaPrenotazioni.filter((p) => {
+    return listaPrenotazioni.filter(p => {
       const mat = (p.materia || '').toLowerCase();
       const doc = (p.docente || '').toLowerCase();
       return mat.includes(query) || doc.includes(query);
     });
   }, [listaPrenotazioni, searchPrenotazione]);
 
+  // Appelli Segrepass futuri: azione principale. Tutto il resto (passato o già prenotato) è storico.
+  const appelliDisponibili = useMemo(
+    () => prenotazioniFiltrate.filter(p => !isAppelloPassato(p) && !p.id?.startsWith('docenti-')),
+    [prenotazioniFiltrate]
+  );
+  const storicoPrenotazioni = useMemo(
+    () => prenotazioniFiltrate.filter(p => !appelliDisponibili.includes(p)),
+    [prenotazioniFiltrate, appelliDisponibili]
+  );
+
   const pageBg =
     'min-h-screen bg-[radial-gradient(ellipse_at_top,#0B3A6B_0%,#061426_45%,#030912_100%)] text-slate-100';
 
-  if (!token || !sessionCredentials) {
+  if (checkingSession) {
+    return (
+      <main className={`${pageBg} flex items-center justify-center p-4`}>
+        <p className="text-sm text-slate-400">Verifica della sessione…</p>
+      </main>
+    );
+  }
+
+  if (!token) {
     return (
       <main className={`${pageBg} flex items-center justify-center p-4`}>
         <form onSubmit={handleLogin} className={`${CARD} w-full max-w-sm space-y-4 p-6`}>
@@ -225,28 +443,32 @@ export default function DashboardView() {
               FII
             </div>
             <h1 className="text-2xl font-bold tracking-tight text-[#E6C887]">Federico II · Studente</h1>
-            <p className="text-sm text-slate-400">Accedi con le credenziali Segrepass</p>
+            <p className="text-sm text-slate-400">Accedi con la tua email istituzionale</p>
           </div>
           {error && <p role="alert" className="text-center text-xs font-medium text-red-400">{error}</p>}
+          {loading && loginStep && (
+            <p className="text-center text-xs font-medium text-[#5AB0F0]">{loginStep}</p>
+          )}
+
           <input
-            type="text"
-            name="codiceFiscale"
-            autoComplete="off"
-            placeholder="Codice fiscale"
-            value={credentials.codiceFiscale}
-            onChange={(e) => setCredentials((c) => ({ ...c, codiceFiscale: e.target.value }))}
-            className="app-input"
+            type="email"
+            name="emailIstituzionale"
+            autoComplete="email"
+            placeholder="Email istituzionale (@studenti.unina.it)"
+            value={credentials.email ?? ''}
+            onChange={(e) => setCredentials((c) => ({ ...c, email: e.target.value }))}
+            className="w-full rounded-xl border border-white/10 bg-white/5 py-2.5 px-3 text-xs text-white placeholder-slate-400 focus:border-[#5AB0F0] focus:outline-none"
           />
           <input
             type="password"
             name="passwordSegrepass"
-            autoComplete="new-password"
+            autoComplete="current-password"
             placeholder="Password Segrepass"
             value={credentials.password}
             onChange={(e) => setCredentials((c) => ({ ...c, password: e.target.value }))}
-            className="app-input"
+            className="w-full rounded-xl border border-white/10 bg-white/5 py-2.5 px-3 text-xs text-white placeholder-slate-400 focus:border-[#5AB0F0] focus:outline-none"
           />
-          <p className="text-center text-xs text-slate-500">Le credenziali restano in memoria finché la pagina è aperta.</p>
+          <p className="text-center text-xs text-slate-500">La password non viene salvata in chiaro: resta cifrata nel cookie di sessione.</p>
           <button
             type="submit"
             disabled={loading}
@@ -260,23 +482,44 @@ export default function DashboardView() {
     );
   }
 
-  if (profile && (onboardingRequired || editingProfile)) {
+
+
+
+  if (profile && editingProfile) {
     return (
       <main className={`${pageBg} px-4 py-8 sm:px-8`}>
         <ProfileSetupView
           token={token}
           initialProfile={profile}
           onSaved={handleProfileSaved}
-          onCancel={editingProfile ? () => setEditingProfile(false) : undefined}
+          onCancel={() => setEditingProfile(false)}
         />
       </main>
     );
   }
 
-  const refresh = () => token && sessionCredentials && caricaDati(token, sessionCredentials);
+  const refresh = () => token && caricaDati(token);
 
   return (
     <div className={pageBg}>
+      {slowNotice && (
+        <div
+          role="status"
+          aria-live="polite"
+          className={`fixed right-4 top-4 z-50 max-w-xs rounded-xl border px-4 py-3 text-xs shadow-lg backdrop-blur ${
+            slowNotice === 'loading'
+              ? 'border-[#3B7BC4]/50 bg-[#0A1B31]/95 text-slate-200'
+              : slowNotice === 'ready'
+              ? 'border-emerald-600/60 bg-emerald-950/95 text-emerald-200'
+              : 'border-amber-600/60 bg-amber-950/95 text-amber-100'
+          }`}
+        >
+          {slowNotice === 'loading' && 'Tasse e appelli in preparazione: i dati già disponibili sono visibili subito.'}
+          {slowNotice === 'ready' && 'Dati completi aggiornati (tasse e appelli).'}
+          {slowNotice === 'error' && 'Tasse e appelli non sono disponibili in questo momento.'}
+        </div>
+      )}
+
       {/* HEADER */}
       <header className="flex items-center justify-between gap-3 border-b border-white/10 bg-[#0A3260]/60 px-4 py-3 backdrop-blur sm:px-8 sm:py-4">
         <div className="flex min-w-0 items-center gap-3 sm:gap-4">
@@ -294,6 +537,7 @@ export default function DashboardView() {
           </div>
         </div>
         <div className="flex shrink-0 gap-2">
+          <ThemeSwitch />
           <button onClick={refresh} disabled={loading} aria-label="Aggiorna carriera" title="Aggiorna carriera" className={GHOST_BTN}>
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             <span className="hidden sm:inline">Aggiorna</span>
@@ -336,10 +580,22 @@ export default function DashboardView() {
         <main className="min-w-0 flex-1 space-y-6 px-4 pb-28 pt-6 sm:px-8 md:pb-10">
           {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
 
+          {onboardingRequired && (
+            <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#E6C887]/40 bg-[#E6C887]/10 px-4 py-3 text-xs text-[#F0D9A6]">
+              <span>Completa corso, coorte e canale per sbloccare piano di studi e orario. Gli esami sono già disponibili.</span>
+              <button
+                type="button"
+                onClick={() => setEditingProfile(true)}
+                className="rounded-lg border border-[#E6C887]/60 px-3 py-1.5 font-semibold text-[#E6C887] hover:bg-[#E6C887]/10"
+              >
+                Completa profilo
+              </button>
+            </div>
+          )}
+
           {/* HOME VIEW */}
           {activeView === 'home' && (
             <>
-              {/* Profilo & Anagrafica Studente */}
               <div className="grid gap-6 lg:grid-cols-3">
                 <section className="lg:col-span-1">
                   <h2 className={SECTION_TITLE}>
@@ -370,17 +626,16 @@ export default function DashboardView() {
                       </div>
                       <div className="flex justify-between">
                         <dt className="text-slate-400">Coorte</dt>
-                        <dd className="font-semibold text-white">{anagrafica?.annoImmatricolazione || profile?.cohort_year || '—'}</dd>
+                        <dd className="font-semibold text-white">{coorte}</dd>
                       </div>
                       <div className="flex justify-between">
                         <dt className="text-slate-400">Canale</dt>
-                        <dd className="font-semibold text-white">{profile?.channel || 'Da impostare'}</dd>
+                        <dd className="font-semibold text-white">{canale}</dd>
                       </div>
                     </dl>
                   </div>
                 </section>
 
-                {/* Statistiche & Metriche */}
                 <section className="lg:col-span-2">
                   <h2 className={SECTION_TITLE}>
                     <TrendingUp className="h-4 w-4 text-[#5AB0F0]" /> Metriche Carriera
@@ -436,7 +691,6 @@ export default function DashboardView() {
                 </section>
               </div>
 
-              {/* Widget Prenotazioni Esami in Home */}
               <section>
                 <div className="flex items-center justify-between">
                   <h2 className={SECTION_TITLE}>
@@ -446,9 +700,9 @@ export default function DashboardView() {
                     Vedi tutte ({listaPrenotazioni.length}) <ChevronRight className="h-3.5 w-3.5" />
                   </button>
                 </div>
-                {listaPrenotazioni.length > 0 ? (
+                {prossimePrenotazioni.length > 0 ? (
                   <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                    {listaPrenotazioni.slice(0, 3).map((p, idx) => (
+                    {prossimePrenotazioni.slice(0, 3).map((p: Prenotazione, idx: number) => (
                       <div key={idx} className={`${CARD} p-4 space-y-2 border-l-4 ${p.isMyProfessor ? 'border-l-emerald-400' : 'border-l-[#3B7BC4]'}`}>
                         <div className="flex items-center justify-between gap-2">
                           <span className="truncate text-xs font-bold text-white">{p.materia}</span>
@@ -468,12 +722,11 @@ export default function DashboardView() {
                   </div>
                 ) : (
                   <div className={`${CARD} p-4 text-center text-xs text-slate-400`}>
-                    Nessuna prenotazione d'esame attiva al momento.
+                    {slowNotice === 'loading' ? 'Appelli in preparazione…' : 'Nessuna prenotazione d&apos;esame attiva al momento.'}
                   </div>
                 )}
               </section>
 
-              {/* Widget Tasse & Pagamenti in Home */}
               <section>
                 <div className="flex items-center justify-between">
                   <h2 className={SECTION_TITLE}>
@@ -483,7 +736,12 @@ export default function DashboardView() {
                     Vedi dettaglio <ChevronRight className="h-3.5 w-3.5" />
                   </button>
                 </div>
-                <div className="grid gap-4 sm:grid-cols-3">
+                {slowNotice === 'loading' && !taxesObj && (
+                  <div className={`${CARD} p-4 text-center text-xs text-slate-400`}>
+                    Dati tasse in preparazione…
+                  </div>
+                )}
+                <div className={`grid gap-4 sm:grid-cols-3 ${slowNotice === 'loading' && !taxesObj ? 'hidden' : ''}`}>
                   <div className={`${CARD} p-4 flex items-center gap-3`}>
                     <div className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-500/15 text-emerald-400 shrink-0">
                       <CheckCircle2 className="h-5 w-5" />
@@ -514,7 +772,6 @@ export default function DashboardView() {
                 </div>
               </section>
 
-              {/* Collegamenti Rapidi */}
               <div className="grid gap-4 lg:grid-cols-3">
                 {[
                   { id: 'timetable' as const, title: 'Orario Lezioni', text: 'Consulta aule, orari e docenti', cta: 'Apri Orario', icon: CalendarDays },
@@ -550,7 +807,7 @@ export default function DashboardView() {
                 <div>
                   <h2 className="text-lg font-bold text-white">Prenotazione Esami & Appelli</h2>
                   <p className="text-xs text-slate-400">
-                    Appelli disponibili su Segrepass con riscontro corsi ufficiali Docenti Unina
+                    Appelli su Segrepass e prenotazioni dal portale Docenti, incluse quelle passate
                   </p>
                 </div>
                 <div className="relative w-full sm:w-64">
@@ -565,51 +822,66 @@ export default function DashboardView() {
                 </div>
               </div>
 
-              <div className="grid gap-3">
-                {prenotazioniFiltrate.length > 0 ? (
-                  prenotazioniFiltrate.map((p, idx) => (
-                    <div
-                      key={idx}
-                      className={`${CARD} p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-l-4 ${
-                        p.isMyProfessor ? 'border-l-emerald-400 bg-[#0A2238]/90' : 'border-l-[#3B7BC4]'
-                      }`}
-                    >
-                      <div className="space-y-1.5 min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-sm font-bold text-white">{p.materia}</span>
-                          {p.isMyProfessor ? (
-                            <span className="inline-flex items-center gap-1 rounded bg-emerald-500/20 border border-emerald-500/40 px-2.5 py-0.5 text-[11px] font-bold text-emerald-300">
-                              <UserCheck className="h-3.5 w-3.5" /> Il tuo Professore
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 rounded bg-slate-700/50 px-2 py-0.5 text-[10px] text-slate-400">
-                              Altro cattedratico
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-xs text-slate-300">Prof. {p.docente || 'Non specificato'}</p>
-                        <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400 pt-1">
-                          {p.dataAppello && <span>📅 Data: <strong className="text-slate-200">{formatDate(p.dataAppello)}</strong></span>}
-                          {p.ora && <span>⏰ Ora: <strong className="text-slate-200">{p.ora}</strong></span>}
-                          {p.aula && <span>📍 Aula/Sede: <strong className="text-slate-200">{p.aula}</strong></span>}
-                        </div>
-                        {p.note && <p className="text-[11px] italic text-slate-400">{p.note}</p>}
+              {prenotazioniFiltrate.length === 0 ? (
+                <div className={`${CARD} p-8 text-center text-sm text-slate-400`}>
+                  {loading ? 'Caricamento appelli in corso...' : 'Nessun appello o prenotazione trovata.'}
+                </div>
+              ) : (
+                <div className="space-y-8">
+                  <div className="space-y-3">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-[#5AB0F0]">Appelli Disponibili</h3>
+                    {appelliDisponibili.length === 0 ? (
+                      <div className={`${CARD} p-5 text-center text-xs text-slate-400`}>
+                        Nessun appello aperto al momento.
                       </div>
-
-                      <div className="shrink-0 text-right">
-                        <span className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-1.5 text-xs font-bold text-emerald-400">
-                          <CheckCircle2 className="h-3.5 w-3.5" />
-                          Appello Disponibile
-                        </span>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <div className={`${CARD} p-8 text-center text-sm text-slate-400`}>
-                    {loading ? 'Caricamento appelli in corso...' : 'Nessun appello o prenotazione trovata.'}
+                    ) : (
+                      appelliDisponibili.map((p, idx) => (
+                        <div
+                          key={`disp-${p.id ?? idx}`}
+                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl border-2 border-emerald-400 bg-[#0A2238]/90 p-4 shadow-[0_0_24px_-6px_rgba(52,211,153,0.6)]"
+                        >
+                          <div className="min-w-0 space-y-1.5">
+                            <p className="text-base font-bold text-white">{p.materia}</p>
+                            <p className="text-xs text-slate-300">Prof. {p.docente || 'Non specificato'}</p>
+                            <div className="flex flex-wrap items-center gap-3 pt-1 text-xs text-slate-300">
+                              {p.dataAppello && <span>📅 <strong className="text-white">{dataLeggibile(p.dataAppello)}</strong></span>}
+                              {p.ora && <span>⏰ <strong className="text-white">{p.ora}</strong></span>}
+                              {p.aula && <span>📍 <strong className="text-white">{p.aula}</strong></span>}
+                            </div>
+                            {p.note && <p className="max-w-xl text-[11px] italic text-slate-400">{p.note}</p>}
+                          </div>
+                          <span className="shrink-0 rounded-lg bg-emerald-400 px-4 py-2 text-center text-xs font-bold text-[#042016] shadow-[0_0_16px_-4px_rgba(52,211,153,0.8)]">
+                            Appello disponibile
+                          </span>
+                        </div>
+                      ))
+                    )}
                   </div>
-                )}
-              </div>
+
+                  {storicoPrenotazioni.length > 0 && (
+                    <div className="space-y-3">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Storico Prenotazioni</h3>
+                      {storicoPrenotazioni.map((p, idx) => (
+                        <div
+                          key={`st-${p.id ?? idx}`}
+                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-white/5 bg-white/[0.03] p-3.5 opacity-60"
+                        >
+                          <div className="min-w-0 space-y-1">
+                            <p className="text-sm font-medium text-slate-400">{p.materia}</p>
+                            <p className="text-[11px] text-slate-500">
+                              {p.docente && p.docente !== 'Non specificato' ? `Prof. ${p.docente} · ` : ''}
+                              {dataLeggibile(p.dataAppello)}
+                            </p>
+                          </div>
+                          <span className="shrink-0 rounded-lg border border-white/10 bg-white/5 px-3 py-1 text-[11px] font-semibold text-slate-500">
+                            {isAppelloPassato(p) ? 'Passata' : 'Prenotato'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </section>
           )}
 
@@ -635,7 +907,7 @@ export default function DashboardView() {
 
               <div className="grid gap-2 sm:gap-3">
                 {esamiFiltrati.length > 0 ? (
-                  esamiFiltrati.map((esame, idx) => {
+                  esamiFiltrati.map((esame: Esame, idx: number) => {
                     const materia = esame.materia || esame.insegnamento || 'Esame';
                     const codice = esame.codice;
                     const cfu = esame.cfu || 0;
@@ -649,7 +921,7 @@ export default function DashboardView() {
                           <div className="flex items-center gap-2 text-xs text-slate-400">
                             {codice && <span className="font-mono rounded bg-white/10 px-1.5 py-0.5 text-[10px] text-slate-300">{codice}</span>}
                             <span>{cfu} CFU</span>
-                            {dataEsame && <span>• {formatDate(dataEsame)}</span>}
+                            {dataEsame && <span>{formatDate(dataEsame)}</span>}
                           </div>
                         </div>
                         <div className="shrink-0 text-right">
@@ -707,7 +979,7 @@ export default function DashboardView() {
               {taxTab === 'pending' && (
                 <div className="grid gap-3">
                   {pendingTaxes.length > 0 ? (
-                    pendingTaxes.map((tax, idx) => {
+                    pendingTaxes.map((tax: TassaItem, idx: number) => {
                       const desc = tax.description || tax.causale || 'Contributo universitario';
                       const amount = tax.amount ?? tax.importo ?? 0;
                       const dueDate = tax.dueDate || tax.scadenza;
@@ -748,7 +1020,11 @@ export default function DashboardView() {
                     })
                   ) : (
                     <div className={`${CARD} p-8 text-center text-sm text-slate-400`}>
-                      Nessuna tassa in sospeso o in debito.
+                      {slowNotice === 'loading'
+                        ? 'Dati tasse in preparazione…'
+                        : slowNotice === 'error' && !taxesObj
+                        ? 'Tasse non disponibili in questo momento.'
+                        : 'Nessuna tassa in sospeso o in debito.'}
                     </div>
                   )}
                 </div>
@@ -757,7 +1033,7 @@ export default function DashboardView() {
               {taxTab === 'paid' && (
                 <div className="grid gap-3">
                   {paidTaxes.length > 0 ? (
-                    paidTaxes.map((tax, idx) => {
+                    paidTaxes.map((tax: TassaItem, idx: number) => {
                       const desc = tax.description || tax.causale || 'Versamento universitario';
                       const amount = tax.amount ?? tax.importo ?? 0;
                       const paidAt = tax.paidAt || tax.dataPagamento;
@@ -784,7 +1060,7 @@ export default function DashboardView() {
                     })
                   ) : (
                     <div className={`${CARD} p-8 text-center text-sm text-slate-400`}>
-                      Nessun versamento storico registrato.
+                      {slowNotice === 'loading' ? 'Dati tasse in preparazione…' : 'Nessun versamento storico registrato.'}
                     </div>
                   )}
                 </div>

@@ -2,34 +2,43 @@
 
 import { useState } from 'react';
 import { BookOpenCheck, LoaderCircle, Save } from 'lucide-react';
-import { fetchStudyPlan, updateProfile, type PlanCourse, type ProfiloStudente } from '@/lib/api';
+import {
+  fetchStudyPlan,
+  updateProfile,
+  type ProfiloRecord,
+  type ProfiloStudente,
+  type StudyPlan
+} from '@/lib/api';
 
 type Props = {
   token: string;
-  initialProfile: ProfiloStudente;
+  initialProfile: ProfiloRecord | null;
   onSaved: (profile: ProfiloStudente) => void;
   onCancel?: () => void;
 };
 
 export default function ProfileSetupView({ token, initialProfile, onSaved, onCancel }: Props) {
-  const [courseId, setCourseId] = useState(initialProfile.course_id || '');
-  const [courseName, setCourseName] = useState(initialProfile.course_name || '');
-  const [cohortYear, setCohortYear] = useState(String(initialProfile.cohort_year || ''));
-  const [courseYear, setCourseYear] = useState(String(initialProfile.current_course_year || ''));
-  const [channel, setChannel] = useState(initialProfile.channel || '');
-  const [surnameInitial, setSurnameInitial] = useState(initialProfile.surname_initial || '');
-  const [plan, setPlan] = useState<{ courses: PlanCourse[] } | null>(null);
+  const profile = initialProfile ?? {};
+
+  const [courseId, setCourseId] = useState(profile.courseId || profile.course_id || '');
+  const [courseName, setCourseName] = useState(profile.courseName || profile.course_name || '');
+  const [cohortYear, setCohortYear] = useState(String(profile.cohortYear || profile.cohort_year || ''));
+  const [courseYear, setCourseYear] = useState(String(profile.currentCourseYear || profile.current_course_year || ''));
+  const [channel, setChannel] = useState(profile.channel || '');
+  const [surnameInitial, setSurnameInitial] = useState(profile.surnameInitial || profile.surname_initial || '');
+
+  const [plan, setPlan] = useState<StudyPlan | null>(null);
   const [selectedIds, setSelectedIds] = useState<number[]>([]);
   const [loadingPlan, setLoadingPlan] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
 
-  const electiveCourses = plan?.courses.filter(course => course.course_type === 'elective') || [];
-  const requiredElectiveCfu = Math.max(0, ...electiveCourses.map(course => course.elective_required_cfu || 0));
+  const electiveCourses = plan?.courses.filter(course => course.courseType === 'elective' || course.course_type === 'elective') || [];
+  const requiredElectiveCfu = Math.max(0, ...electiveCourses.map(course => course.electiveRequiredCfu || course.elective_required_cfu || 0));
   const selectedElectiveCfu = electiveCourses
     .filter(course => selectedIds.includes(course.id))
-    .reduce((total, course) => total + course.cfu, 0);
+    .reduce((total, course) => total + (course.cfu || 0), 0);
 
   const loadPlan = async () => {
     if (!courseId.trim() || !Number(cohortYear)) {
@@ -42,8 +51,8 @@ export default function ProfileSetupView({ token, initialProfile, onSaved, onCan
     try {
       const result = await fetchStudyPlan(token, courseId.trim(), Number(cohortYear));
       setPlan(result);
-      setSelectedIds(result.selectedElectiveIds);
-      setNotice(`Piano caricato: ${result.plan.course_name}`);
+      setSelectedIds(result.selectedElectiveIds || []);
+      setNotice(`Piano caricato: ${result.plan?.courseName || result.plan?.course_name || ''}`);
     } catch (loadError: unknown) {
       setPlan(null);
       setSelectedIds([]);
@@ -136,8 +145,13 @@ export default function ProfileSetupView({ token, initialProfile, onSaved, onCan
             <div className="divide-y divide-zinc-800 border-y border-zinc-800">
               {electiveCourses.map(course => (
                 <label key={course.id} className="flex items-center gap-3 py-3 text-sm">
-                  <input type="checkbox" checked={selectedIds.includes(course.id)} onChange={event => setSelectedIds(current => event.target.checked ? [...current, course.id] : current.filter(id => id !== course.id))} className="accent-[#043B6B]" />
-                  <span className="flex-1">{course.course_name}</span>
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.includes(course.id)}
+                    onChange={event => setSelectedIds(current => event.target.checked ? [...current, course.id] : current.filter(id => id !== course.id))}
+                    className="accent-[#043B6B]"
+                  />
+                  <span className="flex-1">{course.courseName || course.course_name}</span>
                   <span className="text-zinc-400">{course.cfu} CFU</span>
                 </label>
               ))}

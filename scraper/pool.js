@@ -1,3 +1,4 @@
+// pool.js
 const { Cluster } = require('puppeteer-cluster');
 
 let cluster = null;
@@ -8,10 +9,8 @@ async function initCluster() {
   console.log('[Pool] Avvio inizializzazione Puppeteer Cluster...');
   
   cluster = await Cluster.launch({
-    // Crea una scheda in incognito (context) per ogni task, garantendo isolamento dei cookie tra utenti
-    concurrency: Cluster.CONCURRENCY_CONTEXT,
-    // Limite hardware rigoroso: massimo 3 task di scraping simultanei. Gli altri vanno in coda.
-    maxConcurrency: 3, 
+    concurrency: Cluster.CONCURRENCY_CONTEXT, // Isolamento dei cookie tra utenti
+    maxConcurrency: 3, // Limite task simultanei per non sovraccaricare il server
     puppeteerOptions: {
       headless: 'new',
       ignoreHTTPSErrors: true,
@@ -20,49 +19,36 @@ async function initCluster() {
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
         '--disable-gpu',
-        '--ignore-certificate-errors', 
-        '--allow-insecure-localhost'
+        '--ignore-certificate-errors'
       ]
     },
-    // Timeout di sicurezza: se uno script si blocca su una pagina, viene terminato dopo 2 minuti
-    timeout: 120000, 
+    // Il login Segrepass può richiedere due tentativi di nodo + estrazione
+    // esami, tasse e appelli: 120s erano insufficienti e chiudevano sessioni valide.
+    timeout: 240000,
   });
 
-  // Gestione diagnostica degli errori a livello di cluster
-  cluster.on('taskerror', (err, data, willRetry) => {
-    console.error(`[Pool Error] Fallimento task. Errore: ${err.message}`);
+  cluster.on('taskerror', (err, data) => {
+    console.error(`[Pool Error] Fallimento task di scraping: ${err.message}`);
   });
 
   console.log('[Pool] Puppeteer Cluster operativo (Max Concurrency: 3)');
   return cluster;
 }
 
-/**
- * Accoda un'operazione di scraping.
- * @param {Object} data - I dati di input per lo scraper (es. username, password, target).
- * @param {Function} scrapeLogic - La funzione contenente la logica di navigazione (riceve {page, data}).
- * @returns {Promise<any>} - I dati restituiti dalla funzione scrapeLogic.
- */
 async function queueScrapingTask(data, scrapeLogic) {
-  if (!cluster) {
-    throw new Error("Cluster non inizializzato. Impossibile accettare task.");
-  }
-
-  // Inserisce il task nella coda e attende la risoluzione.
-  // La pagina ('page') viene generata e fornita automaticamente dal cluster.
+  if (!cluster) throw new Error("Cluster non inizializzato.");
   return await cluster.execute(data, async ({ page, data }) => {
     return await scrapeLogic(page, data);
   });
 }
 
-// Procedura per chiudere in sicurezza la coda e il browser al riavvio del server
 async function closeCluster() {
   if (cluster) {
-    console.log('[Pool] Chiusura del cluster in corso (attesa completamento task residui)...');
+    console.log('[Pool] Chiusura cluster in corso...');
     await cluster.idle();
     await cluster.close();
     cluster = null;
-    console.log('[Pool] Puppeteer Cluster disattivato in sicurezza.');
+    console.log('[Pool] Cluster disattivato.');
   }
 }
 

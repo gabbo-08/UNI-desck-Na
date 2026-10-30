@@ -1,130 +1,153 @@
-async function enableFastMode(page) {
-  try {
-    await page.setRequestInterception(true);
-    page.on('request', (req) => {
-      if (req.isInterceptResolutionHandled()) return;
-      if (['image', 'font', 'media'].includes(req.resourceType())) {
-        req.abort().catch(() => {});
-      } else {
-        req.continue().catch(() => {});
-      }
-    });
-  } catch {}
-}
+const { enableFastMode } = require('./utils');
 
-async function scrapeCalendarioAppelli(context, esisUrl) {
-  const appelli = [];
-  const page = await context.newPage();
-  await enableFastMode(page);
+const DEBUG = process.env.DEBUG_SCRAPER === '1';
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
-  try {
-    await page.goto(esisUrl, { waitUntil: 'domcontentloaded', timeout: 10000 });
-    
-    // Clicca su Calendario Appelli
-    let clicked = false;
-    for (const frame of page.frames()) {
-      clicked = await frame.evaluate(() => {
-        const link = Array.from(document.querySelectorAll('a')).find(a => a.href.includes('calendarioAppelli') || (a.innerText || '').toLowerCase().includes('calendario appelli'));
+async function clickMenu(page) {
+  for (const frame of page.frames()) {
+    try {
+      const clicked = await frame.evaluate(() => {
+        const link = Array.from(document.querySelectorAll('a')).find(a =>
+          (a.innerText || '').toLowerCase().includes('calendario appelli') ||
+          (a.href || '').includes('calendarioAppelli')
+        );
         if (link) { link.click(); return true; }
         return false;
       });
-      if (clicked) {
-        await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 6000 }).catch(() => {});
-        break;
-      }
-    }
+      if (clicked) return true;
+    } catch {}
+  }
+  return false;
+}
 
-    if (!clicked) return appelli;
-    await new Promise(r => setTimeout(r, 1000));
-
-    let mainFrame = page.mainFrame();
+async function getTargetFrame(page) {
+  for (let attempt = 0; attempt < 10; attempt++) {
     for (const frame of page.frames()) {
-      const hasTable = await frame.$('table');
-      if (hasTable) {
-        const count = await frame.$$eval('table tr', rows => rows.length);
-        if (count > 2) { mainFrame = frame; break; }
-      }
+      try {
+        const table = await frame.$('table');
+        if (!table) continue;
+        const rows = await frame.$$eval('table tr', elements => elements.length);
+        if (rows > 2) return frame;
+      } catch {}
+    }
+    await sleep(120);
+  }
+  return page.mainFrame();
+}
+
+async function scrapeCalendarioAppelli(context, esisUrl) {
+  const startedAt = Date.now();
+  const listPage = await context.newPage();
+  await enableFastMode(listPage);
+
+  try {
+    await listPage.goto(esisUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    if (!await clickMenu(listPage)) {
+      console.log('[prenotazioni] Link Calendario Appelli non trovato.');
+      return [];
     }
 
-    const examList = await mainFrame.evaluate(() => {
-      const c = s => (s || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
+    const frame = await getTargetFrame(listPage);
+
+    // Esecuzione in-page simultanea via fetch() native con cookie condivisi
+    const appelli = await frame.evaluate(async () => {
+      const clean = s => (s || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
       const rows = Array.from(document.querySelectorAll('table tr'));
       const items = [];
+
       for (const tr of rows) {
         const cells = tr.querySelectorAll('td');
-        if (cells.length >= 2) {
-          const link = cells[0].querySelector('a');
-          const code = c(cells[0].innerText);
-          const name = c(cells[1].innerText);
-          const year = cells[2] ? c(cells[2].innerText) : '';
-          if (link && code && name) {
-            items.push({ code, name, year, href: link.href || link.getAttribute('href') });
-          }
+        if (cells.length < 2) continue;
+        const link = cells[0].querySelector('a');
+        const code = clean(cells[0].innerText);
+        const name = clean(cells[1].innerText);
+        const year = cells[2] ? clean(cells[2].innerText) : '';
+        if (link && code && name) {
+          const href = link.getAttribute('href') || link.href || '';
+          items.push({ code, name, year, href });
         }
       }
-      return items;
+
+      if (items.length === 0) return [];
+
+      // Esegue tutte le chiamate di dettaglio in parallelo direttamente dal browser
+      const results = await Promise.all(items.map(async (exam) => {
+        try {
+          if (!exam.href || exam.href.startsWith('javascript:')) return null;
+
+          const response = await fetch(exam.href, { credentials: 'include' });
+          if (!response.ok) return null;
+          const html = await response.text();
+
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(html, 'text/html');
+          // Il testo della pagina contiene anche frammenti di script (es. document.write):
+          // li rimuovo prima di estrarre aula e note.
+          const cleanText = raw => (raw || '')
+            .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+            .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+            .replace(/document\.\w+\s*\([^)]*\)\s*;?/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+          const text = cleanText(doc.body ? doc.body.innerText : '');
+
+          const noAppelliRegex = /nessun\s+appello|non\s+(?:ci\s+sono|risultano)\s+appelli|nessuna\s+sessione|impossibile\s+prenotare|nessun\s+dato/i;
+          if (noAppelliRegex.test(text)) return null;
+
+          let docente = '';
+          let cattedra = '';
+          for (const tr of Array.from(doc.querySelectorAll('table tr'))) {
+            const tds = Array.from(tr.querySelectorAll('td')).map(td => clean(td.innerText));
+            if (tds.length >= 4 && !tds[0].includes('A.A.')) {
+              cattedra = tds[2] || '';
+              docente = tds[3] || '';
+            }
+          }
+
+          const matchDocente = text.match(/Docente\s+([A-Z\s\.'-]+?)(?=\s+Appello|\s+Data|\s+Note|$)/i);
+          if (matchDocente && matchDocente[1]) docente = clean(matchDocente[1]);
+
+          const matchDate = text.match(/(?:Appello del|Data Appello|Data)[:\s]*(\d{2}\/\d{2}\/\d{4})/i);
+          if (!matchDate) return null;
+
+          // Aula: si ferma prima del campo successivo (Ora, Note, Data...).
+          const matchAula = text.match(/Aula(?:\s*\/?\s*Sede)?\s*[:\-]?\s*(.+?)(?=\s+(?:Ora|Note|Data|Docente|Appello|Uscita)\b|$)/i);
+          // Note: prende il testo fino ai frammenti di script residui (HomePage, Uscita).
+          const matchNote = text.match(/Note\s*[:\-]?\s*([\s\S]+)/i);
+          const note = matchNote
+            ? matchNote[1].split(/\b(?:HomePage|Uscita)\b/i)[0].replace(/[;\s]+$/, '').trim().slice(0, 400) || null
+            : null;
+          const matchOra = text.match(/(?:Ora Appello|Ora)[:\s]*(\d{1,2}:\d{2})/i);
+
+          return {
+            id: `appello_${exam.code}`,
+            codice: exam.code,
+            materia: clean(exam.name),
+            anno: clean(exam.year),
+            docente: docente || 'Docente non specificato',
+            cattedra,
+            dataAppello: matchDate[1],
+            ora: matchOra ? matchOra[1] : null,
+            aula: matchAula ? matchAula[1].trim().slice(0, 80) || null : null,
+            note
+          };
+        } catch {
+          return null;
+        }
+      }));
+
+      return results.filter(Boolean);
     });
 
-    const queue = [...examList];
-    const CONCURRENCY = 4;
-
-    const worker = async () => {
-      const wPage = await context.newPage();
-      await enableFastMode(wPage);
-      while (queue.length > 0) {
-        const exam = queue.shift();
-        if (!exam) break;
-        try {
-          await wPage.goto(exam.href, { waitUntil: 'domcontentloaded', timeout: 5000 });
-          const result = await wPage.evaluate((examData) => {
-            const c = s => (s || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
-            const text = c(document.body ? document.body.innerText : '');
-
-            if (/non ci sono appelli/i.test(text)) return null;
-
-            let docente = '';
-            let cattedra = '';
-            const trs = Array.from(document.querySelectorAll('table tr'));
-            for (const tr of trs) {
-              const tds = Array.from(tr.querySelectorAll('td')).map(td => c(td.innerText));
-              if (tds.length >= 4 && !tds[0].includes('A.A.')) {
-                cattedra = tds[2] || '';
-                docente = tds[3] || '';
-              }
-            }
-
-            const matchDocente = text.match(/Docente\s+([A-Z\s\.\'-]+?)\s+Appello del/i);
-            if (matchDocente) docente = c(matchDocente[1]);
-
-            const matchDate = text.match(/Appello del:\s*(\d{2}\/\d{2}\/\d{4})/i);
-            const dataAppello = matchDate ? matchDate[1] : null;
-            const matchAula = text.match(/Aula\s*([^\n\r]+)/i);
-            const matchOra = text.match(/Ora Appello\s*(\d{1,2}:\d{2})/i);
-
-            return {
-              id: `appello_${examData.code}`,
-              codice: examData.code,
-              materia: c(examData.name),
-              anno: c(examData.year),
-              docente: c(docente) || 'Non specificato',
-              cattedra,
-              dataAppello,
-              ora: matchOra ? matchOra[1] : null,
-              aula: matchAula ? c(matchAula[1]) : null
-            };
-          }, exam);
-
-          if (result) appelli.push(result);
-        } catch {}
-      }
-      await wPage.close().catch(() => {});
-    };
-
-    await Promise.all(Array.from({ length: CONCURRENCY }, () => worker()));
-  } catch {} finally {
-    await page.close().catch(() => {});
+    const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
+    console.log(`[prenotazioni] Appelli attivi: ${appelli.length} in ${seconds}s.`);
+    return appelli;
+  } catch (error) {
+    console.warn('[prenotazioni] Errore lettura appelli:', error.message);
+    return [];
+  } finally {
+    await listPage.close().catch(() => {});
   }
-  return appelli;
 }
 
 module.exports = { scrapeCalendarioAppelli };

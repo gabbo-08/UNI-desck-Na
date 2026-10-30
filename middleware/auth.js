@@ -1,46 +1,43 @@
-const { db } = require('../db');
+// middleware/auth.js
+const jwt = require('jsonwebtoken');
+const { JWT_SECRET } = require('../lib/config');
+const { readAuthToken } = require('../lib/cookies');
+const { open } = require('../lib/secret-box');
 
-/**
-  * Middleware di autenticazione basato su Token di Sessione / Bearer Token.
-  */
+function extractToken(req) {
+  const header = req.headers.authorization || '';
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  if (match) return match[1].trim();
+  // Il token persistente vive in un cookie httpOnly, non in localStorage.
+  return readAuthToken(req) || req.headers['x-session-token'] || null;
+}
+
 function authMiddleware(req, res, next) {
-  const authHeader = req.headers.authorization || '';
-  const token = authHeader.startsWith('Bearer ') 
-    ? authHeader.substring(7).trim() 
-    : req.headers['x-session-token'] || req.query.token;
-
+  const token = extractToken(req);
   if (!token) {
-    return res.status(401).json({ error: 'Accesso negato: Token di sessione mancante.' });
+    return res.status(401).json({ error: 'Accesso negato: token di sessione mancante.' });
   }
 
   try {
-    // Verifica presenza ed esalazione della sessione nel DB
-    const session = db.prepare(`
-      SELECT profile_id, expires_at 
-      FROM UserSessions 
-      WHERE token = ?
-    `).get(token);
-
-    if (!session) {
-      return res.status(401).json({ error: 'Sessione non valida o scaduta.' });
+    const payload = jwt.verify(token, JWT_SECRET);
+    const profileId = payload.sub || payload.codiceFiscale;
+    if (!profileId) {
+      return res.status(401).json({ error: 'Sessione non valida: profilo assente.' });
     }
 
-    if (new Date(session.expires_at) < new Date()) {
-      // Invalida la sessione scaduta dal DB
-      db.prepare('DELETE FROM UserSessions WHERE token = ?').run(token);
-      return res.status(401).json({ error: 'Sessione scaduta. Effettua nuovamente il login.' });
-    }
-
-    // Inietta i dati dell'utente validato nella request per i controller successivi
     req.user = {
-      profileId: session.profile_id,
-      token
+      sub: payload.sub || payload.codiceFiscale,
+      codiceFiscale: payload.codiceFiscale || payload.sub,
+      email: payload.email || undefined,
+      // La password viaggia cifrata nel JWT (campo "pw"): qui viene decifrata.
+      password: payload.pw ? open(payload.pw) || undefined : undefined
     };
-
-    next();
-  } catch (err) {
-    console.error('[Auth Middleware Error]:', err.message);
-    return res.status(500).json({ error: 'Errore interno durante la verifica dell\'autenticazione.' });
+    return next();
+  } catch (error) {
+    const expired = error.name === 'TokenExpiredError';
+    return res.status(401).json({
+      error: expired ? 'Sessione scaduta. Effettua nuovamente il login.' : 'Sessione non valida.'
+    });
   }
 }
 

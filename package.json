@@ -6,8 +6,16 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test:jest": "jest --verbose",
+    "test": "node --test",
+    "test:watch": "node --test --watch",
+    "test:coverage": "node --test --experimental-test-coverage",
+    "test:wiring": "node --test test/wiring.test.js",
+    "check:env": "node check-env.js",
+    "check": "npm run check:env && npm test",
     "seed:plan:l8-2025-26": "node scripts/seed-study-plan-l8-2025-26.js"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "author": "Gabriele Cacace",
   "license": "ISC",
@@ -21,8 +29,5 @@
     "jsonwebtoken": "^9.0.3",
     "puppeteer": "^25.8.0",
     "puppeteer-cluster": "^0.25.0"
-  },
-  "devDependencies": {
-    "jest": "^30.5.2"
   }
 }

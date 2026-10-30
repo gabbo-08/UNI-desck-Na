@@ -1,5 +1,8 @@
+// db/repository.js
 const dbIndex = require('./index');
+const db = dbIndex.db || dbIndex;
 
+// 1. Utility di base
 function normalizeName(value) {
   return String(value || '')
     .normalize('NFD')
@@ -15,6 +18,7 @@ function parsePlanCourse(row) {
   try {
     prerequisites = JSON.parse(row.prerequisites_json || '[]');
   } catch {}
+  
   return {
     ...row,
     courseCode: row.course_code,
@@ -27,37 +31,44 @@ function parsePlanCourse(row) {
   };
 }
 
-// Risolutore robusto: garantisce di trovare .prepare indipendentemente dal formato dell'import
-function resolveDb(dbOrData) {
-  if (dbOrData && typeof dbOrData.prepare === 'function') {
-    return dbOrData;
-  }
-  if (dbOrData && dbOrData.db && typeof dbOrData.db.prepare === 'function') {
-    return dbOrData.db;
-  }
-  if (dbIndex && typeof dbIndex.prepare === 'function') {
-    return dbIndex;
-  }
-  if (dbIndex && dbIndex.db && typeof dbIndex.db.prepare === 'function') {
-    return dbIndex.db;
-  }
-  throw new Error("Istanza Database SQLite non inizializzata correttamente.");
+// 2. Risolutore DB e Parametri (DRY)
+function resolveDb(possibleDb) {
+  if (possibleDb?.prepare) return possibleDb;
+  if (possibleDb?.db?.prepare) return possibleDb.db;
+  if (dbIndex?.prepare) return dbIndex;
+  if (dbIndex?.db?.prepare) return dbIndex.db;
+  throw new Error("Istanza Database SQLite non trovata.");
 }
 
-function getStudentProfile(dbOrId, optionalId) {
-  const targetDb = resolveDb(dbOrId);
-  const profileId = (targetDb === dbOrId) ? optionalId : dbOrId;
-  return targetDb.prepare('SELECT * FROM StudentProfile WHERE id = ?').get(profileId) || null;
+/**
+ * Estrae l'istanza DB e il parametro reale, supportando la doppia firma:
+ * func(db, arg) oppure func(arg)
+ */
+function getDbAndArg(arg1, arg2) {
+  try {
+    const database = resolveDb(arg1);
+    return { db: database, arg: database === arg1 ? arg2 : arg1 };
+  } catch {
+    return { db: resolveDb(), arg: arg1 };
+  }
 }
 
-function upsertStudentProfile(dbOrProfile, optionalProfile) {
-  const targetDb = resolveDb(dbOrProfile);
-  const profile = (targetDb === dbOrProfile) ? optionalProfile : dbOrProfile;
+// 3. Modelli Profilo
+function getStudentProfile(arg1, arg2) {
+  const { db, arg: profileId } = getDbAndArg(arg1, arg2);
+  return db.prepare('SELECT * FROM StudentProfile WHERE id = ?').get(profileId) || null;
+}
+
+function upsertStudentProfile(arg1, arg2) {
+  const { db, arg: profile } = getDbAndArg(arg1, arg2);
   const targetId = profile.id || profile.profileId || profile.codiceFiscale;
 
-  targetDb.prepare(`
-    INSERT INTO StudentProfile (id, course_id, course_name, cohort_year, current_course_year, channel, surname_initial)
-    VALUES (@id, @courseId, @courseName, @cohortYear, @currentCourseYear, @channel, @surnameInitial)
+  db.prepare(`
+    INSERT INTO StudentProfile (
+      id, course_id, course_name, cohort_year, current_course_year, channel, surname_initial,
+      carriera_json, tasse_json
+    )
+    VALUES (@id, @courseId, @courseName, @cohortYear, @currentCourseYear, @channel, @surnameInitial, @carrieraJson, @tasseJson)
     ON CONFLICT(id) DO UPDATE SET
       course_id = COALESCE(excluded.course_id, StudentProfile.course_id),
       course_name = COALESCE(excluded.course_name, StudentProfile.course_name),
@@ -65,6 +76,8 @@ function upsertStudentProfile(dbOrProfile, optionalProfile) {
       current_course_year = COALESCE(excluded.current_course_year, StudentProfile.current_course_year),
       channel = COALESCE(excluded.channel, StudentProfile.channel),
       surname_initial = COALESCE(excluded.surname_initial, StudentProfile.surname_initial),
+      carriera_json = COALESCE(excluded.carriera_json, StudentProfile.carriera_json),
+      tasse_json = COALESCE(excluded.tasse_json, StudentProfile.tasse_json),
       updated_at = CURRENT_TIMESTAMP
   `).run({
     id: targetId,
@@ -73,16 +86,17 @@ function upsertStudentProfile(dbOrProfile, optionalProfile) {
     cohortYear: profile.cohortYear || profile.anagrafica?.annoImmatricolazione || null,
     currentCourseYear: profile.currentCourseYear || profile.anagrafica?.annoCorso || null,
     channel: profile.channel || null,
-    surnameInitial: profile.surnameInitial || null
+    surnameInitial: profile.surnameInitial || null,
+    carrieraJson: profile.esamiSostenuti ? JSON.stringify(profile.esamiSostenuti) : null,
+    tasseJson: profile.tasse ? JSON.stringify(profile.tasse) : null
   });
 
-  return getStudentProfile(targetDb, targetId);
+  return getStudentProfile(db, targetId);
 }
 
-function updateStudentProfile(dbOrId, profileIdOrUpdates, optionalUpdates) {
-  const targetDb = resolveDb(dbOrId);
-  const profileId = (targetDb === dbOrId) ? profileIdOrUpdates : dbOrId;
-  const updates = (targetDb === dbOrId) ? optionalUpdates : profileIdOrUpdates;
+function updateStudentProfile(arg1, profileIdOrUpdates, optionalUpdates) {
+  const { db, arg: profileId } = getDbAndArg(arg1, profileIdOrUpdates);
+  const updates = (db === arg1) ? optionalUpdates : profileIdOrUpdates;
 
   const columns = {
     courseId: 'course_id',
@@ -92,25 +106,26 @@ function updateStudentProfile(dbOrId, profileIdOrUpdates, optionalUpdates) {
     channel: 'channel',
     surnameInitial: 'surname_initial'
   };
+  
   const entries = Object.entries(columns).filter(([key]) => Object.hasOwn(updates || {}, key));
-  if (entries.length === 0) return getStudentProfile(targetDb, profileId);
+  if (entries.length === 0) return getStudentProfile(db, profileId);
 
   const assignments = entries.map(([, column]) => `${column} = @${column}`).join(', ');
   const values = Object.fromEntries(entries.map(([key, column]) => [column, updates[key] ?? null]));
   
-  targetDb.prepare(`UPDATE StudentProfile SET ${assignments}, updated_at = CURRENT_TIMESTAMP WHERE id = @id`)
+  db.prepare(`UPDATE StudentProfile SET ${assignments}, updated_at = CURRENT_TIMESTAMP WHERE id = @id`)
     .run({ ...values, id: profileId });
 
-  return getStudentProfile(targetDb, profileId);
+  return getStudentProfile(db, profileId);
 }
 
-function saveStudyPlan(dbOrPlan, planOrCourses, optionalCourses) {
-  const targetDb = resolveDb(dbOrPlan);
-  const plan = (targetDb === dbOrPlan) ? planOrCourses : dbOrPlan;
-  const courses = (targetDb === dbOrPlan) ? optionalCourses : planOrCourses;
+// 4. Modelli Piani di Studio
+function saveStudyPlan(arg1, planOrCourses, optionalCourses) {
+  const { db, arg: plan } = getDbAndArg(arg1, planOrCourses);
+  const courses = (db === arg1) ? optionalCourses : planOrCourses;
 
-  const save = targetDb.transaction(() => {
-    targetDb.prepare(`
+  return db.transaction(() => {
+    db.prepare(`
       INSERT INTO StudyPlans (course_id, cohort_year, course_name, version, source_name, source_url)
       VALUES (@courseId, @cohortYear, @courseName, @version, @sourceName, @sourceUrl)
       ON CONFLICT(course_id, cohort_year, version) DO UPDATE SET
@@ -127,13 +142,13 @@ function saveStudyPlan(dbOrPlan, planOrCourses, optionalCourses) {
       sourceUrl: plan.sourceUrl || null
     });
 
-    const storedPlan = targetDb.prepare(`
-      SELECT * FROM StudyPlans
-      WHERE course_id = ? AND cohort_year = ? AND version = ?
+    const storedPlan = db.prepare(`
+      SELECT * FROM StudyPlans WHERE course_id = ? AND cohort_year = ? AND version = ?
     `).get(plan.courseId, plan.cohortYear, String(plan.version || '1'));
 
-    targetDb.prepare('DELETE FROM PlanCourses WHERE plan_id = ?').run(storedPlan.id);
-    const insertCourse = targetDb.prepare(`
+    db.prepare('DELETE FROM PlanCourses WHERE plan_id = ?').run(storedPlan.id);
+    
+    const insertCourse = db.prepare(`
       INSERT INTO PlanCourses (
         plan_id, course_code, course_name, normalized_name, cfu, study_year, semester,
         course_type, elective_group, elective_required_cfu, prerequisites_json
@@ -160,65 +175,55 @@ function saveStudyPlan(dbOrPlan, planOrCourses, optionalCourses) {
     }
 
     return storedPlan;
-  });
-
-  return save();
+  })();
 }
 
-function getStudyPlan(dbOrCourse, courseOrCohort, optionalCohort) {
-  const targetDb = resolveDb(dbOrCourse);
-  const courseIdOrName = (targetDb === dbOrCourse) ? courseOrCohort : dbOrCourse;
-  const cohortYear = (targetDb === dbOrCourse) ? optionalCohort : courseOrCohort;
+function getStudyPlan(arg1, courseOrCohort, optionalCohort) {
+  const { db, arg: courseIdOrName } = getDbAndArg(arg1, courseOrCohort);
+  const cohortYear = (db === arg1) ? optionalCohort : courseOrCohort;
 
   if (!courseIdOrName || !cohortYear) return null;
 
-  let plan = targetDb.prepare(`
-    SELECT * FROM StudyPlans
-    WHERE course_id = ? AND cohort_year = ?
-    ORDER BY imported_at DESC, id DESC
-    LIMIT 1
+  let plan = db.prepare(`
+    SELECT * FROM StudyPlans WHERE course_id = ? AND cohort_year = ?
+    ORDER BY imported_at DESC, id DESC LIMIT 1
   `).get(courseIdOrName, cohortYear);
 
   if (plan) return plan;
 
-  const searchNormalized = normalizeName(courseIdOrName);
-  return targetDb.prepare(`
+  return db.prepare(`
     SELECT * FROM StudyPlans
     WHERE LOWER(REPLACE(course_name, ' ', '')) LIKE '%' || REPLACE(?, ' ', '') || '%'
       AND cohort_year = ?
-    ORDER BY imported_at DESC, id DESC
-    LIMIT 1
-  `).get(searchNormalized, cohortYear) || null;
+    ORDER BY imported_at DESC, id DESC LIMIT 1
+  `).get(normalizeName(courseIdOrName), cohortYear) || null;
 }
 
-function getPlanCourses(dbOrPlanId, optionalPlanId) {
-  const targetDb = resolveDb(dbOrPlanId);
-  const planId = (targetDb === dbOrPlanId) ? optionalPlanId : dbOrPlanId;
-
-  return targetDb.prepare(`
+function getPlanCourses(arg1, arg2) {
+  const { db, arg: planId } = getDbAndArg(arg1, arg2);
+  return db.prepare(`
     SELECT * FROM PlanCourses WHERE plan_id = ?
     ORDER BY study_year IS NULL, study_year, semester IS NULL, semester, course_name
   `).all(planId).map(parsePlanCourse);
 }
 
-function getSelectedElectiveIds(dbOrProfileId, optionalProfileId) {
-  const targetDb = resolveDb(dbOrProfileId);
-  const profileId = (targetDb === dbOrProfileId) ? optionalProfileId : dbOrProfileId;
-
-  return targetDb.prepare('SELECT plan_course_id FROM SelectedElectives WHERE profile_id = ?')
+// 5. Modelli Esami a Scelta (Electives)
+function getSelectedElectiveIds(arg1, arg2) {
+  const { db, arg: profileId } = getDbAndArg(arg1, arg2);
+  return db.prepare('SELECT plan_course_id FROM SelectedElectives WHERE profile_id = ?')
     .all(profileId).map(row => row.plan_course_id);
 }
 
-function replaceSelectedElectives(dbOrProfileId, profileIdOrPlanId, planIdOrCourseIds, optionalCourseIds) {
-  const targetDb = resolveDb(dbOrProfileId);
-  const profileId = (targetDb === dbOrProfileId) ? profileIdOrPlanId : dbOrProfileId;
-  const planId = (targetDb === dbOrProfileId) ? planIdOrCourseIds : profileIdOrPlanId;
-  const courseIds = (targetDb === dbOrProfileId) ? optionalCourseIds : planIdOrCourseIds;
+function replaceSelectedElectives(arg1, profileIdOrPlanId, planIdOrCourseIds, optionalCourseIds) {
+  const { db, arg: profileId } = getDbAndArg(arg1, profileIdOrPlanId);
+  const planId = (db === arg1) ? planIdOrCourseIds : profileIdOrPlanId;
+  const courseIds = (db === arg1) ? optionalCourseIds : planIdOrCourseIds;
 
   const uniqueIds = [...new Set(courseIds || [])];
+  
   if (uniqueIds.length > 0) {
     const placeholders = uniqueIds.map(() => '?').join(', ');
-    const valid = targetDb.prepare(`
+    const valid = db.prepare(`
       SELECT COUNT(*) AS count FROM PlanCourses
       WHERE plan_id = ? AND course_type = 'elective' AND id IN (${placeholders})
     `).get(planId, ...uniqueIds).count;
@@ -230,20 +235,18 @@ function replaceSelectedElectives(dbOrProfileId, profileIdOrPlanId, planIdOrCour
     }
   }
 
-  const replace = targetDb.transaction(() => {
-    targetDb.prepare('DELETE FROM SelectedElectives WHERE profile_id = ?').run(profileId);
-    const insert = targetDb.prepare('INSERT INTO SelectedElectives (profile_id, plan_course_id) VALUES (?, ?)');
+  db.transaction(() => {
+    db.prepare('DELETE FROM SelectedElectives WHERE profile_id = ?').run(profileId);
+    const insert = db.prepare('INSERT INTO SelectedElectives (profile_id, plan_course_id) VALUES (?, ?)');
     for (const courseId of uniqueIds) insert.run(profileId, courseId);
-  });
+  })();
 
-  replace();
   return uniqueIds;
 }
 
-function clearSelectedElectives(dbOrProfileId, optionalProfileId) {
-  const targetDb = resolveDb(dbOrProfileId);
-  const profileId = (targetDb === dbOrProfileId) ? optionalProfileId : dbOrProfileId;
-  targetDb.prepare('DELETE FROM SelectedElectives WHERE profile_id = ?').run(profileId);
+function clearSelectedElectives(arg1, arg2) {
+  const { db, arg: profileId } = getDbAndArg(arg1, arg2);
+  db.prepare('DELETE FROM SelectedElectives WHERE profile_id = ?').run(profileId);
 }
 
 module.exports = {

@@ -1,21 +1,69 @@
-const express=require('express');
-const {getDatiCarriera}=require('../scraper/segrepass');
-const {calcolaMetriche,simulaBaseLaurea}=require('../lib/metriche');
-const router=express.Router();
-function getCredentials(req,res){
-  const {codiceFiscale,password}=req.body||{};
-  if(typeof codiceFiscale!=='string'||!codiceFiscale.trim()||typeof password!=='string'||!password){
-    res.status(400).json({error:'Inserisci codice fiscale e password Segrepass.'});
-    return null;
+// routes/career.js
+const express = require('express');
+const router = express.Router();
+const { getDatiCarriera } = require('../scraper/segrepass');
+const snapshots = require('../services/career-snapshots');
+const slowSync = require('../services/slow-sync');
+
+/**
+ * GET /api/career/slow-data
+ * Stato e risultato del caricamento in background di tasse e appelli.
+ * Risposta nel formato SlowData del frontend:
+ *   { status: 'idle' | 'loading' | 'ready' | 'error', error?, updatedAt?, taxes?, prenotazioni? }
+ */
+router.get('/slow-data', (req, res) => {
+  const profileId = req.user.sub;
+  const codiceFiscale = req.user.codiceFiscale || profileId;
+  const { password } = req.user;
+
+  // Dati già pronti: restituiscili subito.
+  const snapshot = snapshots.getSlowSnapshot(profileId);
+  if (snapshot) {
+    return res.json({
+      status: 'ready',
+      taxes: snapshot.taxes ?? null,
+      prenotazioni: Array.isArray(snapshot.prenotazioni) ? snapshot.prenotazioni : [],
+      updatedAt: snapshot.updatedAt ?? null
+    });
   }
-  return {codiceFiscale,password};
-}
-function handleScraperError(err,res,next){
-  if(err.message==='Credenziali Segrepass non valide.')return res.status(401).json({error:err.message});
-  return next(err);
-}
-router.post('/esami',async(req,res,next)=>{const credentials=getCredentials(req,res);if(!credentials)return;try{const{tabellaEsami}=await getDatiCarriera(credentials);res.json({headers:tabellaEsami.headers,esami:tabellaEsami.records,totale:tabellaEsami.rowCount});}catch(err){handleScraperError(err,res,next);}});
-router.post('/metriche',async(req,res,next)=>{const credentials=getCredentials(req,res);if(!credentials)return;try{const{tabellaEsami}=await getDatiCarriera(credentials);res.json(calcolaMetriche(tabellaEsami.records));}catch(err){handleScraperError(err,res,next);}});
-router.post('/riepilogo',async(req,res,next)=>{const credentials=getCredentials(req,res);if(!credentials)return;try{const{tabelleRiepilogo}=await getDatiCarriera(credentials);res.json({tabelle:tabelleRiepilogo});}catch(err){handleScraperError(err,res,next);}});
-router.post('/simula',async(req,res,next)=>{const credentials=getCredentials(req,res);if(!credentials)return;try{const{esamiFuturi=[]}=req.body;if(!Array.isArray(esamiFuturi))return res.status(400).json({error:'esamiFuturi deve essere un array.'});const{tabellaEsami}=await getDatiCarriera(credentials);const{esami}=calcolaMetriche(tabellaEsami.records);res.json({baseLaureaSimulata:simulaBaseLaurea(esami,esamiFuturi),esamiFuturi});}catch(err){handleScraperError(err,res,next);}});
-module.exports=router;
+
+  // Senza password (token vecchio) non si può avviare lo scraping.
+  if (!password) {
+    return res.json({ status: 'error', error: 'CREDENTIALS_REQUIRED' });
+  }
+
+  // Avvia (o riprende, ad esempio dopo un riavvio del server) il caricamento in background.
+  const status = slowSync.ensureSlowSync(profileId, { codiceFiscale, password });
+
+  if (status.state === 'error') {
+    return res.json({ status: 'error', error: status.error || 'SLOW_SYNC_FAILED' });
+  }
+  return res.json({ status: 'loading' });
+});
+
+// Endpoint legacy: scraping rapido con credenziali nel body.
+router.post('/', async (req, res) => {
+  const { username, codiceFiscale, password } = req.body;
+  const user = codiceFiscale || username;
+
+  if (!user || !password) {
+    return res.status(400).json({ success: false, error: 'CREDENTIALS_REQUIRED' });
+  }
+
+  try {
+    // Phase 'fast': estrae anagrafica, libretto esami e PIN
+    const data = await getDatiCarriera(
+      { codiceFiscale: user, password },
+      { phase: 'fast' }
+    );
+    res.json({ success: true, data });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: error.code || 'CAREER_ERROR',
+      message: error.message
+    });
+  }
+});
+
+module.exports = router;

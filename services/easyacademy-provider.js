@@ -1,4 +1,4 @@
-const { getBrowser } = require('../scraper/pool');
+const { queueScrapingTask } = require('../scraper/pool');
 const { normalizeCourseName, nameSimilarity } = require('../lib/matching');
 
 const AGENDA_URL = 'https://easyacademy.unina.it/agendastudenti/index.php?view=easycourse&_lang=it&include=corso';
@@ -127,15 +127,8 @@ function writeCache(key, value, now = Date.now()) {
   timetableCache.set(key, { value, expiresAt: now + CACHE_TTL_MS });
 }
 
-async function getTimetable({ courseId, courseName, academicYear, studyYear, semester, channel, surnameInitial }) {
-  if (!courseName && !courseId) throw errorWithStatus('Imposta il corso nel profilo.', 409, 'PROFILE_ONBOARDING_REQUIRED');
-  const key = cacheKey({ courseId, courseName, academicYear, studyYear, semester, channel, surnameInitial });
-  const cached = readCache(key);
-  if (cached) return cached;
-
-  const browser = await getBrowser();
-  const context = await browser.createBrowserContext();
-  const page = await context.newPage();
+async function scrapeTimetablePage(page, filters) {
+  const { courseId, courseName, academicYear, studyYear, semester, channel, surnameInitial, key } = filters;
 
   try {
     await page.goto(AGENDA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
@@ -212,9 +205,20 @@ async function getTimetable({ courseId, courseName, academicYear, studyYear, sem
   } catch (error) {
     if (error.status) throw error;
     throw errorWithStatus(`EasyAcademy non disponibile: ${error.message}`, 502, 'EASYACADEMY_REQUEST_FAILED');
-  } finally {
-    await context.close().catch(() => {});
   }
+}
+
+async function getTimetable({ courseId, courseName, academicYear, studyYear, semester, channel, surnameInitial }) {
+  if (!courseName && !courseId) throw errorWithStatus('Imposta il corso nel profilo.', 409, 'PROFILE_ONBOARDING_REQUIRED');
+  const key = cacheKey({ courseId, courseName, academicYear, studyYear, semester, channel, surnameInitial });
+  const cached = readCache(key);
+  if (cached) return cached;
+
+  // EasyAcademy non richiede login: usa una pagina isolata del pool condiviso,
+  // così non si apre un secondo Chromium e non si esaurisce la memoria del server.
+  return queueScrapingTask({}, page => scrapeTimetablePage(page, {
+    courseId, courseName, academicYear, studyYear, semester, channel, surnameInitial, key
+  }));
 }
 
 function clearTimetableCache() {
