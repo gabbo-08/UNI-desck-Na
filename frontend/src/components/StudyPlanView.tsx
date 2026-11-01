@@ -57,7 +57,7 @@ export default function StudyPlanView({ token, profile }: Props) {
 
   const groups = new Map<string, CareerPlanCourse[]>();
   for (const course of data?.courses || []) {
-    const studyYear = course.study_year ?? course.studyYear;
+    const studyYear = course.study_year ?? course.studyYear ?? course.year;
     const semesterVal = course.semester;
     const year = studyYear ? `Anno ${studyYear}` : 'Altre attività';
     const semester = semesterVal ? `Semestre ${semesterVal}` : 'Senza semestre';

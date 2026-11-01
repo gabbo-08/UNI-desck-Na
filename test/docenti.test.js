@@ -5,7 +5,8 @@ const {
   getDocentiData,
   mapAnnouncement,
   findTeacher,
-  fetchAnnouncementsForProfessors
+  fetchAnnouncementsForProfessors,
+  fetchTeacherDetail
 } = require('../scraper/docenti');
 
 function withoutDocentiEnv(t) {
@@ -54,6 +55,24 @@ test('separa corsi sottoscritti e appelli prenotati', () => {
   assert.equal(result.subscriptions[0].professor, 'Docente A');
   assert.equal(result.bookedExams.length, 1);
   assert.equal(result.bookedExams[0].examDate, '10/01/2027');
+});
+
+test('separa test e gruppi dalla tabella personale Docenti', () => {
+  const result = normalizeDocentiTables([{
+    title: 'Test e gruppi',
+    headers: ['Test', 'Gruppo', 'Insegnamento', 'Data Test'],
+    records: [{
+      Test: 'Test intermedio',
+      Gruppo: 'A',
+      Insegnamento: 'Analisi I',
+      'Data Test': '10/11/2026'
+    }]
+  }]);
+
+  assert.equal(result.tests.length, 1);
+  assert.equal(result.tests[0].name, 'Test intermedio');
+  assert.equal(result.groups.length, 1);
+  assert.equal(result.groups[0].name, 'A');
 });
 
 test('non interpreta lo stato del corso come prenotazione d\'esame', () => {
@@ -137,6 +156,32 @@ test('fetchAnnouncementsForProfessors raggruppa gli avvisi per docente', async (
 test('fetchAnnouncementsForProfessors scarta risposte senza contenuto valido', async () => {
   const groups = await fetchAnnouncementsForProfessors(['Docente Test'], {
     fetchJson: async path => (path.includes('/avvisi') ? { content: [] } : { content: [{ id: 't1', nome: 'A', cognome: 'TEST' }] })
+  });
+
+  test('recupera e normalizza il dettaglio pubblico del docente', async () => {
+    const detail = await fetchTeacherDetail({ id: 'teacher-1' }, {
+      fetchJson: async path => {
+        if (path === '/docenti/teacher-1') {
+          return { id: 'teacher-1', nome: 'LUCA', cognome: 'ROSSI', email: 'luca.rossi@unina.it' };
+        }
+        if (path.endsWith('/insegnamenti')) {
+          return { content: [{ nomeInse: 'Analisi I', codInse: 'A1' }] };
+        }
+        if (path.includes('/materiale-didattico/')) {
+          return [{ id: 1, nome: 'Materiale', tipo: 'D' }];
+        }
+        if (path.includes('/insegnamenti-appelli')) {
+          return { content: [{ id: 8, nomeInse: 'Analisi I', dataAppello: '2027-01-10' }] };
+        }
+        return null;
+      }
+    });
+
+    assert.equal(detail.profilo.email, 'luca.rossi@unina.it');
+    assert.equal(detail.profilo.nome, 'LUCA ROSSI');
+    assert.equal(detail.materiali.pubblico[0].tipo, 'cartella');
+    assert.equal(detail.appelli[0].dataEsame, '2027-01-10');
+    assert.equal(detail.iscrizioni[0].insegnamento, 'Analisi I');
   });
 
   assert.deepEqual(groups, []);

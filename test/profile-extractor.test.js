@@ -37,9 +37,10 @@ test('non inventa valori quando i dati mancano', () => {
   });
 });
 
-test('calcola anno di corso e canale senza valori di ripiego', () => {
+test('calcola anno di corso senza inventare il canale', () => {
   assert.equal(calculateCourseYear(2025, 3, NOW), 2);
   assert.equal(calculateCourseYear(null, 3, NOW), 1);
-  assert.equal(determinaCanale('Cacace'), 'A-D');
+  assert.equal(determinaCanale('Cacace'), null);
+  assert.equal(determinaCanale('Cacace', [{ da: 'A', a: 'D', canale: 'A-D' }]), 'A-D');
   assert.equal(determinaCanale(''), null);
 });

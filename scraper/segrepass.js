@@ -1,8 +1,10 @@
+
 const { queueScrapingTask } = require('./pool');
 const { scrapeEsamiSostenuti } = require('./esami');
 const { scrapeCalendarioAppelli } = require('./prenotazioni');
 const { scrapeTasse } = require('./tasse');
-const { scrapePianoHeader } = require('./piano');
+const { scrapePianoPage } = require('./piano');
+const { normalizePianoTable } = require('../lib/piano-normalizer');
 const { enableFastMode } = require('./utils');
 
 const NODI_SEGREPASS = ['segrepass1', 'segrepass2', 'segrepass3'];
@@ -205,17 +207,19 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
     let sommaPonderata = 0;
     let cfuConVoto = 0;
     let pinInfo = { pin: null, codiceNumericoPersonale: null };
+    let pianoCourses = [];
 
     if (phase !== 'slow') {
       console.log('[Segrepass] Inizio estrazione veloce in parallelo (Piano, Esami, PIN)...');
 
       const [headerRes, esamiRes, pinRes] = await Promise.all([
-        scrapePianoHeader(page, esisUrl).catch(() => ({})),
+        scrapePianoPage(page, esisUrl).catch(() => ({ header: {}, table: null })),
         scrapeEsamiSostenuti(context, esisUrl).catch(() => ({ headers: [], records: [], rowCount: 0 })),
         scrapePin(context, esisUrl)
       ]);
 
-      pianoHeader = headerRes;
+      pianoHeader = headerRes.header || {};
+      pianoCourses = normalizePianoTable(headerRes.table);
       tabellaEsami = esamiRes;
       pinInfo = pinRes;
 
@@ -307,7 +311,7 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
       esami: esamiList,
       tasse: taxes,
       prenotazioni: appelliCalendario,
-      pianoDiStudiRaw: []
+      pianoDiStudiRaw: pianoCourses
     };
 
     debugLog('\n=============================================');

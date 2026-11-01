@@ -1,9 +1,14 @@
 const puppeteer = require('puppeteer');
 const { getDocentiData } = require('./scraper/docenti');
 
-// Credenziali UNINA (usa le variabili d'ambiente o il fallback)
-const USERNAME = process.env.UNINA_USER || 'gabr.cacace@studenti.unina.it';
-const PASSWORD = process.env.UNINA_PASS || 'mas801@A';
+// Impostare UNINA_USER e UNINA_PASS nell'ambiente prima di eseguire lo script.
+const USERNAME = process.env.UNINA_USER;
+const PASSWORD = process.env.UNINA_PASS;
+
+if (!USERNAME || !PASSWORD) {
+  console.error('Credenziali mancanti: imposta UNINA_USER e UNINA_PASS.');
+  process.exit(1);
+}
 
 /**
  * Mock della coda: esegue la funzione dello scraper direttamente 

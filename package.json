@@ -6,9 +6,10 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node --test",
-    "test:watch": "node --test --watch",
-    "test:coverage": "node --test --experimental-test-coverage",
+    "test": "node --test \"test/*.test.js\"",
+    "test:watch": "node --test --watch \"test/*.test.js\"",
+    "test:visual": "playwright test",
+    "test:coverage": "node --test --experimental-test-coverage \"test/*.test.js\"",
     "test:wiring": "node --test test/wiring.test.js",
     "check:env": "node check-env.js",
     "check": "npm run check:env && npm test",
@@ -29,5 +30,8 @@
     "jsonwebtoken": "^9.0.3",
     "puppeteer": "^25.8.0",
     "puppeteer-cluster": "^0.25.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1"
   }
 }

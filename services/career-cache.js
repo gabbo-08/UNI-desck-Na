@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const { JWT_SECRET } = require('../lib/config');
 
 const DEFAULT_TTL_MS = 15 * 60 * 1000;
+const CACHE_VERSION = 'career-v3';
 const cache = new Map();
 const inFlight = new Map();
 
@@ -19,7 +20,7 @@ function cacheKey(profileId, password) {
     .createHmac('sha256', JWT_SECRET)
     .update(String(password || ''))
     .digest('hex');
-  return `${profileId}:${fingerprint}`;
+  return `${CACHE_VERSION}:${profileId}:${fingerprint}`;
 }
 
 function prune(now = Date.now()) {
@@ -82,7 +83,7 @@ function clearCareerCache(profileId) {
     return;
   }
   for (const key of cache.keys()) {
-    if (key.startsWith(`${profileId}:`)) cache.delete(key);
+    if (key.includes(`:${profileId}:`)) cache.delete(key);
   }
 }
 

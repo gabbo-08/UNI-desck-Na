@@ -1,8 +1,6 @@
 'use client';
 
-'use client';
-
-import { useEffect, useState, useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Sun, Moon, Monitor } from 'lucide-react';
 import { getSavedTheme, saveTheme, resolveTheme, applyTheme, type Theme } from '@/lib/theme';
 
@@ -11,25 +9,27 @@ export default function ThemeSwitch() {
   const [resolved, setResolved] = useState<'light' | 'dark'>('light');
 
   const apply = useCallback((t: Theme) => {
-    setTheme(t);
     saveTheme(t);
     const r = resolveTheme(t);
+    setTheme(t);
     setResolved(r);
     applyTheme(r);
   }, []);
 
   useEffect(() => {
     apply(getSavedTheme());
+  }, [apply]);
 
-    if (theme === 'system') {
-      const mq = window.matchMedia('(prefers-color-scheme: dark)');
-      const handler = (e: MediaQueryListEvent) => {
-        setResolved(e.matches ? 'dark' : 'light');
-        applyTheme(e.matches ? 'dark' : 'light');
-      };
-      mq.addEventListener('change', handler);
-      return () => mq.removeEventListener('change', handler);
-    }
+  useEffect(() => {
+    if (theme !== 'system') return;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const handler = (event: MediaQueryListEvent) => {
+      const next = event.matches ? 'dark' : 'light';
+      setResolved(next);
+      applyTheme(next);
+    };
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
   }, [theme]);
 
   const labels: Record<Theme, string> = { light: 'Chiaro', dark: 'Scuro', system: 'Sistema' };

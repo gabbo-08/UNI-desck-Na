@@ -35,7 +35,16 @@ async function extractTables(targetPage) {
             .filter(row => row.some(cell => cell !== ''))
             .map(row => Object.fromEntries(headers.map((h, i) => [h || `col_${i}`, row[i] ?? ''])));
             
-          return { headers, records, rowCount: records.length };
+          const caption = t.querySelector('caption')?.innerText || '';
+          const previousHeading = t.previousElementSibling?.matches?.('h1,h2,h3,h4,h5,h6,legend')
+            ? t.previousElementSibling.innerText 
+            : '';
+          return {
+            title: cleanStr(caption || previousHeading),
+            headers,
+            records,
+            rowCount: records.length
+          };
         }).filter(Boolean);
       });
       if (tables && tables.length > 0) results.push(...tables);

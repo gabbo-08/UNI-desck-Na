@@ -7,14 +7,6 @@ const COURSE_CODE_MAP = {
   'INGEGNERIA INFORMATICA': 'DE3'
 };
 
-// ATTENZIONE: solo "A-D" e' confermato dal tuo profilo. Gli altri intervalli sono un'ipotesi:
-// confrontali con i canali che mostra EasyAcademy per il tuo corso.
-const DEFAULT_CANALI = [
-  { da: 'A', a: 'D', canale: 'A-D' },
-  { da: 'E', a: 'O', canale: 'E-O' },
-  { da: 'P', a: 'Z', canale: 'P-Z' }
-];
-
 const MAX_COURSE_YEARS = 3;
 
 /**
@@ -35,9 +27,11 @@ function calculateCourseYear(cohortYear, maxYears = MAX_COURSE_YEARS, now = new 
 }
 
 /**
- * Canale dall'iniziale del cognome; null se il cognome non c'e' (nessun valore di ripiego)
+ * Risolve un canale solo quando il corso fornisce regole esplicite.
+ * EasyAcademy resta la fonte autorevole per i gruppi, che possono variare
+ * tra facolta e corsi.
  */
-function determinaCanale(cognome, regole = DEFAULT_CANALI) {
+function determinaCanale(cognome, regole = []) {
   const initial = String(cognome || '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
@@ -45,7 +39,7 @@ function determinaCanale(cognome, regole = DEFAULT_CANALI) {
     .charAt(0)
     .toUpperCase();
   if (!initial) return null;
-  const rule = regole.find(item => initial >= item.da && initial <= item.a);
+  const rule = (regole || []).find(item => initial >= item.da && initial <= item.a);
   return rule ? rule.canale : null;
 }
 

@@ -1,3 +1,4 @@
+
 'use client';
 
 import { useState, useEffect, useMemo, useRef } from 'react';
@@ -26,13 +27,16 @@ import {
   UserCheck,
 } from 'lucide-react';
 import {
-  fetchDocentiBookedExams,
+  fetchDocentiSummary,
   fetchMetriche,
+  fetchTimetable,
   fetchSlowData,
   loginAPI,
   logoutAPI,
   restoreSession,
   type BookedExamDocenti,
+  type TestDocenti,
+  type TimetableEvent,
   type CredenzialiSegrepass,
   type Esame,
   type Metriche,
@@ -47,6 +51,7 @@ import StudyPlanView from '@/components/StudyPlanView';
 import TimetableView from '@/components/TimetableView';
 import DocentiView from '@/components/DocentiView';
 import ThemeSwitch from '@/components/ThemeSwitch';
+import PinReveal from '@/components/PinReveal';
 
 type View = 'home' | 'career' | 'prenotazioni' | 'taxes' | 'docenti' | 'timetable' | 'plan';
 
@@ -62,7 +67,7 @@ const NAV: { id: View; label: string; icon: typeof House }[] = [
 
 const CARD =
   'rounded-2xl border border-[#3B7BC4]/30 bg-[#0A1B31]/75 shadow-[0_0_28px_-10px_rgba(70,150,230,0.55)] backdrop-blur-sm';
-const SECTION_TITLE = 'mb-3 text-sm font-bold tracking-wide text-white flex items-center gap-2';
+const SECTION_TITLE = 'section-title mb-3 text-sm font-bold tracking-wide text-white flex items-center gap-2';
 const GHOST_BTN =
   'inline-flex min-h-10 items-center gap-2 rounded-lg border border-white/15 bg-white/5 px-3 text-sm text-slate-200 transition hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5AB0F0] disabled:opacity-50';
 
@@ -119,6 +124,15 @@ function dataLeggibile(value?: string | null): string {
     }
   }
   return formatDate(testo);
+}
+
+// Giorno dell'orario in forma lunga, es. "Mercoledì 4 novembre".
+function formatGiornoLungo(iso: string): string {
+  const [y, m, g] = iso.split('-').map(Number);
+  if (!y || !m || !g) return iso;
+  const testo = new Intl.DateTimeFormat('it-IT', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' })
+    .format(new Date(Date.UTC(y, m - 1, g)));
+  return testo.charAt(0).toUpperCase() + testo.slice(1);
 }
 
 export default function DashboardView() {
@@ -326,8 +340,52 @@ const handleLogin = async (e: React.FormEvent) => {
   const totalPending = taxesObj?.summary?.totalPending ?? pendingTaxes.reduce((sum, item) => sum + (item.amount ?? item.importo ?? 0), 0);
   const nextDeadline = taxesObj?.summary?.nextDeadline || pendingTaxes.map(t => t.dueDate || t.scadenza).filter(Boolean).sort()[0];
 
+  // Orario per la Home: caricato una volta; la cache del backend evita scraping ripetuti.
+  const [timetableEvents, setTimetableEvents] = useState<TimetableEvent[]>([]);
+  const [timetableLoading, setTimetableLoading] = useState(false);
+  const [timetableError, setTimetableError] = useState('');
+
+  useEffect(() => {
+    if (!token) return;
+    let active = true;
+    setTimetableLoading(true);
+    setTimetableError('');
+    fetchTimetable(token)
+      .then((res) => { if (active) setTimetableEvents(res.timetable?.events ?? []); })
+      .catch((err: unknown) => {
+        if (!active) return;
+        setTimetableEvents([]);
+        setTimetableError(err instanceof Error ? err.message : 'Orario non disponibile.');
+      })
+      .finally(() => { if (active) setTimetableLoading(false); });
+    return () => { active = false; };
+  }, [token]);
+
+  // Prossima lezione: il primo giorno con lezioni da oggi in avanti.
+  // Per oggi conta solo ciò che non è ancora finito.
+  const prossimoGiorno = useMemo(() => {
+    const ora = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const oggiIso = `${ora.getFullYear()}-${pad(ora.getMonth() + 1)}-${pad(ora.getDate())}`;
+    const oraAttuale = `${pad(ora.getHours())}:${pad(ora.getMinutes())}`;
+
+    const future = timetableEvents
+      .filter((e) => e.date && e.date >= oggiIso)
+      .filter((e) => e.date !== oggiIso || !e.endTime || e.endTime > oraAttuale)
+      .sort((a, b) => `${a.date} ${a.startTime ?? ''}`.localeCompare(`${b.date} ${b.startTime ?? ''}`));
+
+    if (future.length === 0) return null;
+    const data = future[0].date as string;
+    return {
+      data,
+      oggi: data === oggiIso,
+      lezioni: future.filter((e) => e.date === data)
+    };
+  }, [timetableEvents]);
+
   // Prenotazioni del portale Docenti: caricate al login e mostrate insieme agli appelli Segrepass.
   const [docentiBookings, setDocentiBookings] = useState<BookedExamDocenti[]>([]);
+  const [docentiTests, setDocentiTests] = useState<TestDocenti[]>([]);
 
  const fetchingDocentiRef = useRef(false);
 
@@ -338,9 +396,19 @@ const handleLogin = async (e: React.FormEvent) => {
     let active = true;
     fetchingDocentiRef.current = true; // Segnala che la chiamata è in corso
 
-    fetchDocentiBookedExams(token)
-      .then((list) => { if (active) setDocentiBookings(list); })
-      .catch(() => { if (active) setDocentiBookings([]); })
+    fetchDocentiSummary(token)
+      .then(({ bookedExams: bookings, tests }) => {
+        if (active) {
+          setDocentiBookings(bookings);
+          setDocentiTests(tests);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setDocentiBookings([]);
+          setDocentiTests([]);
+        }
+      })
       .finally(() => { 
          // Aspetta 2 secondi prima di sbloccare, evitando il rimbalzo di React Strict Mode
          setTimeout(() => { fetchingDocentiRef.current = false; }, 2000); 
@@ -350,7 +418,7 @@ const handleLogin = async (e: React.FormEvent) => {
   }, [token]);
 
   const listaPrenotazioni = useMemo<Prenotazione[]>(() => {
-    const daPortale: Prenotazione[] = docentiBookings.map((b: any, idx: number) => ({
+    const daPortale: Prenotazione[] = docentiBookings.map((b, idx) => ({
       id: `docenti-${idx}`,
       materia: b.courseName || b.descrInse || JSON.stringify(b),
       docente: b.professor || b.docente || b.cognomeDocente || 'Non specificato',
@@ -359,9 +427,17 @@ const handleLogin = async (e: React.FormEvent) => {
       note: b.bookingDate ? `Prenotato il ${b.bookingDate}` : undefined,
       isMyProfessor: true,
     }));
+    const testPortale: Prenotazione[] = docentiTests.map((test, idx) => ({
+      id: `docenti-test-${idx}`,
+      materia: test.name || test.courseName || 'Test',
+      docente: test.group ? `Gruppo ${test.group}` : 'Portale Docenti',
+      dataAppello: test.date,
+      note: test.status ? `Stato: ${test.status}` : undefined,
+      isMyProfessor: true,
+    }));
 
     const visti = new Set<string>();
-    const unite = [...(data?.prenotazioni || []), ...daPortale].filter((p) => {
+    const unite = [...(data?.prenotazioni || []), ...daPortale, ...testPortale].filter((p) => {
       const chiave = `${(p.materia || '').toLowerCase()}|${p.dataAppello || ''}`;
       if (visti.has(chiave)) return false;
       visti.add(chiave);
@@ -377,7 +453,7 @@ const handleLogin = async (e: React.FormEvent) => {
       const tB = dataItalianaTs(b.dataAppello);
       return passataA ? tB - tA : tA - tB;
     });
-  }, [data, docentiBookings]);
+  }, [data, docentiBookings, docentiTests]);
 
   // Per la home: solo le prenotazioni ancora future.
   const prossimePrenotazioni = useMemo(
@@ -392,6 +468,12 @@ const handleLogin = async (e: React.FormEvent) => {
   const cfuTotali = data?.cfuTotali ?? 180;
   const percCFU = Math.min(100, Math.round((Number(cfuConseguiti) / cfuTotali) * 100)) || 0;
   const listaEsami = useMemo<Esame[]>(() => (Array.isArray(data?.esami) ? data.esami : []), [data]);
+  const examCourseCodes = useMemo(
+    () => [...new Set(listaEsami
+      .map(exam => String(exam.codice || '').trim())
+      .filter(Boolean))],
+    [listaEsami]
+  );
 
   const esamiFiltrati = useMemo(() => {
     if (!searchExam.trim()) return listaEsami;
@@ -422,9 +504,17 @@ const handleLogin = async (e: React.FormEvent) => {
     () => prenotazioniFiltrate.filter(p => !appelliDisponibili.includes(p)),
     [prenotazioniFiltrate, appelliDisponibili]
   );
+  const testPrenotazioni = useMemo(
+    () => storicoPrenotazioni.filter(p => p.id?.startsWith('docenti-test-')),
+    [storicoPrenotazioni]
+  );
+  const storicoEsami = useMemo(
+    () => storicoPrenotazioni.filter(p => !p.id?.startsWith('docenti-test-')),
+    [storicoPrenotazioni]
+  );
 
   const pageBg =
-    'min-h-screen bg-[radial-gradient(ellipse_at_top,#0B3A6B_0%,#061426_45%,#030912_100%)] text-slate-100';
+    'app-shell min-h-screen bg-[radial-gradient(ellipse_at_top,#0B3A6B_0%,#061426_45%,#030912_100%)] text-slate-100';
 
   if (checkingSession) {
     return (
@@ -537,6 +627,7 @@ const handleLogin = async (e: React.FormEvent) => {
           </div>
         </div>
         <div className="flex shrink-0 gap-2">
+          <PinReveal pin={data?.pin} />
           <ThemeSwitch />
           <button onClick={refresh} disabled={loading} aria-label="Aggiorna carriera" title="Aggiorna carriera" className={GHOST_BTN}>
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
@@ -601,36 +692,36 @@ const handleLogin = async (e: React.FormEvent) => {
                   <h2 className={SECTION_TITLE}>
                     <User className="h-4 w-4 text-[#5AB0F0]" /> Profilo Studente
                   </h2>
-                  <div className={`${CARD} space-y-3 p-5`}>
+                  <div className={`${CARD} profile-card space-y-3 p-5`}>
                     <div className="flex items-center gap-2 border-b border-white/10 pb-3">
                       <ShieldCheck className="h-5 w-5 text-emerald-400 shrink-0" />
                       <div>
                         <p className="text-xs font-semibold text-emerald-400">Carriera Attiva</p>
-                        <p className="text-[11px] text-slate-400">Dati verificati con Segrepass</p>
+                        <p className="profile-secondary text-[11px] text-slate-400">Dati verificati con Segrepass</p>
                       </div>
                     </div>
                     <dl className="space-y-2 text-sm">
                       <div className="flex justify-between">
-                        <dt className="text-slate-400">Matricola</dt>
-                        <dd className="font-mono font-bold text-white">{matricola || '—'}</dd>
+                        <dt className="profile-label text-slate-400">Matricola</dt>
+                        <dd className="profile-value font-mono font-bold text-white">{matricola || '—'}</dd>
                       </div>
                       <div className="flex justify-between">
-                        <dt className="text-slate-400">Codice Corso</dt>
-                        <dd className="font-mono font-bold text-white">{codiceCorso || '—'}</dd>
+                        <dt className="profile-label text-slate-400">Codice Corso</dt>
+                        <dd className="profile-value font-mono font-bold text-white">{codiceCorso || '—'}</dd>
                       </div>
                       <div className="flex justify-between">
-                        <dt className="text-slate-400">Anno di Corso</dt>
-                        <dd className="font-semibold text-white">
+                        <dt className="profile-label text-slate-400">Anno di Corso</dt>
+                        <dd className="profile-value font-semibold text-white">
                           {annoCorso ? `${annoCorso}° Anno` : '—'}
                         </dd>
                       </div>
                       <div className="flex justify-between">
-                        <dt className="text-slate-400">Coorte</dt>
-                        <dd className="font-semibold text-white">{coorte}</dd>
+                        <dt className="profile-label text-slate-400">Coorte</dt>
+                        <dd className="profile-value font-semibold text-white">{coorte}</dd>
                       </div>
                       <div className="flex justify-between">
-                        <dt className="text-slate-400">Canale</dt>
-                        <dd className="font-semibold text-white">{canale}</dd>
+                        <dt className="profile-label text-slate-400">Canale</dt>
+                        <dd className="profile-value font-semibold text-white">{canale}</dd>
                       </div>
                     </dl>
                   </div>
@@ -640,38 +731,38 @@ const handleLogin = async (e: React.FormEvent) => {
                   <h2 className={SECTION_TITLE}>
                     <TrendingUp className="h-4 w-4 text-[#5AB0F0]" /> Metriche Carriera
                   </h2>
-                  <div className={`${CARD} overflow-hidden`}>
+                  <div className={`${CARD} metric-card overflow-hidden`}>
                     <div className="grid grid-cols-3 divide-x divide-white/10">
                       <div className="space-y-1 p-4">
-                        <p className="flex items-center gap-1.5 text-xs text-slate-400">
+                        <p className="metric-label flex items-center gap-1.5 text-xs text-slate-400">
                           <Award className="h-3.5 w-3.5 text-[#5AB0F0]" /> Media Ponderata
                         </p>
-                        <p className="text-2xl font-bold text-[#5AB0F0]">{mediaPond}</p>
-                        <p className="text-[11px] text-slate-500">Aritmetica: {mediaArit}</p>
+                        <p className="metric-value metric-average text-2xl font-bold text-[#5AB0F0]">{mediaPond}</p>
+                        <p className="metric-secondary text-[11px] text-slate-500">Aritmetica: {mediaArit}</p>
                       </div>
                       <div className="space-y-1 p-4">
-                        <p className="flex items-center gap-1.5 text-xs text-slate-400">
+                        <p className="metric-label flex items-center gap-1.5 text-xs text-slate-400">
                           <GraduationCap className="h-3.5 w-3.5 text-[#B9A2F5]" /> Base Laurea
                         </p>
-                        <p className="text-2xl font-bold text-[#B9A2F5]">
+                        <p className="metric-value metric-degree text-2xl font-bold text-[#B9A2F5]">
                           {baseLaurea}
-                          <span className="text-sm font-normal text-slate-500">/110</span>
+                          <span className="metric-secondary text-sm font-normal text-slate-500">/110</span>
                         </p>
                       </div>
                       <div className="space-y-1 p-4">
-                        <p className="flex items-center gap-1.5 text-xs text-slate-400">
+                        <p className="metric-label flex items-center gap-1.5 text-xs text-slate-400">
                           <BookOpen className="h-3.5 w-3.5 text-[#E0B25A]" /> CFU Acquisiti
                         </p>
-                        <p className="text-2xl font-bold text-[#E0B25A]">
+                        <p className="metric-value metric-credits text-2xl font-bold text-[#E0B25A]">
                           {cfuConseguiti}
-                          <span className="text-sm font-normal text-slate-500"> /{cfuTotali}</span>
+                          <span className="metric-secondary text-sm font-normal text-slate-500"> /{cfuTotali}</span>
                         </p>
                       </div>
                     </div>
                     <div className="space-y-2 border-t border-white/10 p-4">
-                      <div className="flex justify-between text-xs text-slate-400">
+                      <div className="metric-label flex justify-between text-xs text-slate-400">
                         <span>Progresso Laurea</span>
-                        <span className="font-semibold text-white">{percCFU}%</span>
+                        <span className="metric-value font-semibold text-white">{percCFU}%</span>
                       </div>
                       <div
                         role="progressbar"
@@ -679,7 +770,7 @@ const handleLogin = async (e: React.FormEvent) => {
                         aria-valuemin={0}
                         aria-valuemax={100}
                         aria-label="Progresso laurea"
-                        className="h-2.5 w-full overflow-hidden rounded-full bg-white/10"
+                        className="metric-progress h-2.5 w-full overflow-hidden rounded-full bg-white/10"
                       >
                         <div
                           className="h-full rounded-full bg-gradient-to-r from-[#2F7FD0] via-[#5AD0E8] to-emerald-400 transition-all duration-500"
@@ -690,6 +781,48 @@ const handleLogin = async (e: React.FormEvent) => {
                   </div>
                 </section>
               </div>
+
+              <section>
+                <div className="flex items-center justify-between">
+                  <h2 className={SECTION_TITLE}>
+                    <CalendarDays className="h-4 w-4 text-[#5AB0F0]" /> Prossima lezione
+                  </h2>
+                  <button onClick={() => setActiveView('timetable')} className="mb-3 text-xs font-semibold text-[#5AB0F0] hover:underline flex items-center gap-1">
+                    Orario completo <ChevronRight className="h-3.5 w-3.5" />
+                  </button>
+                </div>
+                {timetableLoading && !prossimoGiorno ? (
+                  <div className={`${CARD} p-4 text-xs text-slate-400`}>Caricamento orario in corso…</div>
+                ) : timetableError && !prossimoGiorno ? (
+                  <div className={`${CARD} p-4 text-xs text-amber-200`}>{timetableError}</div>
+                ) : !prossimoGiorno ? (
+                  <div className={`${CARD} p-4 text-xs text-slate-400`}>Nessuna lezione in calendario.</div>
+                ) : (
+                  <div className={`${CARD} p-4 space-y-3 border-l-4 border-l-[#3B7BC4]`}>
+                    <p className="text-sm font-bold text-white">
+                      {prossimoGiorno.oggi ? `Oggi · ${formatGiornoLungo(prossimoGiorno.data)}` : formatGiornoLungo(prossimoGiorno.data)}
+                    </p>
+                    <ul className="divide-y divide-white/10">
+                      {prossimoGiorno.lezioni.map((e, idx) => (
+                        <li key={`${e.startTime}-${idx}`} className="grid gap-1 py-2 sm:grid-cols-[8rem_1fr_auto] sm:items-center">
+                          <span className="text-xs font-semibold text-[#5AB0F0]">
+                            {e.startTime}{e.endTime ? ` – ${e.endTime}` : ''}
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block truncate text-xs font-bold text-white">{e.courseName}</span>
+                            <span className="block truncate text-[11px] text-slate-300">
+                              {e.teachers?.length ? e.teachers.join(', ') : 'Docente non indicato'}
+                            </span>
+                          </span>
+                          <span className="text-[11px] text-slate-400">
+                            📍 {e.room || 'Aula non indicata'}{e.campus ? ` · ${e.campus}` : ''}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </section>
 
               <section>
                 <div className="flex items-center justify-between">
@@ -858,10 +991,25 @@ const handleLogin = async (e: React.FormEvent) => {
                     )}
                   </div>
 
-                  {storicoPrenotazioni.length > 0 && (
+                  {testPrenotazioni.length > 0 && (
+                    <div className="space-y-3">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-[#5AB0F0]">Test e prove Docenti</h3>
+                      {testPrenotazioni.map((p, idx) => (
+                        <div key={`test-${p.id ?? idx}`} className={`${CARD} space-y-1.5 p-3.5`}>
+                          <p className="text-sm font-semibold text-slate-100">{p.materia}</p>
+                          <p className="text-xs text-slate-400">
+                            {p.docente}{p.dataAppello ? ` · ${dataLeggibile(p.dataAppello)}` : ''}
+                          </p>
+                          {p.note && <p className="text-[11px] text-slate-500">{p.note}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {storicoEsami.length > 0 && (
                     <div className="space-y-3">
                       <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Storico Prenotazioni</h3>
-                      {storicoPrenotazioni.map((p, idx) => (
+                      {storicoEsami.map((p, idx) => (
                         <div
                           key={`st-${p.id ?? idx}`}
                           className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-white/5 bg-white/[0.03] p-3.5 opacity-60"
@@ -1068,7 +1216,15 @@ const handleLogin = async (e: React.FormEvent) => {
             </section>
           )}
 
-          {activeView === 'docenti' && <DocentiView token={token} />}
+          {activeView === 'docenti' && (
+            <DocentiView
+              token={token}
+              coursePrefix={codiceCorso || null}
+              courseCodes={examCourseCodes}
+              studentId={matricola}
+              planCourses={data?.pianoDiStudiRaw || []}
+            />
+          )}
           {activeView === 'plan' && profile && <StudyPlanView token={token} profile={profile} />}
           {activeView === 'timetable' && profile && <TimetableView token={token} profile={profile} />}
         </main>

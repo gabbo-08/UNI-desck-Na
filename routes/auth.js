@@ -15,7 +15,7 @@ const router = express.Router();
 function isConfigured(profile) {
   return Boolean(
     profile?.course_id && profile?.course_name && profile?.cohort_year &&
-    profile?.current_course_year && profile?.channel
+    profile?.current_course_year && (profile?.channel || profile?.surname_initial)
   );
 }
 
@@ -59,7 +59,7 @@ router.get('/session', authMiddleware, (req, res) => {
 
 router.post('/logout', (req, res) => {
   clearAuthCookie(res);
-  return res.json({ ok: true });
+  return res.status(204).send();
 });
 
 module.exports = router;

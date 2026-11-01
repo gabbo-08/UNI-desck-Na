@@ -1,22 +1,26 @@
 ﻿'use client';
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { Megaphone, BookOpenCheck, CalendarCheck, CalendarDays, MapPin, ExternalLink, RefreshCw, User, Search, Calendar } from 'lucide-react';
+import { Megaphone, BookOpenCheck, Users, ExternalLink, RefreshCw, User, Search, Calendar } from 'lucide-react';
 import {
-  fetchDocentiAnnouncements,
-  fetchDocentiSubscriptions,
-  fetchDocentiBookedExams,
+  fetchDocentiSummary,
   type DocenteAnnouncementGroup,
   type DocenteAnnouncementItem,
   type SubscriptionDocenti,
-  type BookedExamDocenti,
+  type GroupDocenti,
 } from '@/lib/api';
+import DocentePage from '@/components/DocentePage';
+import { filterTeacherSubscriptions } from '@/lib/teacher-filter';
 
 interface DocentiViewProps {
   token: string;
+  coursePrefix?: string | null;
+  courseCodes?: string[];
+  studentId?: string | null;
+  planCourses?: import('@/lib/api').PlanCourse[];
 }
 
-type Tab = 'announcements' | 'subscriptions' | 'bookedExams';
+type Tab = 'announcements' | 'subscriptions' | 'groups';
 
 const CARD =
   'rounded-2xl border border-[#3B7BC4]/30 bg-[#0A1B31]/75 shadow-[0_0_28px_-10px_rgba(70,150,230,0.55)] backdrop-blur-sm';
@@ -61,11 +65,12 @@ function stripTags(html?: string | null) {
   return html.replace(/<[^>]*>/g, '').trim();
 }
 
-export default function DocentiView({ token }: DocentiViewProps) {
+export default function DocentiView({ token, coursePrefix, courseCodes, studentId, planCourses = [] }: DocentiViewProps) {
   const [activeTab, setActiveTab] = useState<Tab>('announcements');
   const [announcements, setAnnouncements] = useState<DocenteAnnouncementGroup[]>([]);
   const [subscriptions, setSubscriptions] = useState<SubscriptionDocenti[]>([]);
-  const [bookedExams, setBookedExams] = useState<BookedExamDocenti[]>([]);
+  const [groups, setGroups] = useState<GroupDocenti[]>([]);
+  const [selectedProfessor, setSelectedProfessor] = useState<SubscriptionDocenti | null>(null);
   const [loading, setLoading] = useState(true);
   const [errors, setErrors] = useState<string[]>([]);
   const [search, setSearch] = useState('');
@@ -78,36 +83,31 @@ export default function DocentiView({ token }: DocentiViewProps) {
     };
   }, []);
 
-  // Una sola sincronizzazione: il backend condivide la stessa acquisizione tra
-  // le tre chiamate e un errore qui NON azzera la sessione globale.
+  // Una sola richiesta aggregata evita di ripetere il caricamento del portale.
   const loadData = useCallback(async () => {
     await Promise.resolve();
     if (!mounted.current) return;
     setLoading(true);
     setErrors([]);
 
-    const [ann, sub, exams] = await Promise.allSettled([
-      fetchDocentiAnnouncements(token),
-      fetchDocentiSubscriptions(token),
-      fetchDocentiBookedExams(token),
-    ]);
+    const result = await fetchDocentiSummary(token).then(value => ({ status: 'fulfilled' as const, value }))
+      .catch(reason => ({ status: 'rejected' as const, reason }));
 
     if (!mounted.current) return;
 
     const found: string[] = [];
 
-    if (ann.status === 'fulfilled') setAnnouncements(ann.value);
-    else found.push(readableError(ann.reason));
-
-    if (sub.status === 'fulfilled') setSubscriptions(sub.value);
-    else found.push(readableError(sub.reason));
-
-    if (exams.status === 'fulfilled') setBookedExams(exams.value);
-    else found.push(readableError(exams.reason));
+    if (result.status === 'fulfilled') {
+      setAnnouncements(result.value.announcements);
+      setSubscriptions(filterTeacherSubscriptions(result.value.subscriptions, planCourses));
+      setGroups(result.value.groups);
+    } else {
+      found.push(readableError(result.reason));
+    }
 
     setErrors([...new Set(found)]);
     setLoading(false);
-  }, [token]);
+  }, [planCourses, token]);
 
   useEffect(() => {
     if (!token) return;
@@ -164,8 +164,26 @@ export default function DocentiView({ token }: DocentiViewProps) {
   const tabs: { id: Tab; label: string; count: number; icon: typeof Megaphone }[] = [
     { id: 'announcements', label: 'Avvisi', count: totalAnnouncementsCount, icon: Megaphone },
     { id: 'subscriptions', label: 'Corsi seguiti', count: subscriptions.length, icon: BookOpenCheck },
-    { id: 'bookedExams', label: 'Prenotazioni', count: bookedExams.length, icon: CalendarCheck },
+    { id: 'groups', label: 'Gruppi', count: groups.length, icon: Users },
   ];
+
+  if (selectedProfessor) {
+    return (
+      <section className="space-y-4">
+        <button type="button" onClick={() => setSelectedProfessor(null)} className="text-sm text-sky-300 hover:text-sky-200">
+          ← Torna a Docenti
+        </button>
+        <DocentePage
+          token={token}
+          professorIdentifier={selectedProfessor.professorId || selectedProfessor.professor || ''}
+          coursePrefix={coursePrefix}
+          courseCodes={courseCodes}
+          studentId={studentId}
+          planCourses={planCourses}
+        />
+      </section>
+    );
+  }
 
   return (
     <section className="space-y-4">
@@ -294,7 +312,7 @@ export default function DocentiView({ token }: DocentiViewProps) {
             <div className={EMPTY}>Nessun corso iscritto trovato sul portale Docenti.</div>
           ) : (
             subscriptions.map((sub, idx) => (
-              <div key={idx} className={`${CARD} flex items-center justify-between gap-3 p-3.5`}>
+              <button key={idx} type="button" onClick={() => setSelectedProfessor(sub)} className={`${CARD} flex w-full items-center justify-between gap-3 p-3.5 text-left transition hover:border-[#5AB0F0]/60`}>
                 <div className="min-w-0 space-y-0.5">
                   <p className="truncate text-sm font-medium text-slate-100">{sub.courseName || 'Corso'}</p>
                   <p className="text-xs text-slate-400">
@@ -307,41 +325,28 @@ export default function DocentiView({ token }: DocentiViewProps) {
                     {sub.academicYear}
                   </span>
                 )}
-              </div>
+                <span className="shrink-0 rounded-lg bg-sky-500/15 px-2 py-1 text-[10px] font-semibold text-sky-300">Apri scheda</span>
+              </button>
             ))
           )}
         </div>
       )}
 
-      {!loading && activeTab === 'bookedExams' && (
+      {!loading && activeTab === 'groups' && (
         <div className="grid gap-2.5">
-          {bookedExams.length === 0 ? (
-            <div className={EMPTY}>Nessun esame attualmente prenotato.</div>
+          {groups.length === 0 ? (
+            <div className={EMPTY}>Nessun gruppo trovato sul portale Docenti.</div>
           ) : (
-            bookedExams.map((exam, idx) => (
-              <div key={idx} className={`space-y-1.5 rounded-2xl border bg-[#0A1B31]/75 p-3.5 ${exam.status === 'Passato' ? 'border-white/10' : 'border-emerald-700/40'}`}>
+            groups.map((group, idx) => (
+              <div key={idx} className={`${CARD} space-y-1.5 p-3.5`}>
                 <div className="flex items-center justify-between gap-2">
-                  <p className={`min-w-0 truncate text-sm font-medium ${exam.status === 'Passato' ? 'text-slate-300' : 'text-emerald-300'}`}>{exam.courseName || 'Esame'}</p>
-                  <span className={`shrink-0 rounded-md border px-2 py-0.5 text-[10px] font-bold ${exam.status === 'Passato' ? 'border-white/15 bg-white/5 text-slate-400' : 'border-emerald-700/60 bg-emerald-950/70 text-emerald-300'}`}>
-                    {exam.status || 'Prenotato'}
-                  </span>
+                  <p className="min-w-0 truncate text-sm font-medium text-slate-100">{group.name || 'Gruppo'}</p>
+                  {group.status && <span className="shrink-0 text-[10px] text-slate-400">{group.status}</span>}
                 </div>
                 <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
-                  {exam.examDate && (
-                    <span className="inline-flex items-center gap-1">
-                      <CalendarDays className="h-3.5 w-3.5" /> Data: <strong className="text-slate-200">{exam.examDate}</strong>
-                    </span>
-                  )}
-                  {exam.bookingDate && (
-                    <span className="inline-flex items-center gap-1">
-                      Prenotato il <strong className="text-slate-200">{exam.bookingDate}</strong>
-                    </span>
-                  )}
-                  {exam.location && (
-                    <span className="inline-flex items-center gap-1">
-                      <MapPin className="h-3.5 w-3.5" /> Aula: <strong className="text-slate-200">{exam.location}</strong>
-                    </span>
-                  )}
+                  {group.courseName && <span>Corso: <strong className="text-slate-200">{group.courseName}</strong></span>}
+                  {group.professor && <span>Docente: <strong className="text-slate-200">{group.professor}</strong></span>}
+                  {group.academicYear && <span>{group.academicYear}</span>}
                 </div>
               </div>
             ))

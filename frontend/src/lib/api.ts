@@ -1,3 +1,4 @@
+
 // src/lib/api.ts
 
 export type CredenzialiSegrepass = {
@@ -14,6 +15,52 @@ export type Anagrafica = {
   codiceCorso?: string;
   annoCorso?: number;
   annoImmatricolazione?: number;
+};
+
+export type ProfiloDocente = {
+  id: string;
+  nome: string;
+  ruolo?: string | null;
+  email?: string | null;
+  telefono?: string | null;
+  paginaWeb?: string | null;
+  fotoUrl?: string | null;
+};
+
+export type MaterialeDocente = {
+  id: string;
+  nome: string;
+  tipo: 'cartella' | 'file';
+  url?: string | null;
+  children?: MaterialeDocente[];
+  percorso?: string | null;
+};
+
+export type AppelloDocente = {
+  id: string;
+  insegnamento: string;
+  dataEsame: string;
+  inizioPrenotazione?: string | null;
+  finePrenotazione?: string | null;
+  prenotato: boolean;
+  courseCode?: string | null;
+};
+
+export type IscrizioneDocente = {
+  insegnamento: string;
+  iscritto: boolean;
+  courseCode?: string | null;
+};
+
+export type DettaglioDocente = {
+  profilo: ProfiloDocente;
+  materiali: {
+    pubblico: MaterialeDocente[];
+    ftp: MaterialeDocente[];
+    riservato: MaterialeDocente[];
+  };
+  appelli: AppelloDocente[];
+  iscrizioni: IscrizioneDocente[];
 };
 
 export type Esame = {
@@ -71,6 +118,8 @@ export type Prenotazione = {
 
 export type Metriche = {
   anagrafica?: Anagrafica;
+  pin?: string | null;
+  codiceNumericoPersonale?: string | null;
   esami?: Esame[];
   tasse?: TassaSnapshot;
   prenotazioni?: Prenotazione[];
@@ -79,6 +128,14 @@ export type Metriche = {
   baseLaurea?: string | number;
   cfuAcquisiti?: number;
   cfuTotali?: number;
+  pianoDiStudiRaw?: PlanCourse[];
+};
+
+export type GlobalUserState = {
+  token: string | null;
+  profile: ProfiloStudente | null;
+  metriche: Metriche | null;
+  pin: string | null;
 };
 
 export type ProfiloStudente = {
@@ -110,6 +167,7 @@ export type PlanCourse = {
   cfu: number;
   studyYear?: number;
   study_year?: number;
+  year?: number;
   semester?: number;
   courseType?: string;
   course_type?: string;
@@ -163,9 +221,9 @@ export type StudyPlan = {
 };
 
 export type TimetableFilters = {
-  studyYear: number;
-  semester: number | null;
-  channel: string;
+  studyYear?: number;
+  semester?: number | null;
+  channel?: string;
   academicYear?: string;
 };
 
@@ -190,6 +248,8 @@ export type Timetable = {
 export type TimetableResponse = {
   filters?: TimetableFilters;
   timetable: Timetable;
+  fromCache?: boolean;
+  cachedAt?: number;
 };
 
 export type DocenteAnnouncementItem = {
@@ -210,6 +270,7 @@ export type DocenteAnnouncementGroup = {
 };
 
 export type SubscriptionDocenti = {
+  professorId?: string;
   courseName?: string;
   courseCode?: string;
   professor?: string;
@@ -219,10 +280,40 @@ export type SubscriptionDocenti = {
 
 export type BookedExamDocenti = {
   courseName?: string;
+  descrInse?: string;
+  professor?: string;
+  docente?: string;
+  cognomeDocente?: string;
   examDate?: string;
+  dataAppello?: string;
   bookingDate?: string;
   location?: string;
+  aula?: string;
   status?: string;
+};
+
+export type GroupDocenti = {
+  name?: string;
+  courseName?: string;
+  professor?: string;
+  academicYear?: string;
+  status?: string;
+};
+
+export type TestDocenti = {
+  name?: string;
+  courseName?: string;
+  group?: string;
+  date?: string;
+  status?: string;
+};
+
+export type DocentiSummary = {
+  announcements: DocenteAnnouncementGroup[];
+  subscriptions: SubscriptionDocenti[];
+  bookedExams: BookedExamDocenti[];
+  groups: GroupDocenti[];
+  tests: TestDocenti[];
 };
 
 export type ProfileUpdatePayload = {
@@ -359,40 +450,134 @@ export async function fetchCareerPlan(token: string): Promise<CareerPlan> {
   return fetchWithAuth(apiUrl('/api/career-plan'), token) as Promise<CareerPlan>;
 }
 
-export async function fetchTimetable(token: string, filters: TimetableFilters): Promise<TimetableResponse> {
-  const params = new URLSearchParams({
-    studyYear: String(filters.studyYear),
-    channel: filters.channel,
-    ...(filters.semester ? { semester: String(filters.semester) } : {}),
-    ...(filters.academicYear ? { academicYear: filters.academicYear } : {})
-  });
-  return fetchWithAuth(apiUrl(`/api/timetable?${params.toString()}`), token) as Promise<TimetableResponse>;
+export async function fetchTimetable(
+  token: string,
+  filters: TimetableFilters = {},
+  options: { refresh?: boolean } = {}
+): Promise<TimetableResponse> {
+  // Senza parametri il backend usa anno, canale e corso del profilo.
+  const params = new URLSearchParams();
+  if (filters.studyYear !== undefined) params.set('studyYear', String(filters.studyYear));
+  if (filters.semester) params.set('semester', String(filters.semester));
+  if (filters.channel) params.set('channel', filters.channel);
+  if (filters.academicYear) params.set('academicYear', filters.academicYear);
+  if (options.refresh) params.set('refresh', '1');
+
+  const query = params.toString();
+  return fetchWithAuth(apiUrl(`/api/timetable${query ? `?${query}` : ''}`), token) as Promise<TimetableResponse>;
 }
 
 /* ------------------------------------------------------------------ */
 /* WebDocenti                                                          */
 /* Le credenziali Docenti stanno nel JWT (cifrate): il frontend non    */
-/* invia mai la password. Il backend risponde { success, <campo> } e   */
-/* qui si estrae l'array corrispondente.                               */
+/* invia mai la password. Il backend risponde direttamente con l'array */
+/* o con l'oggetto.                                                    */
 /* ------------------------------------------------------------------ */
 
 export async function fetchDocentiAnnouncements(token: string): Promise<DocenteAnnouncementGroup[]> {
-  const res = (await fetchWithAuth(apiUrl('/api/docenti/announcements'), token)) as {
-    announcements?: DocenteAnnouncementGroup[];
-  };
-  return Array.isArray(res.announcements) ? res.announcements : [];
+  const res = await fetchWithAuth(apiUrl('/api/docenti/announcements'), token);
+  // Gestisce sia il ritorno diretto dell'array che il wrap nell'oggetto { announcements: [] }
+  if (Array.isArray(res)) return res;
+  return Array.isArray(res?.announcements) ? res.announcements : [];
 }
 
 export async function fetchDocentiSubscriptions(token: string): Promise<SubscriptionDocenti[]> {
-  const res = (await fetchWithAuth(apiUrl('/api/docenti/subscriptions'), token)) as {
-    subscriptions?: SubscriptionDocenti[];
-  };
-  return Array.isArray(res.subscriptions) ? res.subscriptions : [];
+  const res = await fetchWithAuth(apiUrl('/api/docenti/subscriptions'), token);
+  if (Array.isArray(res)) return res;
+  return Array.isArray(res?.subscriptions) ? res.subscriptions : [];
 }
 
 export async function fetchDocentiBookedExams(token: string): Promise<BookedExamDocenti[]> {
-  const res = (await fetchWithAuth(apiUrl('/api/docenti/booked-exams'), token)) as {
-    bookedExams?: BookedExamDocenti[];
-  };
-  return Array.isArray(res.bookedExams) ? res.bookedExams : [];
+  const res = await fetchWithAuth(apiUrl('/api/docenti/booked-exams'), token);
+  if (Array.isArray(res)) return res;
+  return Array.isArray(res?.bookedExams) ? res.bookedExams : [];
+}
+
+export async function fetchDocentiGroups(token: string): Promise<GroupDocenti[]> {
+  const res = await fetchWithAuth(apiUrl('/api/docenti/groups'), token);
+  if (Array.isArray(res)) return res;
+  return Array.isArray(res?.groups) ? res.groups : [];
+}
+
+export async function fetchDocentiTests(token: string): Promise<TestDocenti[]> {
+  const res = await fetchWithAuth(apiUrl('/api/docenti/tests'), token);
+  if (Array.isArray(res)) return res;
+  return Array.isArray(res?.tests) ? res.tests : [];
+}
+
+export async function fetchDocentiSummary(token: string): Promise<DocentiSummary> {
+  const cacheKey = `segrepass:docenti-summary:${token}`;
+  if (typeof window !== 'undefined') window.localStorage.removeItem('segrepass:docenti-summary');
+  const cached = typeof window !== 'undefined' ? window.localStorage.getItem(cacheKey) : null;
+  const parseSummary = (value: unknown): DocentiSummary => ({
+    announcements: Array.isArray((value as DocentiSummary)?.announcements) ? (value as DocentiSummary).announcements : [],
+    subscriptions: Array.isArray((value as DocentiSummary)?.subscriptions) ? (value as DocentiSummary).subscriptions : [],
+    bookedExams: Array.isArray((value as DocentiSummary)?.bookedExams) ? (value as DocentiSummary).bookedExams : [],
+    groups: Array.isArray((value as DocentiSummary)?.groups) ? (value as DocentiSummary).groups : [],
+    tests: Array.isArray((value as DocentiSummary)?.tests) ? (value as DocentiSummary).tests : []
+  });
+  if (cached) {
+    try {
+      const stale = parseSummary(JSON.parse(cached));
+      void fetchWithAuth(apiUrl('/api/docenti/summary'), token)
+        .then(value => {
+          if (typeof window !== 'undefined') window.localStorage.setItem(cacheKey, JSON.stringify(value));
+        })
+        .catch(() => undefined);
+      return stale;
+    } catch {
+      window.localStorage.removeItem(cacheKey);
+    }
+  }
+  const res = await fetchWithAuth(apiUrl('/api/docenti/summary'), token);
+  const summary = parseSummary(res);
+  if (typeof window !== 'undefined') window.localStorage.setItem(cacheKey, JSON.stringify(summary));
+  return summary;
+}
+
+export async function fetchTeacherDetail(
+  token: string,
+  professorIdentifier: string,
+  course?: string | null
+): Promise<DettaglioDocente> {
+  const query = course ? `?course=${encodeURIComponent(course)}` : '';
+  return fetchWithAuth(apiUrl(`/api/docenti/teacher/${encodeURIComponent(professorIdentifier)}${query}`), token) as Promise<DettaglioDocente>;
+}
+
+export async function fetchTeacherFolder(
+  token: string,
+  teacherId: string,
+  folderId: string,
+  section: 'areapubb' | 'aree-ftp' | 'arearis',
+  course?: string | null
+): Promise<unknown[]> {
+  const query = new URLSearchParams({ section });
+  if (course) query.set('course', course);
+  const res = await fetchWithAuth(
+    apiUrl(`/api/docenti/teacher/${encodeURIComponent(teacherId)}/folder/${encodeURIComponent(folderId)}?${query}`),
+    token
+  );
+  return Array.isArray(res?.items) ? res.items : [];
+}
+
+export async function fetchAllPrenotazioni(token: string): Promise<Prenotazione[]> {
+  // 1. Recupera le prenotazioni da Segrepass (tramite slow-data o metriche)
+  const slowData = await fetchSlowData(token).catch(() => null);
+  const prenotazioniSegrepass = slowData?.prenotazioni || [];
+
+  // 2. Recupera le prenotazioni da WebDocenti
+  const docentiExams = await fetchDocentiBookedExams(token).catch(() => []);
+
+  // 3. Mappa le prenotazioni di Docenti nel formato standard
+  const prenotazioniDocentiMappate: Prenotazione[] = docentiExams.map((exam, index) => ({
+    id: `docenti_${index}`,
+    materia: exam.courseName || 'Esame Docenti',
+    dataAppello: exam.examDate,
+    aula: exam.location,
+    docente: 'Da WebDocenti',
+    note: exam.status ? `Stato: ${exam.status}` : undefined
+  }));
+
+  // 4. Unisci le due liste
+  return [...prenotazioniSegrepass, ...prenotazioniDocentiMappate];
 }

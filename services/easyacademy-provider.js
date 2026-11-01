@@ -1,8 +1,10 @@
+
 const { queueScrapingTask } = require('../scraper/pool');
 const { normalizeCourseName, nameSimilarity } = require('../lib/matching');
 
 const AGENDA_URL = 'https://easyacademy.unina.it/agendastudenti/index.php?view=easycourse&_lang=it&include=corso';
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const CACHE_VERSION = 2;
 const timetableCache = new Map();
 const MONTHS = {
   gennaio: '01', febbraio: '02', marzo: '03', aprile: '04', maggio: '05', giugno: '06',
@@ -33,8 +35,9 @@ function parsePopupText(rawText) {
   const rawName = between('Nome insegnamento', 'Argomento lezione');
   const teacherText = between('Docenti', 'Data e Ora');
   const dateTime = between('Data e Ora', 'Aula').replace(/\s+/g, ' ').trim();
-  const room = (text.match(/Nome aula:\s*([\s\S]*?)(?=Capacità:|Sede:|Google Maps|$)/i)?.[1] || '').trim();
-  const campus = (text.match(/Sede:\s*([^\[]+)/i)?.[1] || '').trim();
+  const room = (text.match(/Nome aula:\s*([\s\S]*?)(?=Capacità:|Capienza:|Sede:|Google Maps|Percorso didattico|Numero eventi|$)/i)?.[1] || '').replace(/\s+/g, ' ').trim();
+  // La sede si ferma prima di: [indirizzo], Google Maps, Percorso didattico, Numero eventi.
+  const campus = (text.match(/Sede:\s*([\s\S]*?)(?=\[|Google Maps|Percorso didattico|Numero eventi|Capacità:|$)/i)?.[1] || '').replace(/\s+/g, ' ').trim();
   const coursePath = between('Percorso didattico', 'Numero eventi collegati').replace(/\s+/g, ' ').trim();
   const dateMatch = dateTime.match(/(?:\w+\s+)?(\d{1,2})\s+([a-zà-ù]+)\s+(\d{4})\s*(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})/i);
   const month = dateMatch ? MONTHS[normalizeLabel(dateMatch[2])] : null;
@@ -79,28 +82,46 @@ function extractGroupRange(text) {
 
 function matchesStudyGroup(optionText, channel, surnameInitial) {
   const normalizedOption = normalizeLabel(optionText);
-  const channelToken = normalizeLabel(String(channel || '').split(':').pop().replace(/corso generico/i, ''));
-  if (channelToken && normalizedOption.includes(channelToken)) return true;
-
   const channelPart = String(surnameInitial || channel || '').toUpperCase().split(':').pop();
   const initial = channelPart.match(/[A-Z]/)?.[0];
   const range = extractGroupRange(optionText);
-  return Boolean(initial && range && initial >= range.first && initial <= range.last);
+
+  // Quando il sito pubblica intervalli alfabetici, l'iniziale dello studente
+  // è più affidabile di un canale eventualmente ereditato dal profilo.
+  if (surnameInitial && initial && range) {
+    return range.first <= range.last
+      ? initial >= range.first && initial <= range.last
+      : initial >= range.first || initial <= range.last;
+  }
+
+  const channelToken = normalizeLabel(String(channel || '').split(':').pop().replace(/corso generico/i, ''));
+  if (channelToken && normalizedOption.includes(channelToken)) return true;
+
+  return Boolean(initial && range && (
+    range.first <= range.last
+      ? initial >= range.first && initial <= range.last
+      : initial >= range.first || initial <= range.last
+  ));
 }
 
 function selectStudyGroup(options, studyYear, channel, surnameInitial) {
-  const relevant = options.filter(option => new RegExp(`^\\s*${studyYear}\\s*[-–]`).test(option.text));
+  // Se EasyAcademy non riporta l'anno nel testo del gruppo, usa tutti i gruppi disponibili.
+  const withYear = options.filter(option => new RegExp(`^\\s*${studyYear}\\s*[-–]`).test(option.text));
+  const relevant = withYear.length > 0 ? withYear : options;
   const matches = relevant.filter(option => matchesStudyGroup(option.text, channel, surnameInitial));
   if (matches.length === 1) return matches[0];
   if (matches.length > 1) {
     const exact = matches.find(option => normalizeLabel(option.text).includes(normalizeLabel(channel || '')));
     if (exact) return exact;
   }
+  // Un solo gruppo disponibile per l'anno: è per forza quello dello studente.
+  if (matches.length === 0 && relevant.length === 1) return relevant[0];
   return null;
 }
 
 function cacheKey(filters) {
   return JSON.stringify({
+    version: CACHE_VERSION,
     courseId: filters.courseId,
     courseName: normalizeLabel(filters.courseName),
     academicYear: filters.academicYear,
@@ -150,6 +171,15 @@ async function scrapeTimetablePage(page, filters) {
       const expectedName = normalizeCourseName(String(courseName || '').replace(/\[[^\]]+\]/g, '').replace(/\bL-?\s*8\b/i, ''));
       for (const school of schools) {
         await page.select('#cdl_scuola', school);
+        
+        // Forza l'evento change per aggiornare i corsi dipendenti dalla struttura
+        await page.evaluate(() => {
+          const select = document.querySelector('#cdl_scuola');
+          if (select) {
+            select.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        });
+
         await page.waitForFunction(criteria => {
           const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
             .toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
@@ -157,6 +187,7 @@ async function scrapeTimetablePage(page, filters) {
             (criteria.courseId && option.value.toLowerCase() === criteria.courseId.toLowerCase()) ||
             (criteria.courseName && normalize(option.text).includes(criteria.courseName)));
         }, { timeout: 4000 }, { courseId, courseName: expectedName }).catch(() => {});
+
         courseOptions = await page.$$eval('#cdl_co option', options => options.map(option => ({ value: option.value, text: option.text.trim() })));
         course = getCourseOptions(courseOptions, { courseId, courseName, studyYear });
         if (course) break;
@@ -169,7 +200,16 @@ async function scrapeTimetablePage(page, filters) {
       .some(option => new RegExp(`^\\s*${year}\\s*[-–]`).test(option.text)), { timeout: 15000 }, studyYear);
     const groups = await page.$$eval('#cdl_a2_multi option', options => options.map(option => ({ value: option.value, text: option.text.trim() })));
     const group = selectStudyGroup(groups, studyYear, channel, surnameInitial);
-    if (!group) throw errorWithStatus('Canale non trovato per l’anno di corso scelto.', 400, 'STUDY_GROUP_NOT_FOUND');
+    if (!group) {
+      // Elenco dei gruppi reali: serve per capire quale canale usare per questo corso.
+      const available = groups.map(option => option.text.replace(/\s+/g, ' ').trim()).filter(Boolean);
+      console.warn(`[easyacademy] Canale "${channel}" non trovato per l'anno ${studyYear}. Gruppi: ${available.join(' | ')}`);
+      throw errorWithStatus(
+        `Canale "${channel}" non trovato per l’anno ${studyYear}. Gruppi disponibili: ${available.slice(0, 10).join('; ') || 'nessuno'}.`,
+        400,
+        'STUDY_GROUP_NOT_FOUND'
+      );
+    }
     await page.select('#cdl_a2_multi', group.value);
 
     if (semester !== null && semester !== undefined) {
@@ -198,7 +238,11 @@ async function scrapeTimetablePage(page, filters) {
       studyYear,
       semester: semester ?? null,
       channel: group.text,
-      events: events.map(event => ({ id: event.id, ...parsePopupText(event.text) })).filter(event => event.courseName)
+      events: events.map(event => ({
+        id: event.id,
+        ...parsePopupText(event.text),
+        selectedGroup: group.text
+      })).filter(event => event.courseName)
     };
     writeCache(key, result);
     return result;
@@ -214,8 +258,6 @@ async function getTimetable({ courseId, courseName, academicYear, studyYear, sem
   const cached = readCache(key);
   if (cached) return cached;
 
-  // EasyAcademy non richiede login: usa una pagina isolata del pool condiviso,
-  // così non si apre un secondo Chromium e non si esaurisce la memoria del server.
   return queueScrapingTask({}, page => scrapeTimetablePage(page, {
     courseId, courseName, academicYear, studyYear, semester, channel, surnameInitial, key
   }));
@@ -232,5 +274,6 @@ module.exports = {
   selectStudyGroup,
   matchesStudyGroup,
   clearTimetableCache,
-  CACHE_TTL_MS
+  CACHE_TTL_MS,
+  CACHE_VERSION
 };

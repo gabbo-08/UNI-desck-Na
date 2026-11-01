@@ -1,3 +1,4 @@
+
 // services/student-session.js
 const jwt = require('jsonwebtoken');
 const { getDatiCarriera } = require('../scraper/segrepass');
@@ -10,6 +11,7 @@ const { clearDocentiCache } = require('./docenti-cache');
 const dbModule = require('../db');
 const { upsertStudentProfile, getStudentProfile, getStudyPlan } = require('../db/repository');
 const { setCredentials } = require('../utils/sessionStore');
+const { clearDocentiRouteCache } = require('../routes/docenti');
 const { JWT_SECRET, JWT_TTL } = require('../lib/config');
 const { seal } = require('../lib/secret-box');
 
@@ -138,11 +140,13 @@ async function createStudentSession({ codiceFiscale, password, email } = {}, dep
   });
 
   snapshots.setCareerSnapshot(cfClean, esami);
+  snapshots.setPianoSnapshot(cfClean, datiCarriera.pianoDiStudiRaw || []);
   snapshots.setTaxesSnapshot(cfClean, tasse);
   // Ogni login invalida i dati Docenti precedenti e forza un refresh completo:
   // niente dati stale di sessioni precedenti, anche a parità di credenziali.
   snapshots.setDocentiSnapshot(cfClean, null);
   clearDocentiCache(cfClean);
+  clearDocentiRouteCache(cfClean);
   slowSync.resetSlowSync(cfClean);
 
   // Tasse e appelli partono in background: il login non li attende.

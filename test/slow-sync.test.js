@@ -1,10 +1,12 @@
+// test/slow-sync.test.js
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
   startSlowSync,
   ensureSlowSync,
   getSlowStatus,
-  resetSlowSync
+  resetSlowSync,
+  inFlight
 } = require('../services/slow-sync');
 const { getSlowSnapshot, getTaxesSnapshot, clearSnapshots } = require('../services/career-snapshots');
 
@@ -34,7 +36,8 @@ test('carica tasse e appelli in background e aggiorna lo stato', async t => {
   });
   assert.equal(status.state, 'loading');
 
-  await new Promise(resolve => setTimeout(resolve, 10));
+  if (inFlight.has(profileId)) await inFlight.get(profileId);
+  else await new Promise(resolve => setTimeout(resolve, 20));
 
   assert.equal(getSlowStatus(profileId).state, 'ready');
   assert.equal(getSlowSnapshot(profileId).prenotazioni.length, 1);
@@ -50,14 +53,16 @@ test('non avvia due job contemporanei per lo stesso studente', async t => {
   const deps = {
     getDatiCarriera: async () => {
       calls += 1;
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise(resolve => setTimeout(resolve, 50)); // Timeout aumentato per garantire l'overlap
       return slowPayload();
     }
   };
 
   startSlowSync(profileId, CREDENTIALS, deps);
   startSlowSync(profileId, CREDENTIALS, deps);
-  await new Promise(resolve => setTimeout(resolve, 20));
+  
+  if (inFlight.has(profileId)) await inFlight.get(profileId);
+  else await new Promise(resolve => setTimeout(resolve, 100)); // Aspetta abbondantemente la fine del job
 
   assert.equal(calls, 1);
   assert.equal(getSlowStatus(profileId).state, 'ready');
@@ -75,7 +80,8 @@ test('registra un errore stabile quando lo scraping lento fallisce', async t => 
     }
   });
 
-  await new Promise(resolve => setTimeout(resolve, 10));
+  if (inFlight.has(profileId)) await inFlight.get(profileId);
+  else await new Promise(resolve => setTimeout(resolve, 20));
 
   assert.equal(getSlowStatus(profileId).state, 'error');
   assert.equal(getSlowStatus(profileId).error, 'SLOW_TIMEOUT');
@@ -91,7 +97,10 @@ test('ensureSlowSync non riavvia se i dati sono già pronti', async t => {
   };
 
   startSlowSync(profileId, CREDENTIALS, deps);
-  await new Promise(resolve => setTimeout(resolve, 10));
+  
+  if (inFlight.has(profileId)) await inFlight.get(profileId);
+  else await new Promise(resolve => setTimeout(resolve, 20));
+  
   ensureSlowSync(profileId, CREDENTIALS, deps);
 
   assert.equal(calls, 1);
@@ -105,7 +114,10 @@ test('resetSlowSync riporta lo stato a idle e svuota lo snapshot', async t => {
   startSlowSync(profileId, CREDENTIALS, {
     getDatiCarriera: async () => slowPayload()
   });
-  await new Promise(resolve => setTimeout(resolve, 10));
+  
+  if (inFlight.has(profileId)) await inFlight.get(profileId);
+  else await new Promise(resolve => setTimeout(resolve, 20));
+  
   resetSlowSync(profileId);
 
   assert.equal(getSlowStatus(profileId).state, 'idle');

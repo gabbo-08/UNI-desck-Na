@@ -1,3 +1,4 @@
+
 // services/career-snapshots.js
 const TTL_MS = 12 * 60 * 60 * 1000; // 12 ore di validità per la sessione in memoria
 
@@ -6,6 +7,7 @@ const docentiSnapshots = new Map();
 const taxesSnapshots = new Map(); // Aggiunto store per le tasse
 const slowSnapshots = new Map(); // Tasse + appelli caricati in background
 const docentiLoading = new Set();
+const pianoSnapshots = new Map(); // piano di studi letto da Segrepass nell'ultimo login
 
 function prune(store) {
   const now = Date.now();
@@ -54,6 +56,16 @@ function getSlowSnapshot(profileId) {
   return readFresh(slowSnapshots, profileId);
 }
 
+// -- Piano di studi (letto da Segrepass) --
+function setPianoSnapshot(profileId, courses) {
+  prune(pianoSnapshots);
+  pianoSnapshots.set(profileId, { value: Array.isArray(courses) ? courses : [], storedAt: Date.now() });
+}
+
+function getPianoSnapshot(profileId) {
+  return readFresh(pianoSnapshots, profileId);
+}
+
 // -- Docenti --
 function setDocentiSnapshot(profileId, data) {
   prune(docentiSnapshots);
@@ -87,6 +99,8 @@ function clearSnapshots(profileId) {
 module.exports = {
   setCareerSnapshot,
   getCareerSnapshot,
+  setPianoSnapshot,
+  getPianoSnapshot,
   setTaxesSnapshot,
   getTaxesSnapshot,
   setSlowSnapshot,

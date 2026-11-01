@@ -94,7 +94,7 @@ export default function ProfileSetupView({ token, initialProfile, onSaved, onCan
   };
 
   return (
-    <section className="mx-auto w-full max-w-3xl space-y-5 text-zinc-100">
+    <section className="profile-setup mx-auto w-full max-w-3xl space-y-5 text-zinc-100">
       <header className="border-b border-zinc-800 pb-4">
         <p className="text-xs font-semibold uppercase text-sky-300">Profilo carriera</p>
         <h1 className="mt-1 text-2xl font-bold">Completa il tuo piano personale</h1>

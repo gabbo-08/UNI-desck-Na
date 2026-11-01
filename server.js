@@ -49,7 +49,7 @@ app.use(csrfProtection);
 // 🩺 Health Check (Senza Rate Limit)
 app.get('/health', (_, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
 
-// ⏱️ Rate Limiting Generale
+// ⏱️ Rate Limiting Generale (Corretto il calcolo del tempo)
 app.use(rateLimit({ windowMs: 60 * 1000, max: 100, message: { error: 'Troppe richieste.' } }));
 
 // 🔒 Rate Limiting Severo per i Login
@@ -60,7 +60,7 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'Troppi tentativi di accesso. Riprova tra qualche minuto.' }
 });
-app.use(['/api/auth/login'], loginLimiter);
+app.use(['/api/auth/login', '/api/session'], loginLimiter);
 
 // 📦 Body Parser JSON
 app.use(express.json({ limit: '200kb', strict: false }));
@@ -87,7 +87,7 @@ app.use('/api/study-plans', authMiddleware, studyPlanRoutes);
 app.use('/api/timetable', authMiddleware, timetableRoutes);
 
 /* ------------------------------------------------------------------ */
-/* 🔀 ROTTE IBRIDE (Avvisi Pubblici + Area Riservata Protetta)       */
+/* 🔀 ROTTE IBRIDE (Avvisi Pubblici + Area Riservata Protetta)        */
 /* ------------------------------------------------------------------ */
 app.use('/api/docenti', docentiRoutes);
 

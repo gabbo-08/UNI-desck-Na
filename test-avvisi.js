@@ -4,19 +4,21 @@ const { fetchAnnouncementsForProfessors } = require('./scraper/docenti');
 //   node test-avvisi.js                       → ultimi 3 avvisi di ogni docente, TESTO COMPLETO
 //   node test-avvisi.js "MARCO LOPS"          → solo quel docente
 //   node test-avvisi.js --tutti               → tutti gli avvisi (non solo gli ultimi 3)
-const DEFAULT_PROFESSORS = [
-  'DAVIDE MASSAROTTI',
-  'VALERIA VITTORINI',
-  'MARCO LOPS',
-  'OFELIA PISANTI',
-  'MATTIA BRESCIA'
-];
+const DEFAULT_PROFESSORS = String(process.env.DOCENTI_PROFESSORS || '')
+  .split(',')
+  .map(name => name.trim())
+  .filter(Boolean);
 
 const args = process.argv.slice(2);
 const showAll = args.includes('--tutti');
 const names = args.filter(a => !a.startsWith('--'));
 const professors = names.length ? names : DEFAULT_PROFESSORS;
 const LIMIT = showAll ? Infinity : 3;
+
+if (professors.length === 0) {
+  console.error('Indica almeno un docente come argomento o tramite DOCENTI_PROFESSORS.');
+  process.exit(1);
+}
 
 (async () => {
   const start = Date.now();

@@ -12,7 +12,10 @@ const {
 const router = express.Router();
 
 function isConfigured(profile) {
-  return Boolean(profile?.course_id && profile?.course_name && profile?.cohort_year && profile?.current_course_year && profile?.channel);
+  return Boolean(
+    profile?.course_id && profile?.course_name && profile?.cohort_year
+    && profile?.current_course_year && (profile?.channel || profile?.surname_initial)
+  );
 }
 
 function parseProfileUpdate(body) {

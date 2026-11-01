@@ -37,3 +37,11 @@ test('maps surname initials to EasyAcademy groups that vary by study year', () =
   assert.equal(selectStudyGroup(secondYear, 2, 'A-D', 'C').value, 'A-I|2');
   assert.equal(selectStudyGroup(secondYear, 2, 'A-DIL', 'T').value, 'J-Z|2');
 });
+
+test('preferisce il range alfabetico del corso al canale ereditato', () => {
+  const groups = [
+    { value: 'B-C|1', text: '1 - Cognomi B-C' },
+    { value: 'S-A|1', text: '1 - Cognomi S-A' }
+  ];
+  assert.equal(selectStudyGroup(groups, 1, 'P-Z', 'S').value, 'S-A|1');
+});

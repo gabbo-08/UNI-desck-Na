@@ -43,6 +43,7 @@ test('findPaymentTables distingue pagamenti effettuati e debiti', () => {
   assert.equal(result.paid.length, 1);
   assert.equal(result.pending.length, 1);
   assert.equal(result.paid[0].stato, 'PAGATO');
+  assert.equal(result.paid[0].dataPagamento, '10/10/2024');
   assert.equal(result.pending[0].stato, 'DA_PAGARE');
   assert.equal(result.summary.totalPaid, 156);
   assert.equal(result.summary.totalPending, 300);
@@ -53,6 +54,74 @@ test('buildTaxesSummary normalizza snapshot paid/pending e alias italiani', () =
   const summary = buildTaxesSummary({
     paid: [{ importo: '100' }, { importo: 25.5 }],
     inDebito: [{ importo: 10 }]
+  });
+
+  test('findPaymentTables riconosce la tabella reale dei versamenti effettuati', () => {
+    const result = findPaymentTables([
+      {
+        headers: ['Anno Accademico', 'Data', 'Codice', 'Descrizione', 'Importo', 'Origine', 'Iscrizioni'],
+        records: [
+          {
+            'Anno Accademico': '2026/2027',
+            Data: '01/09/2026',
+            Codice: 'P001',
+            Descrizione: 'ISCRIZIONE I RATA',
+            Importo: '€ 16,00',
+            Origine: 'Banca',
+            Iscrizioni: 'vedi'
+          }
+        ]
+      },
+      {
+        headers: ['Anno Accademico', 'Data Scadenza', 'Codice', 'Descrizione', 'Importo', 'Iscrizioni'],
+        records: [
+          {
+            'Anno Accademico': '2026/2027',
+            'Data Scadenza': '31/10/2026',
+            Codice: '7001',
+            Descrizione: 'CONTRIBUTO REGIONALE',
+            Importo: '€ 130,00',
+            Iscrizioni: 'vedi'
+          }
+        ]
+      }
+    ]);
+
+    assert.equal(result.paid.length, 1);
+    assert.equal(result.paid[0].dataPagamento, '01/09/2026');
+    assert.equal(result.pending.length, 1);
+    assert.equal(result.pending[0].stato, 'DA_PAGARE');
+  });
+
+  test('findPaymentTables elimina righe duplicate provenienti da pagine ESIS ripetute', () => {
+    const table = {
+      headers: ['Anno Accademico', 'Data', 'Codice', 'Descrizione', 'Importo', 'Origine'],
+      records: [{
+        'Anno Accademico': '2026/2027',
+        Data: '01/09/2026',
+        Codice: 'P001',
+        Descrizione: 'ISCRIZIONE I RATA',
+        Importo: '€ 16,00',
+        Origine: 'Banca'
+      }]
+    };
+    const result = findPaymentTables([table, table]);
+    assert.equal(result.paid.length, 1);
+    assert.equal(result.summary.totalPaid, 16);
+  });
+
+  test('findPaymentTables ignora tabelle generiche con importo ma senza dati di pagamento', () => {
+    const result = findPaymentTables([
+      {
+        headers: ['Importo', 'Descrizione'],
+        records: [
+          { Importo: '130,00', Descrizione: '' },
+          { Importo: '218,00', Descrizione: 'Contributo generico' }
+        ]
+      }
+    ]);
+    assert.equal(result.paid.length, 0);
+    assert.equal(result.pending.length, 0);
   });
 
   assert.equal(summary.paid.length, 2);

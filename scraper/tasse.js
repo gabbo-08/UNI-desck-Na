@@ -15,40 +15,27 @@ async function scrapeTasse(context, esisUrl) {
     const urlObj = new URL(page.url());
     const baseUrl = urlObj.origin;
 
-    console.log('[tasse] Navigazione specifica su "Pagamenti in debito"...');
-    
-    // Tentativo di navigazione diretta alla voce di menu "Pagamenti in debito"
-    await page.goto(`${baseUrl}/esis/caricaMenu.do?azione=pagamentiDebito&currentParent=link_15`, {
+    console.log('[tasse] Lettura URL ufficiali versamenti e debiti...');
+
+    const versamentiUrl = `${baseUrl}/esis/caricaMenu.do?azione=versamenti&currentParent=link_1`;
+    const debitiUrl = `${baseUrl}/esis/caricaMenu.do?azione=debiti&currentParent=link_1`;
+
+    await page.goto(versamentiUrl, {
       waitUntil: 'domcontentloaded',
       timeout: 15000
-    }).catch(async () => {
-      // Fallback: ricerca ed esecuzione del click sul link "Pagamenti in debito" nel menu laterale
-      console.log('[tasse] Fallback: ricerca click su "Pagamenti in debito"...');
-      for (const frame of page.frames()) {
-        const clicked = await frame.evaluate(() => {
-          const links = Array.from(document.querySelectorAll('a'));
-          const linkDebito = links.find(a => 
-            (a.innerText || '').toLowerCase().includes('pagamenti in debito') ||
-            (a.href || '').includes('azione=pagamentiDebito')
-          );
-          if (linkDebito) {
-            linkDebito.click();
-            return true;
-          }
-          return false;
-        });
-        if (clicked) break;
-      }
     });
+    const paymentTables = await extractTables(page);
 
-    // Verifica presenza del messaggio di assenza debiti
-    const pageText = await page.evaluate(() => document.body.innerText || '').catch(() => '');
-    if (pageText.includes('Non risultano pagamenti da effettuare')) {
-      console.log('[tasse] ✅ Riscontro ESIS: Nessun pagamento in debito da effettuare.');
-    }
+    await page.goto(debitiUrl, {
+      waitUntil: 'domcontentloaded',
+      timeout: 15000
+    });
+    const debtTables = await extractTables(page);
 
-    // Estrazione tabelle da tutti i frame
-    const tables = await extractTables(page);
+    const tables = [
+      ...paymentTables.map(table => ({ ...table, source: 'versamenti' })),
+      ...debtTables.map(table => ({ ...table, source: 'debiti' }))
+    ];
 
     if (DEBUG) {
       console.log(`\n--- [DEBUG TASSE] TABELLE GREZZE: ${tables ? tables.length : 0} ---`);

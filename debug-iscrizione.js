@@ -1,8 +1,13 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 
-const USERNAME = process.env.UNINA_USER || 'gabr.cacace@studenti.unina.it';
-const PASSWORD = process.env.UNINA_PASS || 'mas801@A';
+const USERNAME = process.env.UNINA_USER;
+const PASSWORD = process.env.UNINA_PASS;
+
+if (!USERNAME || !PASSWORD) {
+  console.error('Credenziali mancanti: imposta UNINA_USER e UNINA_PASS.');
+  process.exit(1);
+}
 
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 

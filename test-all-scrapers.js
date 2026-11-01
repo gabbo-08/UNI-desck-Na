@@ -7,12 +7,17 @@ const { initCluster, closeCluster } = require('./scraper/pool');
 const { getDatiCarriera } = require('./scraper/segrepass');
 const { getDocentiData, fetchAnnouncementsForProfessors } = require('./scraper/docenti');
 
-// Credenziali di test
+// Impostare le credenziali nell'ambiente prima di eseguire lo script.
 const USER_CREDENTIALS = {
-  codiceFiscale: process.env.UNINA_CF || 'GABR.CACACE@STUDENTI.UNINA.IT',
-  username: process.env.UNINA_USER || 'gabr.cacace@studenti.unina.it',
-  password: process.env.UNINA_PASS || 'mas801@A'
+  codiceFiscale: process.env.UNINA_CF,
+  username: process.env.UNINA_USER,
+  password: process.env.UNINA_PASS
 };
+
+if (!USER_CREDENTIALS.codiceFiscale || !USER_CREDENTIALS.username || !USER_CREDENTIALS.password) {
+  console.error('Credenziali mancanti: imposta UNINA_CF, UNINA_USER e UNINA_PASS.');
+  process.exit(1);
+}
 
 async function runDiagnosticTest() {
   console.log('======================================================================');
