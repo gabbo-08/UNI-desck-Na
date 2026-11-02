@@ -150,10 +150,10 @@ Build Command: npm run build:render
 Start Command: npm start
 ```
 
-`build:render` installa esplicitamente Chrome per Puppeteer tramite Node.
-L'invocazione diretta evita problemi di permessi dell'eseguibile `npx` su
-alcuni ambienti Linux. Senza questo passaggio il servizio può terminare con
-l'errore `Could not find Chrome`.
+`build:render` installa esplicitamente Chrome per Puppeteer tramite il percorso
+CLI della versione installata. L'invocazione diretta tramite Node evita
+problemi di permessi dell'eseguibile `npx` su alcuni ambienti Linux. Senza
+questo passaggio il servizio può terminare con l'errore `Could not find Chrome`.
 
 Frontend:
 
