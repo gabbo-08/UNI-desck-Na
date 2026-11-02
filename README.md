@@ -143,6 +143,16 @@ Backend:
 npm start
 ```
 
+Su Render impostare:
+
+```text
+Build Command: npm run build:render
+Start Command: npm start
+```
+
+`build:render` installa esplicitamente Chrome per Puppeteer. Senza questo
+passaggio il servizio può terminare con l'errore `Could not find Chrome`.
+
 Frontend:
 
 ```powershell
