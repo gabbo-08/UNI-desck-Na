@@ -5,6 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "start:render": "node node_modules/puppeteer/lib/puppeteer/node/cli.js browsers install chrome && node server.js",
     "dev": "node --watch server.js",
     "build:render": "npm install && node node_modules/puppeteer/lib/puppeteer/node/cli.js browsers install chrome",
     "test": "node --test \"test/*.test.js\"",
