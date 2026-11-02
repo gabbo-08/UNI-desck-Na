@@ -1,6 +1,5 @@
 require('dotenv').config();
 
-const isProduction = process.env.NODE_ENV === 'production';
 const checks = [];
 
 function check(name, ok, message) {
@@ -9,6 +8,8 @@ function check(name, ok, message) {
 
 check('JWT_SECRET', Boolean(process.env.JWT_SECRET && process.env.JWT_SECRET.trim().length >= 32),
   'obbligatorio e deve contenere almeno 32 caratteri');
+check('CRED_KEY', /^[0-9a-fA-F]{64}$/.test(process.env.CRED_KEY || ''),
+  'obbligatoria in formato esadecimale di 32 byte (64 caratteri)');
 
 const username = process.env.DOCENTI_USERNAME || '';
 const password = process.env.DOCENTI_PASSWORD || '';

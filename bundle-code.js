@@ -3,7 +3,7 @@ const path = require('path');
 
 const outputFile = 'tutto_il_progetto.txt';
 const excludeDirs = ['node_modules', '.next', '.git', 'dist', 'build', 'coverage'];
-const includeExtensions = ['.js', '.ts', '.tsx', '.json', '.env'];
+const includeExtensions = ['.js', '.ts', '.tsx', '.json'];
 
 let outputContent = '';
 
@@ -19,7 +19,7 @@ function walkDir(dir) {
       }
     } else {
       const ext = path.extname(file);
-      if (includeExtensions.includes(ext) || file === '.env') {
+      if (includeExtensions.includes(ext) && !file.startsWith('.env')) {
         const relativePath = path.relative(process.cwd(), fullPath);
         try {
           const content = fs.readFileSync(fullPath, 'utf8');
