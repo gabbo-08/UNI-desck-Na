@@ -123,3 +123,28 @@ test('resetSlowSync riporta lo stato a idle e svuota lo snapshot', async t => {
   assert.equal(getSlowStatus(profileId).state, 'idle');
   assert.equal(getSlowSnapshot(profileId), null);
 });
+
+test('resetSlowSync impedisce a un job precedente di sovrascrivere il nuovo login', async t => {
+  const profileId = 'slow-sync-profile-race';
+  t.after(() => clearSnapshots(profileId));
+
+  let releaseOld;
+  const oldJob = new Promise(resolve => { releaseOld = resolve; });
+  const old = startSlowSync(profileId, CREDENTIALS, {
+    getDatiCarriera: async () => {
+      await oldJob;
+      return { tasse: { marker: 'old' }, prenotazioni: [] };
+    }
+  });
+  assert.equal(old.state, 'loading');
+
+  resetSlowSync(profileId);
+  startSlowSync(profileId, CREDENTIALS, {
+    getDatiCarriera: async () => ({ tasse: { marker: 'new' }, prenotazioni: [] })
+  });
+  await inFlight.get(profileId);
+  releaseOld();
+  await new Promise(resolve => setImmediate(resolve));
+
+  assert.equal(getSlowSnapshot(profileId).taxes.marker, 'new');
+});

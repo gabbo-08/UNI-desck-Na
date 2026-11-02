@@ -66,7 +66,7 @@ function professorName(item) {
   const full = `${nome} ${cognome}`.trim();
   if (full && full !== PLACEHOLDER_PROFESSOR) return full;
 
-  const d = item?.docente ?? item?.professore ?? item?.titolare;
+  const d = item?.docente ?? item?.professore ?? item?.titolare ?? item?.teacher;
   if (d && typeof d === 'object') {
     const fullObj = `${d.nome || ''} ${d.cognome || ''}`.trim();
     if (fullObj) return fullObj;
@@ -79,7 +79,7 @@ function professorName(item) {
 function courseNameOf(item) {
   const raw = pick(item, [
     'descrInse', 'nomeInse', 'nomeInsegnamento', 'insegnamento', 'denominazioneInsegnamento',
-    'denominazione', 'materia', 'nome', 'descrizione'
+    'denominazione', 'materia', 'nome', 'descrizione', 'courseName', 'course_name'
   ], PLACEHOLDER_COURSE);
   if (raw && typeof raw === 'object') {
     return pick(raw, ['nome', 'denominazione', 'descrizione'], PLACEHOLDER_COURSE);
@@ -118,14 +118,32 @@ function dedupe(list, keyFn) {
 /* ------------------------------------------------------------------ */
 
 function mapSubscription(item) {
+  const nestedTeacher = [item?.docente, item?.professore, item?.teacher, item?.titolare]
+    .find(value => value && typeof value === 'object') || {};
+  const nestedCourse = [item?.insegnamento, item?.course, item?.materia]
+    .find(value => value && typeof value === 'object') || {};
   return {
-    professorId: String(pick(item, ['idDocente', 'id_docente', 'professorId'], '')),
+    professorId: String(pick(item, [
+      'idDocente', 'id_docente', 'professorId', 'professor_id', 'docenteId',
+      'idProfessore', 'idDocenteWeb', 'teacherId', 'idTeacher'
+    ], pick(nestedTeacher, ['id', 'idDocente', 'id_docente', 'teacherId'], ''))),
     courseName: courseNameOf(item),
-    courseCode: String(pick(item, ['codInse', 'codiceInsegnamento', 'codInsegnamento', 'cod', 'codice'])),
-    academicYear: String(pick(item, ['annoAccademico', 'aa', 'anno', 'annoBd'], '')),
+    courseCode: String(pick(item, [
+      'codInse', 'codiceInsegnamento', 'codInsegnamento', 'courseCode',
+      'course_code', 'codiceCorso', 'codCorso', 'cod', 'codice'
+    ], pick(nestedCourse, ['codInse', 'codice', 'courseCode', 'code'], ''))),
+    academicYear: String(pick(item, ['annoAccademico', 'anno_accademico', 'academicYear', 'aa', 'anno', 'annoBd'], '')),
     professor: professorName(item),
-    section: String(pick(item, ['canale', 'sezione'], ''))
+    section: String(pick(item, ['canale', 'sezione', 'section', 'channel'], ''))
   };
+}
+
+function isUsableSubscription(subscription) {
+  return Boolean(
+    subscription.courseCode ||
+    (subscription.courseName && subscription.courseName !== PLACEHOLDER_COURSE) ||
+    (subscription.professor && subscription.professor !== PLACEHOLDER_PROFESSOR)
+  );
 }
 
 function mapTeacherDetail(teacher, teachings = [], materials = {}, exams = [], options = {}) {
@@ -183,7 +201,7 @@ function mapTeacherDetail(teacher, teachings = [], materials = {}, exams = [], o
     : absoluteDocentiUrl(photoValue);
   return {
     profilo: {
-      id: String(teacher?.id || ''),
+      id: String(pick(teacher, ['id', 'idDocente', 'id_docente', 'professorId'], '')),
       nome: `${teacher?.nome || ''} ${teacher?.cognome || ''}`.trim() || 'Docente',
       ruolo: (() => {
         const value = pick(teacher, ['ruolo', 'role', 'qualifica'], null);
@@ -209,7 +227,7 @@ function mapTeacherDetail(teacher, teachings = [], materials = {}, exams = [], o
 }
 
 async function fetchTeacherDetail(professor, dependencies = {}) {
-  const fetchJson = dependencies.fetchJson || fetchDocentiJson;
+  const fetchJson = dependencies.fetchJson || (path => fetchDocentiJson(path, dependencies));
   const teacher = typeof professor === 'object' && professor?.id
     ? professor
     : await findTeacher(String(professor || ''), { fetchJson });
@@ -263,13 +281,23 @@ async function fetchTeacherDetail(professor, dependencies = {}) {
     loadFolderContents(riservato, 'arearis')
   ]);
 
+  const mergedTeacher = {
+    ...teacher,
+    ...(detail && typeof detail === 'object' ? detail : {})
+  };
+  const profilePhoto = pick(mergedTeacher, [
+    'fotoUrl', 'foto', 'photoUrl', 'avatarUrl', 'immagine', 'fotoDocente', 'immagineProfilo'
+  ], null);
+  const profilePhotoUrl = typeof profilePhoto === 'object'
+    ? absoluteDocentiUrl(pick(profilePhoto, ['url', 'href', 'src'], null))
+    : absoluteDocentiUrl(profilePhoto);
+
   return mapTeacherDetail(
     {
-      ...teacher,
-      ...(detail && typeof detail === 'object' ? detail : {}),
+      ...mergedTeacher,
       fotoUrl: photo?.buffer
         ? `data:${photo.contentType};base64,${photo.buffer.toString('base64')}`
-        : photo?.url || photo?.src || null
+        : photo?.url || photo?.src || profilePhotoUrl
     },
     toArray(teachings),
     { pubblico: publicContents || [], ftp: ftpContents || [], riservato: privateContents || [] },
@@ -282,11 +310,13 @@ async function fetchTeacherPhoto(teacherId, dependencies = {}) {
   if (dependencies.fetchPhoto) return dependencies.fetchPhoto(teacherId);
   if (dependencies.fetchJson) return null;
   try {
+    const cookie = portalCookieHeader(dependencies.sessionKey);
     const response = await fetch(`${DOCENTI_API}/docenti/${encodeURIComponent(teacherId)}/foto`, {
       headers: {
         Accept: 'image/*',
         Referer: `${DOCENTI_ORIGIN}/`,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        ...(cookie ? { Cookie: cookie } : {})
       },
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
     });
@@ -301,7 +331,7 @@ async function fetchTeacherPhoto(teacherId, dependencies = {}) {
 }
 
 async function fetchTeacherFolder(teacherId, folderId, section, coursePrefix, dependencies = {}) {
-  const fetchJson = dependencies.fetchJson || fetchDocentiJson;
+  const fetchJson = dependencies.fetchJson || (path => fetchDocentiJson(path, dependencies));
   const codes = String(coursePrefix || '').split(',').map(value => value.trim()).filter(Boolean);
   const responses = await Promise.all((codes.length ? codes : ['']).map(code =>
     fetchJson(`/docenti/${encodeURIComponent(teacherId)}/materiale-didattico/${encodeURIComponent(section)}/${encodeURIComponent(folderId)}?codIns=${encodeURIComponent(code)}`)
@@ -334,13 +364,99 @@ function mapDocentiGroup(item) {
 }
 
 function mapDocentiTest(item) {
+  const nestedCourse = [item?.insegnamento, item?.materia, item?.course]
+    .find(value => value && typeof value === 'object') || {};
+  const nestedTeacher = [item?.docente, item?.professore, item?.teacher]
+    .find(value => value && typeof value === 'object') || {};
+  const name = pick(item, [
+    'titoloTest', 'nomeTest', 'testName', 'test_name', 'descrizioneTest',
+    'Test', 'test', 'Prova', 'Nome test', 'Titolo', 'title', 'nome'
+  ], '');
+  const courseName = pick(item, [
+    'nomeInsegnamento', 'nomeInse', 'insegnamentoNome', 'courseName',
+    'course_name', 'materiaNome', 'Insegnamento', 'Materia', 'descrInse', 'nomeInse'
+  ], pick(nestedCourse, ['nome', 'denominazione', 'descrizione', 'name'], ''));
+  const teacher = pick(item, [
+    'nomeDocente', 'docenteNome', 'professorName', 'teacherName', 'Docente'
+  ], '');
+  const professor = teacher || (
+    typeof nestedTeacher === 'object'
+      ? `${nestedTeacher.nome || ''} ${nestedTeacher.cognome || ''}`.trim()
+      : ''
+  );
   return {
-    name: String(pick(item, ['Test', 'test', 'Prova', 'Nome test', 'Titolo'], '')),
-    courseName: courseNameOf(item),
+    name: String(name),
+    courseName: String(courseName),
+    professor: String(professor),
     group: String(pick(item, ['Gruppo', 'gruppo', 'group'], '')),
     date: formatDocenteDate(pick(item, ['Data Test', 'Data prova', 'dataTest', 'data'], '')),
     status: String(pick(item, ['Stato test', 'Stato', 'status'], ''))
   };
+}
+
+function isUsableDocentiTest(test) {
+  return Boolean(
+    test.name &&
+    !/^(test|insegnamento|non specificato|—)$/i.test(test.name.trim())
+  );
+}
+
+function normalizeCollectedTest(test, subscription) {
+  const genericName = /^(test|prova|insegnamento|—)$/i.test(String(test.name || '').trim());
+  const candidateTitle = genericName && test.courseName && test.courseName !== PLACEHOLDER_COURSE
+    ? test.courseName
+    : test.name;
+  const sameAsTitle = String(test.professor || '').trim().toLowerCase() === String(candidateTitle || '').trim().toLowerCase();
+  return {
+    ...test,
+    name: String(candidateTitle || '').trim(),
+    courseName: genericName ? subscription.courseName : (test.courseName || subscription.courseName),
+    professor: !test.professor || test.professor === PLACEHOLDER_PROFESSOR || sameAsTitle
+      ? subscription.professor
+      : test.professor
+  };
+}
+
+async function collectTeacherTests(page, subscriptions, extractTables) {
+  const teachers = new Map(
+    subscriptions
+      .filter(item => item.professorId && item.professorId !== 'undefined')
+      .map(item => [String(item.professorId), item])
+  );
+  const collected = [];
+
+  for (const [teacherId, subscription] of teachers) {
+    const url = `${DOCENTI_ORIGIN}/teacher/${encodeURIComponent(teacherId)}/didactics/signin-groups`;
+    const api = startApiCollector(page);
+    try {
+      await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+      await sleep(1500);
+      await api.settle();
+
+      const tables = await extractTables(page).catch(() => []);
+      const fromTables = normalizeDocentiTables(tables);
+      const jsonTests = api.findAll(/\/(?:test|prove|prova|signin-groups)/i).flatMap(toArray);
+      const source = [
+        ...fromTables.tests,
+        ...jsonTests.map(mapDocentiTest)
+      ];
+
+      for (const rawTest of source.filter(isUsableDocentiTest)) {
+        const test = normalizeCollectedTest(rawTest, subscription);
+        collected.push({
+          ...test,
+        });
+      }
+    } catch (error) {
+      console.warn(`[Docenti] Test non disponibili per ${teacherId}: ${error.message || error}`);
+    } finally {
+      api.stop();
+    }
+  }
+
+  return dedupe(collected, test =>
+    `${test.name}|${test.courseName}|${test.professor}|${test.date}|${test.group}`
+  );
 }
 
 /* ------------------------------------------------------------------ */
@@ -351,15 +467,22 @@ function teacherBoardUrl(teacherId) {
   return `${DOCENTI_ORIGIN}/teacher/${encodeURIComponent(teacherId)}/dashboard/advices`;
 }
 
-async function fetchDocentiJson(path) {
+function portalCookieHeader(sessionKey) {
+  const cookies = sessionKey ? getPortalCookies(sessionKey) : null;
+  return cookies?.length ? cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ') : '';
+}
+
+async function fetchDocentiJson(path, dependencies = {}) {
   try {
+    const cookie = portalCookieHeader(dependencies.sessionKey);
     const response = await fetch(`${DOCENTI_API}${path}`, {
       headers: {
         Accept: 'application/json',
         'Accept-Language': 'it-IT,it;q=0.9',
         Origin: DOCENTI_ORIGIN,
         Referer: `${DOCENTI_ORIGIN}/`,
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+        ...(cookie ? { Cookie: cookie } : {})
       },
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
     });
@@ -714,7 +837,7 @@ async function getDocentiData(userCredentials = {}, dependencies = {}) {
   }
 
   try {
-    return await runScrapingTask({ username, password }, async (page, data) => {
+    return await runScrapingTask({ username, password, profileKey: userCredentials.profileKey }, async (page, data) => {
       console.log('[Docenti] Accesso al portale docenti...');
 
       await loginStudente(page, data.username, data.password, data.profileKey || null);
@@ -733,13 +856,11 @@ async function getDocentiData(userCredentials = {}, dependencies = {}) {
         page,
         api.findEntries(/\/exernal\/iscrizioni|\/external\/iscrizioni|\/iscrizioni/i)
       );
-      const iscrizioniJson = iscrizioniEntries
-        .flatMap(entry => toArray(entry.json))
-        .filter(item => item.nomeInse || item.idIscrizione || item.codInse);
+      const iscrizioniJson = iscrizioniEntries.flatMap(entry => toArray(entry.json));
 
-      const prenotazioniJson = api.find(/prenotazioniesami|prenotazion/i);
+      const prenotazioniJson = api.findAll(/prenotazioniesami|prenotazion/i).flatMap(toArray);
 
-      let subscriptions = iscrizioniJson.map(mapSubscription);
+      let subscriptions = iscrizioniJson.map(mapSubscription).filter(isUsableSubscription);
 
       subscriptions = dedupe(
         subscriptions,
@@ -765,12 +886,44 @@ async function getDocentiData(userCredentials = {}, dependencies = {}) {
       groups = fromTables.groups;
       tests = fromTables.tests;
 
+      // Il portale carica spesso gruppi e test con richieste JSON separate
+      // dalla tabella HTML iniziale. Recuperiamo anche quelle risposte già
+      // catturate, senza aprire una nuova sessione o duplicare richieste.
+      const jsonGroups = api.findAll(/\/(?:gruppi|groups|gruppo)/i).flatMap(toArray);
+      const jsonTests = api.findAll(/\/(?:test|prove|prova)/i).flatMap(toArray);
+      if (jsonGroups.length > 0) {
+        groups = dedupe(
+          [...groups, ...jsonGroups.map(mapDocentiGroup)],
+          item => `${item.name}|${item.courseName}|${item.professor}`
+        );
+      }
+      if (jsonTests.length > 0) {
+        tests = dedupe(
+          [...tests, ...jsonTests.map(mapDocentiTest).filter(isUsableDocentiTest)],
+          item => `${item.name}|${item.courseName}|${item.date}|${item.group}`
+        );
+      }
+      if (subscriptions.some(item => item.professorId)) {
+        const teacherTests = await collectTeacherTests(page, subscriptions, extract);
+        tests = dedupe(
+          [...tests, ...teacherTests],
+          item => `${item.name}|${item.courseName}|${item.professor}|${item.date}|${item.group}`
+        );
+      }
+
       const profList = subscriptions.map(s => s.professor);
       console.log(`[Docenti] Recupero avvisi per ${profList.length} docenti trovati dalle iscrizioni`);
       const announcements = await loadAnnouncements(profList);
 
       const hasData = subscriptions.length > 0 || bookedExams.length > 0 ||
         groups.length > 0 || tests.length > 0 || announcements.length > 0;
+
+      // Una sessione cookie apparentemente valida può comunque restituire
+      // la pagina personale vuota. Non conservarla: il tentativo successivo
+      // deve eseguire un login completo.
+      if (!hasData && userCredentials.profileKey) {
+        deletePortalCookies(userCredentials.profileKey);
+      }
 
       console.log(
         `[Docenti] Completato -> Corsi: ${subscriptions.length}, ` +
@@ -813,7 +966,8 @@ function normalizeDocentiTables(tables) {
 
     for (const record of records) {
       if (isTestTable && Object.keys(record).some(key => /test|prova/i.test(key))) {
-        tests.push(mapDocentiTest(record));
+        const test = mapDocentiTest(record);
+        if (isUsableDocentiTest(test)) tests.push(test);
       }
       if (isGroupTable && Object.keys(record).some(key => /grupp/i.test(key))) {
         groups.push(mapDocentiGroup(record));
@@ -857,6 +1011,8 @@ module.exports = {
   fetchTeacherPhoto,
   fetchTeacherFolder,
   normalizeDocentiTables,
+  mapSubscription,
+  isUsableSubscription,
   fetchAnnouncementDetail,
   stripHtml,
   DOCENTI_LOGIN_URL,

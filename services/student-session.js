@@ -89,7 +89,7 @@ function resolveDocentiEmail(profile, profileId) {
  */
 function normalizeEmail(value) {
   const email = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ? email : null;
+  return /^[^\s@]+@studenti\.unina\.it$/.test(email) ? email : null;
 }
 
 async function createStudentSession({ codiceFiscale, password, email } = {}, dependencies = {}) {
@@ -134,6 +134,7 @@ async function createStudentSession({ codiceFiscale, password, email } = {}, dep
 
   const storedProfile = upsertStudentProfile(database, {
     id: cfClean,
+    anagrafica: datiCarriera.anagrafica,
     ...profile,
     esamiSostenuti: esami,
     tasse
@@ -188,6 +189,13 @@ async function createStudentSession({ codiceFiscale, password, email } = {}, dep
   const docentiReason = docentiSnapshot
     ? (docentiSnapshot.available ? null : docentiSnapshot.reason || 'DOCENTI_SCRAPE_FAILED')
     : (docentiLoading ? null : 'DOCENTI_CREDENTIALS_REQUIRED');
+  const metriche = {
+    ...datiCarriera,
+    anagrafica: {
+      ...(datiCarriera.anagrafica || {}),
+      matricola: datiCarriera.anagrafica?.matricola || storedProfile?.matricola || null
+    }
+  };
 
   return {
     token,
@@ -199,7 +207,7 @@ async function createStudentSession({ codiceFiscale, password, email } = {}, dep
     slowSync: slowStatus.state,
     docentiLoading,
     docentiReason,
-    metriche: datiCarriera
+    metriche
   };
 }
 

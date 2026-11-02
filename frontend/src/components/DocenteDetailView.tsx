@@ -2,12 +2,10 @@
 
 import { useState } from 'react';
 import { ExternalLink, Folder, FolderOpen, Mail, Phone, UserRound } from 'lucide-react';
-import type { AppelloDocente, DettaglioDocente, MaterialeDocente } from '@/lib/api';
+import type { DettaglioDocente, MaterialeDocente } from '@/lib/api';
 
 type DocenteDetailViewProps = {
   data: DettaglioDocente;
-  onBookExam: (exam: AppelloDocente) => Promise<void>;
-  onCancelExam: (exam: AppelloDocente) => Promise<void>;
   onToggleSubscription: (course: string, subscribed: boolean) => Promise<void>;
   onDownload: (file: MaterialeDocente) => void;
   onLoadFolder: (folder: MaterialeDocente, section: 'pubblico' | 'ftp' | 'riservato') => Promise<MaterialeDocente[]>;
@@ -18,13 +16,6 @@ const categories = [
   ['ftp', 'Area FTP'],
   ['riservato', 'Materiale riservato'],
 ] as const;
-
-function isBookingOpen(exam: AppelloDocente) {
-  const now = Date.now();
-  const start = exam.inizioPrenotazione ? Date.parse(exam.inizioPrenotazione) : Number.NEGATIVE_INFINITY;
-  const end = exam.finePrenotazione ? Date.parse(exam.finePrenotazione) : Number.POSITIVE_INFINITY;
-  return now >= start && now <= end;
-}
 
 function formatDate(value?: string | null) {
   if (!value) return '—';
@@ -98,7 +89,7 @@ function MaterialTree({
   );
 }
 
-export default function DocenteDetailView({ data, onBookExam, onCancelExam, onToggleSubscription, onDownload, onLoadFolder }: DocenteDetailViewProps) {
+export default function DocenteDetailView({ data, onToggleSubscription, onDownload, onLoadFolder }: DocenteDetailViewProps) {
   const [busy, setBusy] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<(typeof categories)[number][0]>('pubblico');
   const [photoError, setPhotoError] = useState(false);
@@ -163,15 +154,13 @@ export default function DocenteDetailView({ data, onBookExam, onCancelExam, onTo
         <h2 className="text-lg font-semibold text-white">Appelli di esame</h2>
         <div className="overflow-x-auto rounded-xl border border-white/10">
           <table className="w-full text-left text-sm">
-            <thead className="bg-white/5 text-xs uppercase text-slate-400"><tr><th className="p-3">Esame</th><th className="p-3">Data esame</th><th className="p-3">Prenotazioni</th><th className="p-3">Azione</th></tr></thead>
+            <thead className="bg-white/5 text-xs uppercase text-slate-400"><tr><th className="p-3">Esame</th><th className="p-3">Data esame</th><th className="p-3">Prenotazioni</th></tr></thead>
             <tbody>{data.appelli.map((exam, index) => {
-              const open = isBookingOpen(exam);
               const examKey = `${exam.id || exam.insegnamento}-${exam.dataEsame || 'date'}-${index}`;
               return <tr key={examKey} className="border-t border-white/10 text-slate-300">
                 <td className="p-3">{exam.insegnamento}</td>
                 <td className="p-3">{formatDate(exam.dataEsame)}</td>
                 <td className="p-3 text-xs">Da {formatDate(exam.inizioPrenotazione)}<br />A {formatDate(exam.finePrenotazione)}</td>
-                <td className="p-3"><button type="button" disabled={busy === exam.id || (!open && !exam.prenotato)} onClick={() => void run(exam.id, () => exam.prenotato ? onCancelExam(exam) : onBookExam(exam))} className={`rounded-lg px-3 py-1.5 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${exam.prenotato ? 'bg-red-700 text-white' : 'bg-sky-600 text-white'}`}>{exam.prenotato ? 'Annulla Prenotazione' : open ? 'Prenota' : 'Finestra chiusa'}</button></td>
               </tr>;
             })}</tbody>
           </table>

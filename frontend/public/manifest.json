@@ -3,18 +3,15 @@
   "short_name": "Segrepass",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#061426",
-  "theme_color": "#0B3A6B",
+  "scope": "/",
+  "background_color": "#F4F6F9",
+  "theme_color": "#0A1C35",
   "icons": [
     {
-      "src": "/icon-192.png",
+      "src": "/icon.svg",
       "sizes": "192x192",
-      "type": "image/png"
-    },
-    {
-      "src": "/icon-512.png",
-      "sizes": "512x512",
-      "type": "image/png"
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
     }
   ]
 }

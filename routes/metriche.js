@@ -30,8 +30,13 @@ router.get('/', async (req, res) => {
 
     // Se i dati lenti (tasse, appelli) sono già pronti li uniamo subito.
     const slow = snapshots.getSlowSnapshot(profileId);
+    const profile = require('../db/repository').getStudentProfile(req.user.sub);
     return res.json({
       ...value,
+      anagrafica: {
+        ...(value?.anagrafica || {}),
+        matricola: value?.anagrafica?.matricola || profile?.matricola || null
+      },
       tasse: slow?.taxes ?? value?.tasse ?? null,
       prenotazioni: slow?.prenotazioni ?? value?.prenotazioni ?? []
     });

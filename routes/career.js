@@ -1,9 +1,10 @@
 // routes/career.js
 const express = require('express');
 const router = express.Router();
-const { getDatiCarriera } = require('../scraper/segrepass');
 const snapshots = require('../services/career-snapshots');
 const slowSync = require('../services/slow-sync');
+const { getDatiCarriera } = require('../scraper/segrepass');
+const { submitAppelloAction } = require('../scraper/prenotazioni');
 
 /**
  * GET /api/career/slow-data
@@ -62,6 +63,45 @@ router.post('/', async (req, res) => {
       success: false,
       error: error.code || 'CAREER_ERROR',
       message: error.message
+    });
+  }
+});
+
+router.post('/book', async (req, res) => {
+  const { annopri, numAppello } = req.body || {};
+  const profileId = req.user.sub;
+  const snapshot = snapshots.getSlowSnapshot(profileId);
+  const allowed = (snapshot?.prenotazioni || []).some(item =>
+    String(item.annopri || '') === String(annopri || '') &&
+    String(item.numAppello || '') === String(numAppello || '') &&
+    item.bookingEnabled === true
+  );
+  if (!allowed) {
+    return res.status(400).json({
+      success: false,
+      code: 'APPELLO_NOT_BOOKABLE',
+      error: 'Appello non presente tra quelli prenotabili per questa sessione.'
+    });
+  }
+
+  try {
+    await getDatiCarriera(
+      { codiceFiscale: req.user.codiceFiscale, password: req.user.password },
+      {
+        phase: 'fast',
+        onEsisReady: ({ page, esisUrl }) => submitAppelloAction(
+          page,
+          new URL(esisUrl).origin,
+          { annopri, numAppello }
+        )
+      }
+    );
+    return res.json({ success: true, message: 'Prenotazione effettuata.' });
+  } catch (error) {
+    return res.status(error.status || 502).json({
+      success: false,
+      code: error.code || 'APPELLO_BOOKING_FAILED',
+      error: error.message || 'Prenotazione non riuscita.'
     });
   }
 });

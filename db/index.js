@@ -2,7 +2,7 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const DEFAULT_DB_PATH = path.resolve(__dirname, '../data/unicorno.sqlite');
 
 function ensureDataDir() {
@@ -25,6 +25,7 @@ function initSchema(database) {
     -- Profilo studente (anagrafica e configurazione carriera)
     CREATE TABLE IF NOT EXISTS StudentProfile (
       id TEXT PRIMARY KEY,
+      matricola TEXT,
       course_id TEXT,
       course_name TEXT,
       cohort_year INTEGER,
@@ -75,6 +76,11 @@ function initSchema(database) {
       FOREIGN KEY (plan_course_id) REFERENCES PlanCourses(id) ON DELETE CASCADE
     );
   `);
+
+  const profileColumns = database.prepare('PRAGMA table_info(StudentProfile)').all();
+  if (!profileColumns.some(column => column.name === 'matricola')) {
+    database.exec('ALTER TABLE StudentProfile ADD COLUMN matricola TEXT');
+  }
 }
 
 /**

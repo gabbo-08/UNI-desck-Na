@@ -93,6 +93,7 @@ function clearSnapshots(profileId) {
   docentiSnapshots.delete(profileId);
   taxesSnapshots.delete(profileId); // Svuota anche le tasse
   slowSnapshots.delete(profileId);
+  pianoSnapshots.delete(profileId);
   docentiLoading.delete(profileId);
 }
 

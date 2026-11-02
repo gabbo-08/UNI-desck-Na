@@ -2,32 +2,43 @@
 
 :root {
   color-scheme: light;
-  --app-bg: #f1f6fa;
-  --app-surface: #ffffff;
+  --color-bg-app: #f4f6f9;
+  --color-bg-surface: #ffffff;
+  --color-bg-header: #0a1c35;
+  --color-border: #e5e7eb;
+  --color-text-primary: #0a1c35;
+  --color-text-secondary: #6b7280;
+  --color-accent-success: #10b981;
+  --color-accent-purple: #8b5cf6;
+  --color-accent-gold: #eab308;
+  --gradient-progress: linear-gradient(90deg, #2563eb 0%, #10b981 100%);
+  --shadow-surface: 0 4px 6px -1px rgb(0 0 0 / 5%), 0 2px 4px -1px rgb(0 0 0 / 3%);
+  --app-bg: var(--color-bg-app);
+  --app-surface: var(--color-bg-surface);
   --app-card: #ffffff;
   --app-raised: #eaf1f6;
   --app-text: #122b40;
   --app-muted: #60778a;
-  --app-line: #d5e1ea;
-  --app-brand: #043b6b;
+  --app-line: var(--color-border);
+  --app-brand: var(--color-bg-header);
   --app-brand-hover: #07538d;
   --app-accent: #126da2;
   --app-cyan: #158b9b;
-  --app-gold: #946a22;
-  --app-positive: #08734f;
+  --app-gold: var(--color-accent-gold);
+  --app-positive: var(--color-accent-success);
   --app-warning: #956814;
   --app-danger: #b32636;
-  --app-shadow: 0 8px 24px rgb(4 59 107 / 8%);
-  --light-bg: #f4f6f9;
-  --light-navy: #003366;
-  --light-title: #0a2540;
-  --light-label: #4a5568;
-  --light-muted: #718096;
-  --light-muted-accessible: #4a5568;
-  --light-line: #e2e8f0;
-  --light-purple: #44337a;
-  --light-gold: #b7791f;
-  --light-card-shadow: 0 4px 6px -1px rgb(0 0 0 / 5%), 0 2px 4px -1px rgb(0 0 0 / 3%);
+  --app-shadow: var(--shadow-surface);
+  --light-bg: var(--color-bg-app);
+  --light-navy: var(--color-bg-header);
+  --light-title: var(--color-text-primary);
+  --light-label: var(--color-text-secondary);
+  --light-muted: var(--color-text-secondary);
+  --light-muted-accessible: var(--color-text-secondary);
+  --light-line: var(--color-border);
+  --light-purple: var(--color-accent-purple);
+  --light-gold: var(--color-accent-gold);
+  --light-card-shadow: var(--shadow-surface);
 }
 
 @theme inline {
@@ -66,16 +77,30 @@
 }
 
 .light .app-shell {
-  background: var(--light-bg) !important;
-  color: var(--light-title);
+  background: var(--color-bg-app) !important;
+  color: var(--color-text-primary);
+}
+
+:root[data-theme="light"] {
+  --color-bg-app: #f4f6f9;
+  --color-bg-surface: #ffffff;
+  --color-bg-header: #0a1c35;
+  --color-border: #e5e7eb;
+  --color-text-primary: #0a1c35;
+  --color-text-secondary: #6b7280;
+  --color-accent-success: #10b981;
+  --color-accent-purple: #8b5cf6;
+  --color-accent-gold: #eab308;
+  --gradient-progress: linear-gradient(90deg, #2563eb 0%, #10b981 100%);
+  --shadow-surface: 0 4px 6px -1px rgb(0 0 0 / 5%), 0 2px 4px -1px rgb(0 0 0 / 3%);
 }
 
 .light .profile-card,
 .light .metric-card {
-  border: 1px solid var(--light-line);
+  border: 1px solid var(--color-border);
   border-radius: 16px;
-  background: #fff;
-  box-shadow: var(--light-card-shadow);
+  background: var(--color-bg-surface);
+  box-shadow: var(--shadow-surface);
 }
 
 .light .section-title {
@@ -424,6 +449,84 @@ select {
 .light .app-shell .text-slate-400,
 .light .app-shell .text-slate-500 {
   color: var(--app-muted);
+}
+
+.light .app-shell .text-white {
+  color: var(--color-text-primary);
+}
+
+.light .app-shell > header .text-white,
+.light .app-shell > header .text-slate-100,
+.light .app-shell > header .text-slate-200,
+.light .app-shell > header .text-slate-300,
+.light .app-shell > header .text-slate-400 {
+  color: #ffffff;
+}
+
+.light .app-shell .metric-progress > div {
+  background-image: var(--gradient-progress);
+}
+
+@media (max-width: 639px) {
+  .light .app-shell > header {
+    min-height: 64px;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .light .app-shell > header button span {
+    display: inline;
+    font-size: 0.65rem;
+  }
+
+  .light .app-shell > header button {
+    min-height: 2rem;
+    gap: 0.25rem;
+    padding-inline: 0.5rem;
+  }
+
+  .light .app-shell > header > div:last-child {
+    gap: 0.25rem;
+  }
+}
+
+.light .app-shell > header {
+  border-color: #16395d !important;
+  background: var(--color-bg-header) !important;
+  color: #ffffff;
+}
+
+.light .app-shell > header .text-slate-300,
+.light .app-shell > header .text-slate-400,
+.light .app-shell > header .text-slate-200,
+.light .app-shell > header .text-white {
+  color: #ffffff !important;
+}
+
+.light .app-shell > header button {
+  border-color: rgb(255 255 255 / 24%);
+  background: rgb(255 255 255 / 8%);
+  color: #ffffff;
+}
+
+.light .app-shell > header button:hover {
+  background: rgb(255 255 255 / 16%);
+}
+
+.light .app-shell > .mx-auto > nav[aria-label="Sezioni"] {
+  border-color: var(--color-border);
+}
+
+.light .app-shell > nav[aria-label="Sezioni"] {
+  border-color: var(--color-border);
+  background: rgb(255 255 255 / 96%);
+}
+
+.light .app-shell > nav[aria-label="Sezioni"] button {
+  color: var(--color-text-secondary);
+}
+
+.light .app-shell > nav[aria-label="Sezioni"] button[aria-current="page"] {
+  color: var(--color-bg-header);
 }
 
 @media (min-width: 640px) {

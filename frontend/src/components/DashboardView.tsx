@@ -25,12 +25,14 @@ import {
   TrendingUp,
   CalendarCheck,
   UserCheck,
+  X,
 } from 'lucide-react';
 import {
   fetchDocentiSummary,
   fetchMetriche,
   fetchTimetable,
   fetchSlowData,
+  bookCareerExam,
   loginAPI,
   logoutAPI,
   restoreSession,
@@ -153,6 +155,7 @@ export default function DashboardView() {
   const [searchPrenotazione, setSearchPrenotazione] = useState('');
   const [taxTab, setTaxTab] = useState<'pending' | 'paid'>('pending');
   const [slowNotice, setSlowNotice] = useState<'loading' | 'ready' | 'error' | null>(null);
+  const [dismissedSlowNotice, setDismissedSlowNotice] = useState<'loading' | 'ready' | 'error' | null>(null);
 
   const clearSession = () => {
     setToken(null);
@@ -200,6 +203,10 @@ export default function DashboardView() {
 
     return () => { active = false; };
   }, []);
+
+  useEffect(() => {
+    setDismissedSlowNotice(null);
+  }, [slowNotice]);
 
   useEffect(() => {
     if (!token) {
@@ -265,7 +272,7 @@ const handleLogin = async (e: React.FormEvent) => {
     }
 
     // 2. Controllo che l'email abbia un formato valido
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailIstituzionale)) {
+    if (!/^[^\s@]+@studenti\.unina\.it$/i.test(emailIstituzionale)) {
       setError('Inserisci una email istituzionale valida (es. nome.cognome@studenti.unina.it).');
       return;
     }
@@ -386,6 +393,7 @@ const handleLogin = async (e: React.FormEvent) => {
   // Prenotazioni del portale Docenti: caricate al login e mostrate insieme agli appelli Segrepass.
   const [docentiBookings, setDocentiBookings] = useState<BookedExamDocenti[]>([]);
   const [docentiTests, setDocentiTests] = useState<TestDocenti[]>([]);
+  const [bookingId, setBookingId] = useState<string | null>(null);
 
  const fetchingDocentiRef = useRef(false);
 
@@ -474,6 +482,13 @@ const handleLogin = async (e: React.FormEvent) => {
       .filter(Boolean))],
     [listaEsami]
   );
+  const teacherCourseCodes = useMemo(
+    () => [...new Set([
+      ...(data?.pianoDiStudiRaw || []).map(course => String(course.courseCode || '').trim()),
+      ...examCourseCodes
+    ].filter(Boolean))],
+    [data?.pianoDiStudiRaw, examCourseCodes]
+  );
 
   const esamiFiltrati = useMemo(() => {
     if (!searchExam.trim()) return listaEsami;
@@ -512,6 +527,22 @@ const handleLogin = async (e: React.FormEvent) => {
     () => storicoPrenotazioni.filter(p => !p.id?.startsWith('docenti-test-')),
     [storicoPrenotazioni]
   );
+
+  const handleBookCareerExam = async (appello: Prenotazione) => {
+    if (!token || !appello.annopri || !appello.numAppello || !appello.bookingEnabled || !appello.id) return;
+    setBookingId(appello.id);
+    try {
+      await bookCareerExam(token, appello);
+      setData(current => current ? {
+        ...current,
+        prenotazioni: (current.prenotazioni || []).map(item =>
+          item.id === appello.id ? { ...item, note: 'Prenotazione effettuata.' } : item
+        )
+      } : current);
+    } finally {
+      setBookingId(null);
+    }
+  };
 
   const pageBg =
     'app-shell min-h-screen bg-[radial-gradient(ellipse_at_top,#0B3A6B_0%,#061426_45%,#030912_100%)] text-slate-100';
@@ -592,7 +623,7 @@ const handleLogin = async (e: React.FormEvent) => {
 
   return (
     <div className={pageBg}>
-      {slowNotice && (
+      {slowNotice && dismissedSlowNotice !== slowNotice && (
         <div
           role="status"
           aria-live="polite"
@@ -604,9 +635,22 @@ const handleLogin = async (e: React.FormEvent) => {
               : 'border-amber-600/60 bg-amber-950/95 text-amber-100'
           }`}
         >
-          {slowNotice === 'loading' && 'Tasse e appelli in preparazione: i dati già disponibili sono visibili subito.'}
-          {slowNotice === 'ready' && 'Dati completi aggiornati (tasse e appelli).'}
-          {slowNotice === 'error' && 'Tasse e appelli non sono disponibili in questo momento.'}
+          <div className="flex items-start gap-3">
+            <span className="min-w-0 flex-1">
+              {slowNotice === 'loading' && 'Tasse e appelli in preparazione: i dati già disponibili sono visibili subito.'}
+              {slowNotice === 'ready' && 'Dati completi aggiornati (tasse e appelli).'}
+              {slowNotice === 'error' && 'Tasse e appelli non sono disponibili in questo momento.'}
+            </span>
+            <button
+              type="button"
+              onClick={() => setDismissedSlowNotice(slowNotice)}
+              aria-label="Nascondi messaggio"
+              title="Nascondi messaggio"
+              className="shrink-0 rounded p-0.5 text-current/80 transition hover:bg-white/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-current"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       )}
 
@@ -983,9 +1027,20 @@ const handleLogin = async (e: React.FormEvent) => {
                             </div>
                             {p.note && <p className="max-w-xl text-[11px] italic text-slate-400">{p.note}</p>}
                           </div>
-                          <span className="shrink-0 rounded-lg bg-emerald-400 px-4 py-2 text-center text-xs font-bold text-[#042016] shadow-[0_0_16px_-4px_rgba(52,211,153,0.8)]">
-                            Appello disponibile
-                          </span>
+                          {p.bookingEnabled ? (
+                            <button
+                              type="button"
+                              disabled={bookingId === p.id}
+                              onClick={() => void handleBookCareerExam(p)}
+                              className="shrink-0 rounded-lg bg-emerald-400 px-4 py-2 text-center text-xs font-bold text-[#042016] shadow-[0_0_16px_-4px_rgba(52,211,153,0.8)] disabled:opacity-50"
+                            >
+                              {bookingId === p.id ? 'Prenotazione...' : 'Prenota'}
+                            </button>
+                          ) : (
+                            <span className="shrink-0 rounded-lg bg-white/10 px-4 py-2 text-center text-xs font-bold text-slate-300">
+                              Appello disponibile
+                            </span>
+                          )}
                         </div>
                       ))
                     )}
@@ -1220,9 +1275,8 @@ const handleLogin = async (e: React.FormEvent) => {
             <DocentiView
               token={token}
               coursePrefix={codiceCorso || null}
-              courseCodes={examCourseCodes}
+              courseCodes={teacherCourseCodes}
               studentId={matricola}
-              planCourses={data?.pianoDiStudiRaw || []}
             />
           )}
           {activeView === 'plan' && profile && <StudyPlanView token={token} profile={profile} />}

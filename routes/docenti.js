@@ -74,7 +74,7 @@ function requireAuth(req, res, next) {
 
 function identifierForTeacher(req) {
   const identifier = String(req.params.id);
-  return identifier.length >= 24 && !/\s/.test(identifier) ? { id: identifier } : identifier;
+  return /^[A-Za-z0-9_-]+$/.test(identifier) ? { id: identifier } : identifier;
 }
 
 function refreshTeacherDetail(cacheKey, identifier, coursePrefix, dependencies) {
@@ -85,8 +85,22 @@ function refreshTeacherDetail(cacheKey, identifier, coursePrefix, dependencies) 
   const promise = loadTeacherDetail(identifier, { ...dependencies, coursePrefix })
     .then(detail => {
       if (!detail) return null;
-      detail.profilo.fotoUrl = `/api/docenti/teacher/${encodeURIComponent(detail.profilo.id)}/photo`;
-      teacherDetailCache.set(cacheKey, { value: detail, storedAt: Date.now() });
+      if (detail.profilo?.id) {
+        detail.profilo.fotoUrl = `/api/docenti/teacher/${encodeURIComponent(detail.profilo.id)}/photo`;
+      }
+      const hasContent = Boolean(
+        detail.profilo?.id &&
+        (detail.iscrizioni?.length ||
+          detail.appelli?.length ||
+          detail.materiali?.pubblico?.length ||
+          detail.materiali?.ftp?.length ||
+          detail.materiali?.riservato?.length)
+      );
+      if (hasContent) {
+        teacherDetailCache.set(cacheKey, { value: detail, storedAt: Date.now() });
+      } else {
+        teacherDetailCache.delete(cacheKey);
+      }
       return detail;
     })
     .catch(error => {
@@ -197,7 +211,7 @@ function createDocentiRouter(dependencies = {}) {
     if (cached?.value && Date.now() - cached.storedAt < TEACHER_DETAIL_TTL_MS) {
       if (!cached.refreshing) {
         cached.refreshing = true;
-        void refreshTeacherDetail(cacheKey, identifierForTeacher(req), coursePrefix, dependencies)
+        void refreshTeacherDetail(cacheKey, identifierForTeacher(req), coursePrefix, { ...dependencies, sessionKey: req.user.sub })
           .finally(() => {
             const current = teacherDetailCache.get(cacheKey);
             if (current) current.refreshing = false;
@@ -206,7 +220,7 @@ function createDocentiRouter(dependencies = {}) {
       return res.json(cached.value);
     }
     try {
-      const detail = await refreshTeacherDetail(cacheKey, identifierForTeacher(req), coursePrefix, dependencies);
+      const detail = await refreshTeacherDetail(cacheKey, identifierForTeacher(req), coursePrefix, { ...dependencies, sessionKey: req.user.sub });
       if (!detail) return res.status(404).json({ error: 'Docente non trovato.' });
       return res.json(detail);
     } catch (error) {
@@ -215,7 +229,7 @@ function createDocentiRouter(dependencies = {}) {
   });
 
   router.get('/teacher/:id/photo', requireAuth, async (req, res) => {
-    const photo = await fetchTeacherPhoto(req.params.id, dependencies);
+    const photo = await fetchTeacherPhoto(req.params.id, { ...dependencies, sessionKey: req.user.sub });
     if (!photo) return res.status(404).end();
     res.set('Content-Type', photo.contentType);
     res.set('Cache-Control', 'private, max-age=900');
@@ -233,7 +247,7 @@ function createDocentiRouter(dependencies = {}) {
         req.params.folderId,
         section,
         typeof req.query.course === 'string' ? req.query.course : '',
-        dependencies
+        { ...dependencies, sessionKey: req.user.sub }
       );
       return res.json({ items });
     } catch (error) {

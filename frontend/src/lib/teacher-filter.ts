@@ -18,14 +18,14 @@ export function filterTeacherSubscriptions<T extends TeacherCourseRecord>(
 ): T[] {
   const allowedCodes = new Set(
     planCourses
-      .map(course => normalizeCode(course.courseCode || course.course_name))
+      .map(course => normalizeCode(course.courseCode))
       .filter(Boolean)
   );
   const seen = new Set<string>();
 
   return subscriptions.filter(subscription => {
     const code = normalizeCode(subscription.courseCode);
-    if (allowedCodes.size > 0 && (!code || !allowedCodes.has(code))) return false;
+    if (allowedCodes.size > 0 && code && !allowedCodes.has(code)) return false;
     const key = [
       code,
       normalizeCode(subscription.courseName || subscription.insegnamento),

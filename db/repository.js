@@ -12,6 +12,14 @@ function normalizeName(value) {
     .trim();
 }
 
+function normalizeMatricola(value) {
+  const normalized = String(value || '').replace(/\s+/g, '').trim().toUpperCase();
+  if (/^\d{6,10}$/.test(normalized)) return normalized;
+  if (/^[A-Z]{1,4}\d{5,10}$/.test(normalized)) return normalized;
+  const coded = normalized.match(/^([A-Z]{1,2}\d{2,4})[/.-](\d{3,8})$/);
+  return coded ? `${coded[1]}/${coded[2]}` : null;
+}
+
 function parsePlanCourse(row) {
   if (!row) return null;
   let prerequisites = [];
@@ -62,14 +70,21 @@ function getStudentProfile(arg1, arg2) {
 function upsertStudentProfile(arg1, arg2) {
   const { db, arg: profile } = getDbAndArg(arg1, arg2);
   const targetId = profile.id || profile.profileId || profile.codiceFiscale;
+  const existing = getStudentProfile(db, targetId);
+  const matricola = normalizeMatricola(profile.matricola || profile.anagrafica?.matricola)
+    || normalizeMatricola(existing?.matricola);
+  if (existing?.matricola && !normalizeMatricola(existing.matricola)) {
+    db.prepare('UPDATE StudentProfile SET matricola = NULL WHERE id = ?').run(targetId);
+  }
 
   db.prepare(`
     INSERT INTO StudentProfile (
-      id, course_id, course_name, cohort_year, current_course_year, channel, surname_initial,
+      id, matricola, course_id, course_name, cohort_year, current_course_year, channel, surname_initial,
       carriera_json, tasse_json
     )
-    VALUES (@id, @courseId, @courseName, @cohortYear, @currentCourseYear, @channel, @surnameInitial, @carrieraJson, @tasseJson)
+    VALUES (@id, @matricola, @courseId, @courseName, @cohortYear, @currentCourseYear, @channel, @surnameInitial, @carrieraJson, @tasseJson)
     ON CONFLICT(id) DO UPDATE SET
+      matricola = COALESCE(excluded.matricola, StudentProfile.matricola),
       course_id = COALESCE(excluded.course_id, StudentProfile.course_id),
       course_name = COALESCE(excluded.course_name, StudentProfile.course_name),
       cohort_year = COALESCE(excluded.cohort_year, StudentProfile.cohort_year),
@@ -81,6 +96,7 @@ function upsertStudentProfile(arg1, arg2) {
       updated_at = CURRENT_TIMESTAMP
   `).run({
     id: targetId,
+    matricola,
     courseId: profile.courseId || profile.anagrafica?.codiceCorso || null,
     courseName: profile.courseName || profile.anagrafica?.corsoDiLaurea || null,
     cohortYear: profile.cohortYear || profile.anagrafica?.annoImmatricolazione || null,

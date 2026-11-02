@@ -8,6 +8,7 @@ const {
   fetchAnnouncementsForProfessors,
   fetchTeacherDetail
 } = require('../scraper/docenti');
+const { mapSubscription, isUsableSubscription, mapDocentiTest } = require('../scraper/docenti');
 
 function withoutDocentiEnv(t) {
   const previousUsername = process.env.DOCENTI_USERNAME;
@@ -75,6 +76,20 @@ test('separa test e gruppi dalla tabella personale Docenti', () => {
   assert.equal(result.groups[0].name, 'A');
 });
 
+test('mappa la pagina signin-groups senza confondere test, insegnamento e docente', () => {
+  const mapped = mapDocentiTest({
+    nome: 'Prima prova intermedia di Geometria e Algebra, Canale I',
+    descrInse: 'Geometria ed Algebra',
+    nomeDocente: 'Mattia Brescia',
+    dataTest: '11/11/2026 10:00'
+  });
+
+  assert.equal(mapped.name, 'Prima prova intermedia di Geometria e Algebra, Canale I');
+  assert.equal(mapped.courseName, 'Geometria ed Algebra');
+  assert.equal(mapped.professor, 'Mattia Brescia');
+  assert.match(mapped.date, /11\/11\/2026/);
+});
+
 test('non interpreta lo stato del corso come prenotazione d\'esame', () => {
   const result = normalizeDocentiTables([{
     headers: ['Corso di laurea', 'Insegnamento', 'Docente', 'Stato corso'],
@@ -99,6 +114,23 @@ test('mappa un avviso del backend webdocenti-be nel formato del frontend', () =>
     testo: '<p>21 dicembre</p>',
     dataPubb: '2026-10-20T00:00:00+0200',
     allegati: [{ id: 'abc123' }]
+  });
+
+  test('normalizza le varianti dei campi delle iscrizioni senza scartarle', () => {
+    const mapped = mapSubscription({
+      teacherId: 'teacher-42',
+      course_code: 'U6966',
+      course_name: 'Fisica generale II',
+      academicYear: '2026/2027',
+      teacher: { nome: 'Davide', cognome: 'Massarotti' },
+      channel: 'A'
+    });
+
+    assert.equal(mapped.professorId, 'teacher-42');
+    assert.equal(mapped.courseCode, 'U6966');
+    assert.equal(mapped.courseName, 'Fisica generale II');
+    assert.equal(mapped.professor, 'Davide Massarotti');
+    assert.equal(isUsableSubscription(mapped), true);
   });
 
   assert.equal(mapped.id, '26963614');

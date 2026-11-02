@@ -1,26 +1,26 @@
 ﻿'use client';
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { Megaphone, BookOpenCheck, Users, ExternalLink, RefreshCw, User, Search, Calendar } from 'lucide-react';
+import { Megaphone, BookOpenCheck, Users, ClipboardCheck, ExternalLink, RefreshCw, User, Search, Calendar, X } from 'lucide-react';
 import {
   fetchDocentiSummary,
   type DocenteAnnouncementGroup,
   type DocenteAnnouncementItem,
   type SubscriptionDocenti,
   type GroupDocenti,
+  type TestDocenti,
 } from '@/lib/api';
 import DocentePage from '@/components/DocentePage';
-import { filterTeacherSubscriptions } from '@/lib/teacher-filter';
+import { safeExternalUrl, sanitizeAnnouncementHtml } from '@/lib/safe-content';
 
 interface DocentiViewProps {
   token: string;
   coursePrefix?: string | null;
   courseCodes?: string[];
   studentId?: string | null;
-  planCourses?: import('@/lib/api').PlanCourse[];
 }
 
-type Tab = 'announcements' | 'subscriptions' | 'groups';
+type Tab = 'announcements' | 'subscriptions' | 'groups' | 'tests';
 
 const CARD =
   'rounded-2xl border border-[#3B7BC4]/30 bg-[#0A1B31]/75 shadow-[0_0_28px_-10px_rgba(70,150,230,0.55)] backdrop-blur-sm';
@@ -65,14 +65,16 @@ function stripTags(html?: string | null) {
   return html.replace(/<[^>]*>/g, '').trim();
 }
 
-export default function DocentiView({ token, coursePrefix, courseCodes, studentId, planCourses = [] }: DocentiViewProps) {
+export default function DocentiView({ token, coursePrefix, courseCodes, studentId }: DocentiViewProps) {
   const [activeTab, setActiveTab] = useState<Tab>('announcements');
   const [announcements, setAnnouncements] = useState<DocenteAnnouncementGroup[]>([]);
   const [subscriptions, setSubscriptions] = useState<SubscriptionDocenti[]>([]);
   const [groups, setGroups] = useState<GroupDocenti[]>([]);
+  const [tests, setTests] = useState<TestDocenti[]>([]);
   const [selectedProfessor, setSelectedProfessor] = useState<SubscriptionDocenti | null>(null);
   const [loading, setLoading] = useState(true);
   const [errors, setErrors] = useState<string[]>([]);
+  const [dismissedErrors, setDismissedErrors] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const mounted = useRef(true);
 
@@ -89,9 +91,16 @@ export default function DocentiView({ token, coursePrefix, courseCodes, studentI
     if (!mounted.current) return;
     setLoading(true);
     setErrors([]);
+    setDismissedErrors(new Set());
 
-    const result = await fetchDocentiSummary(token).then(value => ({ status: 'fulfilled' as const, value }))
+    let result = await fetchDocentiSummary(token).then(value => ({ status: 'fulfilled' as const, value }))
       .catch(reason => ({ status: 'rejected' as const, reason }));
+
+    if (result.status === 'rejected' && /Nessun dato Docenti/i.test(String(result.reason?.message || ''))) {
+      await new Promise(resolve => setTimeout(resolve, 2500));
+      result = await fetchDocentiSummary(token).then(value => ({ status: 'fulfilled' as const, value }))
+        .catch(reason => ({ status: 'rejected' as const, reason }));
+    }
 
     if (!mounted.current) return;
 
@@ -99,15 +108,16 @@ export default function DocentiView({ token, coursePrefix, courseCodes, studentI
 
     if (result.status === 'fulfilled') {
       setAnnouncements(result.value.announcements);
-      setSubscriptions(filterTeacherSubscriptions(result.value.subscriptions, planCourses));
+      setSubscriptions(result.value.subscriptions);
       setGroups(result.value.groups);
+      setTests(result.value.tests);
     } else {
       found.push(readableError(result.reason));
     }
 
     setErrors([...new Set(found)]);
     setLoading(false);
-  }, [planCourses, token]);
+  }, [token]);
 
   useEffect(() => {
     if (!token) return;
@@ -165,6 +175,7 @@ export default function DocentiView({ token, coursePrefix, courseCodes, studentI
     { id: 'announcements', label: 'Avvisi', count: totalAnnouncementsCount, icon: Megaphone },
     { id: 'subscriptions', label: 'Corsi seguiti', count: subscriptions.length, icon: BookOpenCheck },
     { id: 'groups', label: 'Gruppi', count: groups.length, icon: Users },
+    { id: 'tests', label: 'Test', count: tests.length, icon: ClipboardCheck },
   ];
 
   if (selectedProfessor) {
@@ -179,7 +190,6 @@ export default function DocentiView({ token, coursePrefix, courseCodes, studentI
           coursePrefix={coursePrefix}
           courseCodes={courseCodes}
           studentId={studentId}
-          planCourses={planCourses}
         />
       </section>
     );
@@ -239,10 +249,21 @@ export default function DocentiView({ token, coursePrefix, courseCodes, studentI
         )}
       </div>
 
-      {errors.length > 0 && (
-        <div role="alert" className="space-y-1 rounded-xl border border-red-900/60 bg-red-950/30 p-4 text-xs text-red-300">
-          {errors.map((message) => (
-            <p key={message}>{message}</p>
+      {errors.some(message => !dismissedErrors.has(message)) && (
+        <div role="alert" className="space-y-2 rounded-xl border border-red-900/60 bg-red-950/30 p-4 text-xs text-red-300">
+          {errors.filter(message => !dismissedErrors.has(message)).map((message) => (
+            <div key={message} className="flex items-start gap-3">
+              <p className="min-w-0 flex-1">{message}</p>
+              <button
+                type="button"
+                onClick={() => setDismissedErrors(current => new Set(current).add(message))}
+                aria-label="Nascondi messaggio"
+                title="Nascondi messaggio"
+                className="shrink-0 rounded p-0.5 text-red-300 transition hover:bg-red-400/10 hover:text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-red-300"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           ))}
         </div>
       )}
@@ -280,12 +301,12 @@ export default function DocentiView({ token, coursePrefix, courseCodes, studentI
                         {item.content && (
                           <div
                             className="text-xs text-slate-400 leading-relaxed [&_p]:mb-1.5 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_strong]:font-semibold [&_strong]:text-slate-100"
-                            dangerouslySetInnerHTML={{ __html: item.content }}
+                            dangerouslySetInnerHTML={{ __html: sanitizeAnnouncementHtml(item.content) }}
                           />
                         )}
-                        {item.link && (
+                        {safeExternalUrl(item.link) && (
                           <a
-                            href={item.link}
+                            href={safeExternalUrl(item.link) || undefined}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="inline-flex items-center gap-1 pt-1 text-[11px] font-semibold text-[#5AB0F0] hover:underline"
@@ -347,6 +368,29 @@ export default function DocentiView({ token, coursePrefix, courseCodes, studentI
                   {group.courseName && <span>Corso: <strong className="text-slate-200">{group.courseName}</strong></span>}
                   {group.professor && <span>Docente: <strong className="text-slate-200">{group.professor}</strong></span>}
                   {group.academicYear && <span>{group.academicYear}</span>}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {!loading && activeTab === 'tests' && (
+        <div className="grid gap-2.5">
+          {tests.length === 0 ? (
+            <div className={EMPTY}>Nessun test trovato sul portale Docenti.</div>
+          ) : (
+            tests.map((test, idx) => (
+              <div key={`${test.name || 'test'}-${test.courseName || 'course'}-${test.date || idx}`} className={`${CARD} space-y-1.5 p-3.5`}>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="min-w-0 truncate text-sm font-medium text-slate-100">{test.name || 'Test'}</p>
+                  {test.status && <span className="shrink-0 text-[10px] text-slate-400">{test.status}</span>}
+                </div>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-400">
+                  {test.courseName && <span>Insegnamento: <strong className="text-slate-200">{test.courseName}</strong></span>}
+                  {test.professor && <span>Docente: <strong className="text-slate-200">{test.professor}</strong></span>}
+                  {test.group && <span>Gruppo: <strong className="text-slate-200">{test.group}</strong></span>}
+                  {test.date && <span>Data: <strong className="text-slate-200">{formatDate(test.date)}</strong></span>}
                 </div>
               </div>
             ))

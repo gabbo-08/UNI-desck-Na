@@ -2,6 +2,7 @@
 const { queueScrapingTask } = require('./pool');
 const { scrapeEsamiSostenuti } = require('./esami');
 const { scrapeCalendarioAppelli } = require('./prenotazioni');
+const { submitAppelloAction } = require('./prenotazioni');
 const { scrapeTasse } = require('./tasse');
 const { scrapePianoPage } = require('./piano');
 const { normalizePianoTable } = require('../lib/piano-normalizer');
@@ -152,7 +153,50 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
     const anagraficaDinamica = await page.evaluate(() => {
       const text = document.body.innerText || '';
       const clean = s => (s || '').replace(/\s+/g, ' ').trim();
-      const matchMatricola = text.match(/(?:Matricola|Matr\.?)\s*(?:n[°º.]?)?[:\s]*([A-Z0-9]+)/i);      
+      const matricolaField = Array.from(document.querySelectorAll('input, select, [data-value], [value]'))
+        .find(element => /matricola|matr/i.test(
+          `${element.getAttribute('name') || ''} ${element.getAttribute('id') || ''} ${element.getAttribute('class') || ''}`
+        ));
+      const matricolaPattern = '(?:[A-Z]{1,2}\\d{2,4}\\s*[/.-]\\s*\\d{3,8}|[A-Z]{1,4}\\d{5,10}|\\d{6,10})';
+      const extractLabeledMatricola = source => {
+        const value = clean(source);
+        if (!value) return null;
+        const labeled = value.match(new RegExp(
+          `(?:Numero\\s+di\\s+)?Matricola\\s*(?:n[°º.]?|numero)?\\s*(?:[:\\-]\\s*)?(${matricolaPattern})`,
+          'i'
+        )) || value.match(new RegExp(
+          `Matr\\.?\\s*(?:n[°º.]?|numero)?\\s*(?:[:\\-]\\s*)?(${matricolaPattern})`,
+          'i'
+        ));
+        return labeled?.[1] ? clean(labeled[1]).replace(/\s+/g, '') : null;
+      };
+      const extractFieldMatricola = source => {
+        const value = clean(source);
+        if (!value) return null;
+        const raw = value.match(new RegExp(`\\b(${matricolaPattern})\\b`, 'i'))?.[1];
+        return raw ? clean(raw).replace(/\s+/g, '') : null;
+      };
+      const matricolaLabels = Array.from(document.querySelectorAll('th, td, label, dt, span, strong, p, div'))
+        .filter(element => /\b(?:numero\s+di\s+)?matricola\b|\bmatr\.?\b/i.test(clean(element.innerText)))
+        .slice(0, 20);
+      const matricolaContexts = matricolaLabels.flatMap(element => {
+        const container = element.closest('tr, li, p, dl, fieldset, div');
+        const siblings = [
+          element.nextElementSibling,
+          element.parentElement?.nextElementSibling,
+          container?.querySelector('td:last-child, dd, input, select')
+        ];
+        return [
+          element.innerText,
+          container?.innerText,
+          ...siblings.map(sibling => sibling?.textContent || sibling?.getAttribute?.('value') || '')
+        ];
+      });
+      const matchMatricola = extractLabeledMatricola(text) ||
+        matricolaContexts.map(extractLabeledMatricola).find(Boolean) ||
+        extractFieldMatricola(matricolaField?.getAttribute('value')) ||
+        extractFieldMatricola(matricolaField?.getAttribute('data-value')) ||
+        matricolaContexts.map(extractFieldMatricola).find(Boolean);
       const matchNome = text.match(/Benvenut[oa][:?\s]+([A-Z\s']+?)(?=\s*-?\s*Email|$)/i) ||
                         text.match(/(?:Utente|Studente)[:\s]*([A-Z\s']+)/i);
       const matchCorso = text.match(/(?:Corso di Studio|Corso di Laurea|Corso)[\s:]*([^\n\r]+)/i);
@@ -162,7 +206,7 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
       const matchAnnoCorso = text.match(/(?:Anno di Corso|Anno Corso)[:\s]*(\d{1,2})/i);
 
       return {
-        matricola: matchMatricola ? clean(matchMatricola[1]) : null,
+        matricola: matchMatricola,
         nomeCompleto: matchNome ? clean(matchNome[1]) : null,
         cognome: matchCognome
           ? clean(matchCognome[1])
@@ -173,6 +217,24 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
         annoCorso: matchAnnoCorso ? Number(matchAnnoCorso[1]) : null
       };
     }).catch(() => ({}));
+
+    // ESIS può mostrare il riepilogo dentro un frame separato dal documento
+    // principale: cerca la matricola anche nei frame della pagina autenticata.
+    if (!anagraficaDinamica.matricola) {
+      const frameSources = await Promise.all(page.frames().map(frame => frame.evaluate(() => ({
+        text: document.body?.innerText || '',
+        html: document.documentElement?.outerHTML || ''
+      })).catch(() => ({ text: '', html: '' }))));
+      const frameText = frameSources.map(source => `${source.text} ${source.html}`).join(' ');
+      const frameMatricola = frameText.match(new RegExp(
+        `(?:Numero\\s+di\\s+)?Matricola\\s*(?:n[°º.]?|numero)?\\s*(?:[:\\-]\\s*)?((?:[A-Z]{1,2}\\d{2,4}\\s*[/.-]\\s*\\d{3,8}|[A-Z]{1,4}\\d{5,10}|\\d{6,10}))`,
+        'i'
+      )) || frameText.match(new RegExp(
+        `Matr\\.?\\s*(?:n[°º.]?|numero)?\\s*(?:[:\\-]\\s*)?((?:[A-Z]{1,2}\\d{2,4}\\s*[/.-]\\s*\\d{3,8}|[A-Z]{1,4}\\d{5,10}|\\d{6,10}))`,
+        'i'
+      ));
+      if (frameMatricola) anagraficaDinamica.matricola = frameMatricola[1].replace(/\s+/g, '').trim();
+    }
 
     debugLog('\n--- [DEBUG] ANAGRAFICA ESTRATTA ---');
     debugLog(JSON.stringify(anagraficaDinamica, null, 2));
@@ -198,6 +260,78 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
 
     if (typeof options.onEsisReady === 'function') {
       await options.onEsisReady({ page, context, esisUrl });
+    }
+
+    await page.waitForFunction(
+      () => /(?:Numero\s+di\s+)?Matricola\s+n?[°º.]?\s*:/i.test(document.body?.innerText || ''),
+      { timeout: 10000 }
+    ).catch(() => {});
+
+    if (!anagraficaDinamica.matricola) {
+      const esisMatricola = await page.evaluate(() => {
+        const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
+        const pattern = '(?:[A-Z]{1,2}\\d{2,4}\\s*[/.-]\\s*\\d{3,8}|[A-Z]{1,4}\\d{5,10}|\\d{6,10})';
+        const sources = [
+          ...Array.from(document.querySelectorAll('p.textcontent, p'))
+            .filter(element => /matricola|matr/i.test(clean(element.innerText)))
+            .map(element => element.innerText),
+          document.body?.innerText || '',
+          ...Array.from(document.querySelectorAll('th, td, label, dt, span, strong, p, div'))
+            .filter(element => /\b(?:numero\s+di\s+)?matricola\b|\bmatr\.?\b/i.test(clean(element.innerText)))
+            .flatMap(element => {
+              const container = element.closest('tr, li, p, dl, fieldset, div');
+              return [element.innerText, container?.innerText, element.nextElementSibling?.textContent || ''];
+            }),
+          ...Array.from(document.querySelectorAll('input, select, [data-value], [value]')).flatMap(element => {
+            const metadata = `${element.getAttribute('name') || ''} ${element.getAttribute('id') || ''} ${element.getAttribute('class') || ''}`;
+            return /matricola|matr/i.test(metadata)
+              ? [element.getAttribute('value'), element.getAttribute('data-value'), element.textContent]
+              : [];
+          })
+        ];
+        for (const source of sources) {
+          const value = clean(source);
+          const match = value.match(new RegExp(
+            `(?:Numero\\s+di\\s+)?Matricola\\s*(?:n[°º.]?|numero)?\\s*(?:[:\\-]\\s*)?(${pattern})`,
+            'i'
+          )) || value.match(new RegExp(
+            `Matr\\.?\\s*(?:n[°º.]?|numero)?\\s*(?:[:\\-]\\s*)?(${pattern})`,
+            'i'
+          ));
+          if (match?.[1]) return match[1].replace(/\s+/g, '');
+        }
+        return null;
+      }).catch(() => null);
+      if (esisMatricola) anagraficaDinamica.matricola = esisMatricola;
+      if (!anagraficaDinamica.matricola) {
+        const frameMatricola = await Promise.all(page.frames().map(frame => frame.evaluate(() => {
+          const clean = value => String(value || '').replace(/\s+/g, ' ').trim();
+          const pattern = '(?:[A-Z]{1,2}\\d{2,4}\\s*[/.-]\\s*\\d{3,8}|[A-Z]{1,4}\\d{5,10}|\\d{6,10})';
+          const text = document.body?.innerText || '';
+          const contexts = [
+            text,
+            ...Array.from(document.querySelectorAll('th, td, label, dt, span, strong, p, div'))
+              .filter(element => /\b(?:numero\s+di\s+)?matricola\b|\bmatr\.?\b/i.test(clean(element.innerText)))
+              .flatMap(element => {
+                const container = element.closest('tr, li, p, dl, fieldset, div');
+                return [element.innerText, container?.innerText, element.nextElementSibling?.textContent || ''];
+              })
+          ];
+          for (const value of contexts) {
+            const match = clean(value).match(new RegExp(
+              `(?:Numero\\s+di\\s+)?Matricola\\s*(?:n[°º.]?|numero)?\\s*(?:[:\\-]\\s*)?(${pattern})`,
+              'i'
+            )) || clean(value).match(new RegExp(
+              `Matr\\.?\\s*(?:n[°º.]?|numero)?\\s*(?:[:\\-]\\s*)?(${pattern})`,
+              'i'
+            ));
+            if (match?.[1]) return match[1].replace(/\s+/g, '');
+          }
+          return null;
+        }).catch(() => null))).then(values => values.find(Boolean) || null);
+        if (frameMatricola) anagraficaDinamica.matricola = frameMatricola;
+      }
+      debugLog(`[Segrepass] Matricola ESIS: ${anagraficaDinamica.matricola || 'n/d'}`);
     }
 
     let pianoHeader = {};

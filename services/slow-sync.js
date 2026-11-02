@@ -4,6 +4,7 @@ const { getDatiCarriera } = require('../scraper/segrepass');
 
 const statuses = new Map();
 const inFlight = new Map(); // Modificato in Map per conservare la Promise in esecuzione
+const generations = new Map();
 
 // Dopo un errore non si ritenta a ogni poll: si evita di martellare il portale
 // (e di far risultare offline i nodi Segrepass) con login ripetuti.
@@ -16,7 +17,8 @@ function getSlowStatus(profileId) {
 function resetSlowSync(profileId) {
   statuses.delete(profileId);
   snapshots.setSlowSnapshot(profileId, null);
-  inFlight.delete(profileId); // Assicura che anche eventuali job bloccati vengano rimossi
+  generations.set(profileId, (generations.get(profileId) || 0) + 1);
+  inFlight.delete(profileId);
 }
 
 /**
@@ -34,11 +36,13 @@ function startSlowSync(profileId, credentials, dependencies = {}) {
   }
 
   const scraper = dependencies.getDatiCarriera || getDatiCarriera;
+  const generation = generations.get(profileId) || 0;
   statuses.set(profileId, { state: 'loading', startedAt: Date.now() });
 
   const syncPromise = Promise.resolve()
     .then(() => scraper(credentials, { phase: 'slow' }))
     .then(data => {
+      if ((generations.get(profileId) || 0) !== generation) return getSlowStatus(profileId);
       const taxes = data?.tasse || null;
       const prenotazioni = Array.isArray(data?.prenotazioni) ? data.prenotazioni : [];
 
@@ -52,6 +56,7 @@ function startSlowSync(profileId, credentials, dependencies = {}) {
       return statuses.get(profileId);
     })
     .catch(error => {
+      if ((generations.get(profileId) || 0) !== generation) return getSlowStatus(profileId);
       console.warn(`[slow-sync] Dati lenti non disponibili: ${error?.message || error}`);
       statuses.set(profileId, {
         state: 'error',
@@ -61,7 +66,7 @@ function startSlowSync(profileId, credentials, dependencies = {}) {
       return statuses.get(profileId);
     })
     .finally(() => {
-      inFlight.delete(profileId);
+      if (inFlight.get(profileId) === syncPromise) inFlight.delete(profileId);
     });
 
   inFlight.set(profileId, syncPromise);

@@ -4,12 +4,10 @@ import { useEffect, useState } from 'react';
 import {
   fetchTeacherDetail,
   fetchTeacherFolder,
-  type AppelloDocente,
   type DettaglioDocente,
   type MaterialeDocente,
 } from '@/lib/api';
 import DocenteDetailView from '@/components/DocenteDetailView';
-import { filterTeacherSubscriptions } from '@/lib/teacher-filter';
 
 type DocentePageProps = {
   token: string;
@@ -17,9 +15,6 @@ type DocentePageProps = {
   coursePrefix?: string | null;
   courseCodes?: string[];
   studentId?: string | null;
-  planCourses?: import('@/lib/api').PlanCourse[];
-  onBookExam?: (exam: AppelloDocente) => Promise<void>;
-  onCancelExam?: (exam: AppelloDocente) => Promise<void>;
   onToggleSubscription?: (course: string, subscribed: boolean) => Promise<void>;
 };
 
@@ -54,9 +49,6 @@ export default function DocentePage({
   coursePrefix,
   courseCodes = [],
   studentId,
-  planCourses = [],
-  onBookExam = async () => {},
-  onCancelExam = async () => {},
   onToggleSubscription = async () => {},
 }: DocentePageProps) {
   const [data, setData] = useState<DettaglioDocente | null>(null);
@@ -103,14 +95,12 @@ export default function DocentePage({
       <DocenteDetailView
         data={{
           ...data,
-          iscrizioni: filterTeacherSubscriptions(data.iscrizioni, planCourses).map(item => ({
+          iscrizioni: data.iscrizioni.map(item => ({
             insegnamento: item.insegnamento || '',
             iscritto: Boolean((item as { iscritto?: boolean }).iscritto),
             courseCode: item.courseCode,
           })),
         }}
-        onBookExam={onBookExam}
-        onCancelExam={onCancelExam}
         onToggleSubscription={onToggleSubscription}
         onDownload={openMaterial}
         onLoadFolder={loadFolder}

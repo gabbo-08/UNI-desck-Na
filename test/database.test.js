@@ -20,14 +20,28 @@ test('upserts profile fields without persisting login credentials', t => {
   const db = createDatabase(':memory:');
   t.after(() => db.close());
 
-  repository.upsertStudentProfile(db, { id: 'pseudonymous-id', courseId: 'DE3', cohortYear: 2025 });
+  repository.upsertStudentProfile(db, {
+    id: 'pseudonymous-id', matricola: '01234567', courseId: 'DE3', cohortYear: 2025
+  });
   repository.updateStudentProfile(db, 'pseudonymous-id', { channel: 'A-I' });
   const updated = repository.upsertStudentProfile(db, { id: 'pseudonymous-id' });
   assert.equal(updated.course_id, 'DE3');
+  assert.equal(updated.matricola, '01234567');
   assert.equal(updated.cohort_year, 2025);
   assert.equal(updated.channel, 'A-I');
   assert.equal(Object.hasOwn(updated, 'password'), false);
   assert.equal(Object.hasOwn(updated, 'codice_fiscale'), false);
+});
+
+test('normalizes matricole codificate and scarta falsi positivi', t => {
+  const db = createDatabase(':memory:');
+  t.after(() => db.close());
+
+  repository.upsertStudentProfile(db, { id: 'coded', matricola: 'N46 / 1234' });
+  repository.upsertStudentProfile(db, { id: 'false-positive', matricola: 'org/1999' });
+
+  assert.equal(repository.getStudentProfile(db, 'coded').matricola, 'N46/1234');
+  assert.equal(repository.getStudentProfile(db, 'false-positive').matricola, null);
 });
 
 test('stores plan courses and only permits selecting elective rows', t => {

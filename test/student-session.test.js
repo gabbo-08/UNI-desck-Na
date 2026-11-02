@@ -13,6 +13,7 @@ const CF = 'AAABBB00A00A000A';
 function careerData() {
   return {
     anagrafica: {
+      matricola: '01234567',
       codiceCorso: 'DE3',
       corsoDiLaurea: 'Ingegneria Informatica',
       annoImmatricolazione: 2025,
@@ -55,6 +56,7 @@ test('crea la sessione, salva profilo ed esami senza memorizzare credenziali', a
   assert.equal(session.onboardingRequired, false);
   assert.equal(session.docentiReason, 'DOCENTI_CREDENTIALS_REQUIRED');
   assert.equal(storedProfile.course_id, 'DE3');
+  assert.equal(storedProfile.matricola, '01234567');
   assert.equal(storedProfile.cohort_year, 2025);
   assert.equal(Object.hasOwn(storedProfile, 'password'), false);
   assert.equal(Object.hasOwn(storedProfile, 'codice_fiscale'), false);

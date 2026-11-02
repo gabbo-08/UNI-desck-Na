@@ -118,6 +118,18 @@ async function scrapeCalendarioAppelli(context, esisUrl) {
             ? matchNote[1].split(/\b(?:HomePage|Uscita)\b/i)[0].replace(/[;\s]+$/, '').trim().slice(0, 400) || null
             : null;
           const matchOra = text.match(/(?:Ora Appello|Ora)[:\s]*(\d{1,2}:\d{2})/i);
+          const bookingForm = doc.querySelector('form#appello, form[action*="azione=prenota"]');
+          const bookingAction = bookingForm?.getAttribute('action') || null;
+          const annopri = bookingForm?.querySelector('input[name="annopri"]')?.getAttribute('value') || null;
+          const numAppello = bookingForm?.querySelector('input[name="num_appello"]')?.getAttribute('value') || null;
+          const bookingButton = bookingForm?.querySelector('input[type="submit"], button[type="submit"]');
+          const bookingEnabled = Boolean(
+            bookingForm &&
+            annopri &&
+            numAppello &&
+            bookingButton &&
+            !bookingButton.hasAttribute('disabled')
+          );
 
           return {
             id: `appello_${exam.code}`,
@@ -129,7 +141,12 @@ async function scrapeCalendarioAppelli(context, esisUrl) {
             dataAppello: matchDate[1],
             ora: matchOra ? matchOra[1] : null,
             aula: matchAula ? matchAula[1].trim().slice(0, 80) || null : null,
-            note
+            note,
+            annopri,
+            numAppello,
+            bookingAction,
+            bookingMethod: bookingForm?.getAttribute('method')?.toUpperCase() || 'GET',
+            bookingEnabled
           };
         } catch {
           return null;
@@ -150,4 +167,54 @@ async function scrapeCalendarioAppelli(context, esisUrl) {
   }
 }
 
-module.exports = { scrapeCalendarioAppelli };
+function parseBookingResponse(html) {
+  const text = String(html || '')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const success = /prenotazione\s+(?:effettuata|confermata)|iscrizione\s+(?:effettuata|confermata)/i.test(text);
+  const failureMatch = text.match(/(?:finestra temporale chiusa|mancano[^.]{0,180}|esame già superato|già prenotato|non è possibile[^.]{0,180}|errore[^.]{0,180})/i);
+  return {
+    success,
+    message: success ? 'Prenotazione effettuata.' : (failureMatch?.[0]?.trim() || 'Il portale non ha confermato la prenotazione.')
+  };
+}
+
+async function submitAppelloAction(page, esisOrigin, { annopri, numAppello, action = 'prenota' } = {}) {
+  if (!page || !annopri || !numAppello) {
+    const error = new Error('Identificativi appello mancanti.');
+    error.code = 'APPELLO_IDENTIFIERS_REQUIRED';
+    throw error;
+  }
+  if (action !== 'prenota') {
+    const error = new Error('Annullamento Segrepass non ancora mappato.');
+    error.code = 'APPELLO_CANCEL_NOT_MAPPED';
+    throw error;
+  }
+
+  const result = await page.evaluate(async ({ annopri: year, numAppello: appointment }) => {
+    const form = new URLSearchParams();
+    form.set('annopri', String(year));
+    form.set('num_appello', String(appointment));
+    const response = await fetch('/esis/prenotazioni.do?azione=prenota', {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form.toString()
+    });
+    return { ok: response.ok, status: response.status, html: await response.text() };
+  }, { annopri, numAppello });
+
+  const parsed = parseBookingResponse(result.html);
+  if (!result.ok || !parsed.success) {
+    const error = new Error(parsed.message);
+    error.code = 'APPELLO_BOOKING_REJECTED';
+    error.status = result.status >= 400 ? result.status : 400;
+    throw error;
+  }
+  return parsed;
+}
+
+module.exports = { scrapeCalendarioAppelli, parseBookingResponse, submitAppelloAction };

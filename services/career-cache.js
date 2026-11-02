@@ -2,7 +2,9 @@ const crypto = require('node:crypto');
 const { JWT_SECRET } = require('../lib/config');
 
 const DEFAULT_TTL_MS = 15 * 60 * 1000;
-const CACHE_VERSION = 'career-v3';
+// Include the anagrafica parser version so old snapshots without the full
+// matricola are not reused after a scraper change.
+const CACHE_VERSION = 'career-v6';
 const cache = new Map();
 const inFlight = new Map();
 

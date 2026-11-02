@@ -114,6 +114,11 @@ export type Prenotazione = {
   aula?: string;
   isMyProfessor?: boolean;
   note?: string;
+  annopri?: string | null;
+  numAppello?: string | null;
+  bookingAction?: string | null;
+  bookingMethod?: string;
+  bookingEnabled?: boolean;
 };
 
 export type Metriche = {
@@ -303,6 +308,7 @@ export type GroupDocenti = {
 export type TestDocenti = {
   name?: string;
   courseName?: string;
+  professor?: string;
   group?: string;
   date?: string;
   status?: string;
@@ -360,6 +366,17 @@ const API_BASE = (process.env.NEXT_PUBLIC_BACKEND_URL || '').replace(/\/+$/, '')
 
 export function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
+}
+
+function profileCacheScope(token: string): string | null {
+  try {
+    const encodedPayload = token.split('.')[1];
+    if (!encodedPayload) return null;
+    const payload = JSON.parse(atob(encodedPayload.replace(/-/g, '+').replace(/_/g, '/')));
+    return typeof payload.sub === 'string' && payload.sub ? payload.sub : null;
+  } catch {
+    return null;
+  }
 }
 
 function authHeaders(token?: string): Record<string, string> {
@@ -506,9 +523,10 @@ export async function fetchDocentiTests(token: string): Promise<TestDocenti[]> {
 }
 
 export async function fetchDocentiSummary(token: string): Promise<DocentiSummary> {
-  const cacheKey = `segrepass:docenti-summary:${token}`;
+  const scope = profileCacheScope(token);
+  const cacheKey = scope ? `segrepass:docenti-summary:${scope}` : null;
   if (typeof window !== 'undefined') window.localStorage.removeItem('segrepass:docenti-summary');
-  const cached = typeof window !== 'undefined' ? window.localStorage.getItem(cacheKey) : null;
+  const cached = cacheKey && typeof window !== 'undefined' ? window.localStorage.getItem(cacheKey) : null;
   const parseSummary = (value: unknown): DocentiSummary => ({
     announcements: Array.isArray((value as DocentiSummary)?.announcements) ? (value as DocentiSummary).announcements : [],
     subscriptions: Array.isArray((value as DocentiSummary)?.subscriptions) ? (value as DocentiSummary).subscriptions : [],
@@ -516,23 +534,20 @@ export async function fetchDocentiSummary(token: string): Promise<DocentiSummary
     groups: Array.isArray((value as DocentiSummary)?.groups) ? (value as DocentiSummary).groups : [],
     tests: Array.isArray((value as DocentiSummary)?.tests) ? (value as DocentiSummary).tests : []
   });
-  if (cached) {
+  try {
+    const res = await fetchWithAuth(apiUrl('/api/docenti/summary'), token);
+    const summary = parseSummary(res);
+    if (cacheKey && typeof window !== 'undefined') window.localStorage.setItem(cacheKey, JSON.stringify(summary));
+    return summary;
+  } catch (error) {
+    if (!cached) throw error;
     try {
-      const stale = parseSummary(JSON.parse(cached));
-      void fetchWithAuth(apiUrl('/api/docenti/summary'), token)
-        .then(value => {
-          if (typeof window !== 'undefined') window.localStorage.setItem(cacheKey, JSON.stringify(value));
-        })
-        .catch(() => undefined);
-      return stale;
+      return parseSummary(JSON.parse(cached));
     } catch {
-      window.localStorage.removeItem(cacheKey);
+      if (cacheKey) window.localStorage.removeItem(cacheKey);
+      throw error;
     }
   }
-  const res = await fetchWithAuth(apiUrl('/api/docenti/summary'), token);
-  const summary = parseSummary(res);
-  if (typeof window !== 'undefined') window.localStorage.setItem(cacheKey, JSON.stringify(summary));
-  return summary;
 }
 
 export async function fetchTeacherDetail(
@@ -580,4 +595,17 @@ export async function fetchAllPrenotazioni(token: string): Promise<Prenotazione[
 
   // 4. Unisci le due liste
   return [...prenotazioniSegrepass, ...prenotazioniDocentiMappate];
+}
+
+export async function bookCareerExam(
+  token: string,
+  appello: Pick<Prenotazione, 'annopri' | 'numAppello'>
+): Promise<{ success: boolean; message?: string }> {
+  return fetchWithAuth(apiUrl('/api/career/book'), token, {
+    method: 'POST',
+    body: JSON.stringify({
+      annopri: appello.annopri,
+      numAppello: appello.numAppello
+    })
+  }) as Promise<{ success: boolean; message?: string }>;
 }
