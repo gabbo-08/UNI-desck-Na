@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const jwt = require('jsonwebtoken');
 const { createDatabase } = require('../db');
-const { createStudentSession } = require('../services/student-session');
+const { createStudentSession, normalizeLoginIdentifier } = require('../services/student-session');
 const { clearSnapshots, getCareerSnapshot, getTaxesSnapshot, getDocentiSnapshot } = require('../services/career-snapshots');
 const { clearCareerCache } = require('../services/career-cache');
 
@@ -134,4 +134,11 @@ test('rifiuta credenziali vuote prima di invocare lo scraper', async () => {
     { status: 400 }
   );
   assert.equal(scraperCalled, false);
+});
+
+test('normalizza solo email istituzionali e codici fiscali validi', () => {
+  assert.equal(normalizeLoginIdentifier(' aaabbb00a00a000a '), CF);
+  assert.equal(normalizeLoginIdentifier(' Nome.Cognome@STUDENTI.UNINA.IT '), 'nome.cognome@studenti.unina.it');
+  assert.equal(normalizeLoginIdentifier('utente@example.com'), null);
+  assert.equal(normalizeLoginIdentifier('123'), null);
 });

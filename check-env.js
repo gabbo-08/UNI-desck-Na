@@ -7,8 +7,8 @@ function check(name, ok, message) {
   checks.push({ name, ok, message });
 }
 
-check('JWT_SECRET', Boolean(process.env.JWT_SECRET && process.env.JWT_SECRET.trim()),
-  isProduction ? 'obbligatorio in produzione' : 'mancante: verrà usato il segreto di sviluppo');
+check('JWT_SECRET', Boolean(process.env.JWT_SECRET && process.env.JWT_SECRET.trim().length >= 32),
+  'obbligatorio e deve contenere almeno 32 caratteri');
 
 const username = process.env.DOCENTI_USERNAME || '';
 const password = process.env.DOCENTI_PASSWORD || '';
@@ -26,5 +26,5 @@ for (const { name, ok, message } of checks) {
 console.log(`\nDocenti: ${hasDocentiCredentials ? 'credenziali presenti' : 'credenziali assenti (solo avvisi pubblici)'}`);
 console.log(`Ambiente: ${process.env.NODE_ENV || 'development'}`);
 
-const fatal = isProduction && !checks.find(item => item.name === 'JWT_SECRET').ok;
+const fatal = !checks.find(item => item.name === 'JWT_SECRET').ok;
 process.exit(fatal ? 1 : 0);

@@ -13,13 +13,11 @@ async function initCluster() {
     maxConcurrency: 3, // Limite task simultanei per non sovraccaricare il server
     puppeteerOptions: {
       headless: 'new',
-      ignoreHTTPSErrors: true,
       args: [
         '--no-sandbox',
         '--disable-setuid-sandbox',
         '--disable-dev-shm-usage',
-        '--disable-gpu',
-        '--ignore-certificate-errors'
+        '--disable-gpu'
       ]
     },
     // Il login Segrepass può richiedere due tentativi di nodo + estrazione

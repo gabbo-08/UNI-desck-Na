@@ -92,9 +92,20 @@ function normalizeEmail(value) {
   return /^[^\s@]+@studenti\.unina\.it$/.test(email) ? email : null;
 }
 
+function normalizeLoginIdentifier(value) {
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim();
+  if (normalizeEmail(normalized)) return normalized.toLowerCase();
+  const codiceFiscale = normalized.toUpperCase();
+  return /^[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]$/.test(codiceFiscale)
+    ? codiceFiscale
+    : null;
+}
+
 async function createStudentSession({ codiceFiscale, password, email } = {}, dependencies = {}) {
-  if (typeof codiceFiscale !== 'string' || !codiceFiscale.trim() || typeof password !== 'string' || !password) {
-    const error = new Error('Inserisci codice fiscale e password.');
+  const normalizedIdentifier = normalizeLoginIdentifier(codiceFiscale);
+  if (!normalizedIdentifier || typeof password !== 'string' || !password) {
+    const error = new Error('Inserisci codice fiscale o email istituzionale e password.');
     error.status = 400;
     throw error;
   }
@@ -102,7 +113,7 @@ async function createStudentSession({ codiceFiscale, password, email } = {}, dep
   const database = dependencies.database || db;
   const scraper = dependencies.getDatiCarriera || getDatiCarriera;
   const jwtSecret = dependencies.jwtSecret || JWT_SECRET;
-  const cfClean = codiceFiscale.trim().toUpperCase();
+  const cfClean = normalizedIdentifier;
 
   // Cache per studente: se i dati sono freschi si evita lo scraping completo.
   // La chiave include un HMAC della password, così una password errata non
@@ -215,5 +226,7 @@ module.exports = {
   createStudentSession,
   loadDocentiInBackground,
   listPlansForCohort,
-  hasProfileSetup
+  hasProfileSetup,
+  normalizeEmail,
+  normalizeLoginIdentifier
 };

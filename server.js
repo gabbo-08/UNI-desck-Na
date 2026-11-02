@@ -119,14 +119,14 @@ async function start() {
   });
 }
 
-async function gracefulShutdown(signal) {
+async function gracefulShutdown(signal, exitCode = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`\n[System] ${signal} ricevuto: spegnimento sicuro...`);
 
   const forceExit = setTimeout(() => {
     console.error('[System] Spegnimento forzato dopo 10s.');
-    process.exit(1);
+    process.exit(exitCode || 1);
   }, 10000);
   forceExit.unref();
 
@@ -144,17 +144,25 @@ async function gracefulShutdown(signal) {
 
   if (!server) {
     clearTimeout(forceExit);
-    process.exit(0);
+    process.exit(exitCode);
     return;
   }
 
   server.close(() => {
     clearTimeout(forceExit);
     console.log('[System] Server HTTP chiuso.');
-    process.exit(0);
+    process.exit(exitCode);
   });
 }
 
+process.on('uncaughtException', error => {
+  console.error('[System] Eccezione non gestita:', error);
+  void gracefulShutdown('uncaughtException', 1);
+});
+process.on('unhandledRejection', reason => {
+  console.error('[System] Promise rejection non gestita:', reason);
+  void gracefulShutdown('unhandledRejection', 1);
+});
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 

@@ -12,6 +12,21 @@ const NODI_SEGREPASS = ['segrepass1', 'segrepass2', 'segrepass3'];
 const NODE_TIMEOUT_MS = 8000;
 const DEBUG = process.env.DEBUG_SCRAPER === '1';
 
+function portalError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function classifyLoginPage({ pageText = '', hasLoginForm = false, hasAuthenticatedNavigation = false, hasIdentityMarker = false } = {}) {
+  const normalizedText = String(pageText).toLowerCase();
+  if (normalizedText.includes('credenziali non valide') || normalizedText.includes('verificare i dati')) {
+    return 'INVALID_CREDENTIALS';
+  }
+  if (!hasLoginForm && (hasAuthenticatedNavigation || hasIdentityMarker)) return 'AUTHENTICATED';
+  return 'PORTAL_UNAVAILABLE';
+}
+
 function debugLog(...args) {
   if (DEBUG) console.log(...args);
 }
@@ -113,7 +128,7 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
     }
 
     if (!nodoAttivo) {
-      throw new Error('Tutti i nodi di Segrepass (1, 2, 3) sono attualmente offline o in manutenzione. Riprova più tardi.');
+      throw portalError('PORTAL_UNAVAILABLE', 'Il portale Segrepass non è disponibile. Riprova più tardi.');
     }
 
     const inputs = await page.$$('input[type="text"], input[type="password"]');
@@ -144,10 +159,22 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
     debugLog(`[Segrepass] URL post-login: ${safePath(currentUrl)}`);
 
     const pageText = await page.evaluate(() => document.body.innerText || '').catch(() => '');
-    const isSuccess = pageText.toLowerCase().includes('benvenuto') || pageText.toLowerCase().includes('segreteria online');
-
-    if (!isSuccess && (pageText.toLowerCase().includes('credenziali non valide') || pageText.toLowerCase().includes('verificare i dati'))) {
-      throw new Error('Credenziali non valide o errore di autenticazione su Segrepass.');
+    const loginState = await page.evaluate(() => {
+      const text = document.body?.innerText || '';
+      const normalized = value => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const hasLoginForm = Boolean(document.querySelector('input[type="password"]')) &&
+        Boolean(document.querySelector('input[type="submit"], button[type="submit"], input[value="Login"], button.btn'));
+      const hasAuthenticatedNavigation = Array.from(document.querySelectorAll('a, span, div'))
+        .some(element => normalized(element.textContent) === 'segreteria online');
+      const hasIdentityMarker = /\b(?:numero di )?matricola\b|\bmatr\.?\b/i.test(text);
+      return { hasLoginForm, hasAuthenticatedNavigation, hasIdentityMarker };
+    }).catch(() => ({ hasLoginForm: false, hasAuthenticatedNavigation: false, hasIdentityMarker: false }));
+    const loginClassification = classifyLoginPage({ pageText, ...loginState });
+    if (loginClassification === 'INVALID_CREDENTIALS') {
+      throw portalError('INVALID_CREDENTIALS', 'Credenziali Segrepass non valide.');
+    }
+    if (loginClassification !== 'AUTHENTICATED') {
+      throw portalError('PORTAL_UNAVAILABLE', 'Impossibile verificare l’autenticazione sul portale Segrepass.');
     }
 
     const anagraficaDinamica = await page.evaluate(() => {
@@ -457,4 +484,4 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
   });
 }
 
-module.exports = { getDatiCarriera };
+module.exports = { getDatiCarriera, classifyLoginPage };
