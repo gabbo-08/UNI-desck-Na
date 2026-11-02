@@ -10,7 +10,7 @@ docenti.
 - Login con credenziali Segrepass e validazione dell'email istituzionale
   `@studenti.unina.it`.
 - Estrazione automatica dell'anagrafica, inclusa la matricola nei formati
-  numerici e alfanumerici, ad esempio `DE3000397` o `DC9000930`.
+  numerici e alfanumerici, ad esempio `DE123456` o `DC234567`.
 - Persistenza locale dei profili con SQLite e migrazioni automatiche dello
   schema.
 - Dashboard con:
