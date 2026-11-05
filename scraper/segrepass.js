@@ -64,23 +64,30 @@ async function scrapePin(context, esisUrl) {
     const pinUrl = `${url.origin}/esis/caricaMenu.do?azione=visualizzazionePin`;
     
     await page.goto(pinUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-    await sleep(800);
 
     let pin = null;
     let cnp = null;
 
-    // Ispeziona tutti i frame del frameset ESIS
-    for (const frame of page.frames()) {
-      try {
-        const text = await frame.evaluate(() => (document.body ? document.body.innerText : ''));
-        if (!text) continue;
+    // La pagina PIN è un frameset legacy: domcontentloaded può precedere il
+    // caricamento del frame che contiene i dati. Riprova per alcuni secondi,
+    // leggendo sia il testo sia i valori dei campi (non presenti in innerText).
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline && !pin) {
+      const sources = await Promise.all(page.frames().map(frame => frame.evaluate(() => {
+        const text = document.body?.innerText || '';
+        const fields = Array.from(document.querySelectorAll('input, textarea, select'))
+          .map(element => `${element.getAttribute('name') || ''} ${element.getAttribute('id') || ''} ${element.getAttribute('aria-label') || ''} ${element.value || element.textContent || ''}`)
+          .join('\n');
+        return `${text}\n${fields}`;
+      }).catch(() => '')));
 
-        const pinMatch = text.match(/PIN[^\d]*(\d{4,6})/i);
-        const cnpMatch = text.match(/Codice\s+Numerico\s+Personale[^\d]*(\d+)/i);
-
+      for (const source of sources) {
+        const pinMatch = source.match(/(?:codice\s+)?PIN[^\d]{0,80}(\d{4,6})/i);
+        const cnpMatch = source.match(/Codice\s+Numerico\s+Personale[^\d]{0,80}(\d+)/i);
         if (pinMatch && !pin) pin = pinMatch[1].trim();
         if (cnpMatch && !cnp) cnp = cnpMatch[1].trim();
-      } catch {}
+      }
+      if (!pin) await sleep(300);
     }
 
     return { pin, codiceNumericoPersonale: cnp };
@@ -141,11 +148,11 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
 
     await userInput.click({ clickCount: 3 });
     await userInput.press('Backspace');
-    await userInput.type(data.codiceFiscale.trim(), { delay: 30 });
+    await userInput.type(data.codiceFiscale.trim());
 
     await passInput.click({ clickCount: 3 });
     await passInput.press('Backspace');
-    await passInput.type(data.password, { delay: 30 });
+    await passInput.type(data.password);
 
     console.log(`[Segrepass] Invio credenziali in corso...`);
     await Promise.all([
@@ -484,4 +491,4 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
   });
 }
 
-module.exports = { getDatiCarriera, classifyLoginPage };
+module.exports = { getDatiCarriera, classifyLoginPage, scrapePin };

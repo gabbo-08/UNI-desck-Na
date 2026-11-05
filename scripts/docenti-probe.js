@@ -68,7 +68,6 @@ async function clickByText(page, text) {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   const browser = await puppeteer.launch({
     headless: 'new',
-    ignoreHTTPSErrors: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
   });
   const page = await browser.newPage();

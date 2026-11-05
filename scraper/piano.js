@@ -2,6 +2,7 @@
 // Legge dalla pagina "Dati Carriera > Piano di Studi" (ESIS) intestazione e tabella degli insegnamenti.
 
 const PIANO_PATH = '/esis/caricaMenu.do?azione=pianiStudio';
+const TABLE_READY_TIMEOUT_MS = 1200;
 
 /**
  * Estrae corso e coorte dall'intestazione del Piano di Studi ESIS.
@@ -28,7 +29,10 @@ async function openPianoPage(page, esisUrl) {
     () => /Insegnamenti del Piano|Piano di Studi/i.test(document.body ? document.body.innerText : ''),
     { timeout: 6000 }
   ).catch(() => {});
-  await new Promise(resolve => setTimeout(resolve, 1200));
+  await page.waitForFunction(() => Array.from(document.querySelectorAll('table')).some(table => {
+    const text = table.innerText || '';
+    return /\bCodice\b/i.test(text) && /\bCFU\b/i.test(text) && /Descrizione/i.test(text);
+  }), { timeout: TABLE_READY_TIMEOUT_MS }).catch(() => {});
 }
 
 /**

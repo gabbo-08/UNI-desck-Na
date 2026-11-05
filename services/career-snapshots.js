@@ -7,6 +7,7 @@ const docentiSnapshots = new Map();
 const taxesSnapshots = new Map(); // Aggiunto store per le tasse
 const slowSnapshots = new Map(); // Tasse + appelli caricati in background
 const docentiLoading = new Set();
+const docentiGenerations = new Map();
 const pianoSnapshots = new Map(); // piano di studi letto da Segrepass nell'ultimo login
 
 function prune(store) {
@@ -78,9 +79,15 @@ function getDocentiSnapshot(profileId) {
 
 function markDocentiLoading(profileId) {
   docentiLoading.add(profileId);
+  return docentiGenerations.get(profileId) || 0;
 }
 
-function clearDocentiLoading(profileId) {
+function isCurrentDocentiLoad(profileId, generation) {
+  return (docentiGenerations.get(profileId) || 0) === generation;
+}
+
+function clearDocentiLoading(profileId, generation) {
+  if (generation !== undefined && !isCurrentDocentiLoad(profileId, generation)) return;
   docentiLoading.delete(profileId);
 }
 
@@ -88,9 +95,15 @@ function isDocentiLoading(profileId) {
   return docentiLoading.has(profileId);
 }
 
+function invalidateDocentiSnapshot(profileId) {
+  docentiGenerations.set(profileId, (docentiGenerations.get(profileId) || 0) + 1);
+  docentiSnapshots.delete(profileId);
+  docentiLoading.delete(profileId);
+}
+
 function clearSnapshots(profileId) {
   careerSnapshots.delete(profileId);
-  docentiSnapshots.delete(profileId);
+  invalidateDocentiSnapshot(profileId);
   taxesSnapshots.delete(profileId); // Svuota anche le tasse
   slowSnapshots.delete(profileId);
   pianoSnapshots.delete(profileId);
@@ -109,6 +122,8 @@ module.exports = {
   setDocentiSnapshot,
   getDocentiSnapshot,
   markDocentiLoading,
+  isCurrentDocentiLoad,
+  invalidateDocentiSnapshot,
   clearDocentiLoading,
   isDocentiLoading,
   clearSnapshots

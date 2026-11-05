@@ -20,7 +20,7 @@ if (!USER || !PASSWORD) {
 }
 
 const results = [];
-let token = null;
+let authCookie = null;
 
 function record(name, status, detail = '') {
   results.push({ name, status, detail });
@@ -30,8 +30,7 @@ function record(name, status, detail = '') {
 async function call(path, { method = 'GET', body, cookie, timeout = 30000 } = {}) {
   const headers = { Origin: ORIGIN, Accept: 'application/json' };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
-  if (token) headers.Authorization = `Bearer ${token}`;
-  if (cookie) headers.Cookie = cookie;
+  if (cookie || authCookie) headers.Cookie = cookie || authCookie;
 
   return fetch(`${BASE_URL}${path}`, {
     method,
@@ -83,8 +82,8 @@ async function main() {
     return;
   }
 
-  token = first.login.token;
-  record('login payload', 'OK', `profilo=${Boolean(first.login.profile)} onboarding=${Boolean(first.login.onboardingRequired)} metriche=${Boolean(first.login.metriche)}`);
+  authCookie = cookie;
+  record('login payload', 'OK', `profilo=${Boolean(first.login.profile)} onboarding=${Boolean(first.login.onboardingRequired)} metriche=${Boolean(first.login.metriche)} tokenNelBody=${Boolean(first.login.token)}`);
 
   // Secondo login: deve usare la cache e non riaprire il browser.
   try {

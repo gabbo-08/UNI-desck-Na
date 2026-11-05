@@ -11,13 +11,12 @@ import {
 } from '@/lib/api';
 
 type Props = {
-  token: string;
   initialProfile: ProfiloRecord | null;
   onSaved: (profile: ProfiloStudente) => void;
   onCancel?: () => void;
 };
 
-export default function ProfileSetupView({ token, initialProfile, onSaved, onCancel }: Props) {
+export default function ProfileSetupView({ initialProfile, onSaved, onCancel }: Props) {
   const profile = initialProfile ?? {};
 
   const [courseId, setCourseId] = useState(profile.courseId || profile.course_id || '');
@@ -49,7 +48,7 @@ export default function ProfileSetupView({ token, initialProfile, onSaved, onCan
     setError('');
     setNotice('');
     try {
-      const result = await fetchStudyPlan(token, courseId.trim(), Number(cohortYear));
+      const result = await fetchStudyPlan(courseId.trim(), Number(cohortYear));
       setPlan(result);
       setSelectedIds(result.selectedElectiveIds || []);
       setNotice(`Piano caricato: ${result.plan?.courseName || result.plan?.course_name || ''}`);
@@ -76,7 +75,7 @@ export default function ProfileSetupView({ token, initialProfile, onSaved, onCan
     setSaving(true);
     setError('');
     try {
-      const result = await updateProfile(token, {
+      const result = await updateProfile({
         courseId: courseId.trim(),
         courseName: courseName.trim(),
         cohortYear: Number(cohortYear),

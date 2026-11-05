@@ -1,0 +1,2 @@
+NODE_ENVnpm install
+npx puppeteer browsers install chrome

@@ -265,6 +265,102 @@ function clearSelectedElectives(arg1, arg2) {
   db.prepare('DELETE FROM SelectedElectives WHERE profile_id = ?').run(profileId);
 }
 
+function professorPreferenceCourseKey(courseCode, courseName) {
+  const code = String(courseCode || '').trim().toUpperCase();
+  return code ? `code:${code}` : `name:${normalizeName(courseName)}`;
+}
+
+function getProfessorPreferences(profileId, database = db) {
+  return database.prepare(`
+    SELECT id, course_key AS courseKey, course_code AS courseCode,
+      course_name AS courseName, professor_id AS professorId,
+      professor_name AS professorName, created_at AS createdAt
+    FROM ProfessorPreferences WHERE profile_id = ?
+    ORDER BY course_name COLLATE NOCASE, professor_name COLLATE NOCASE
+  `).all(profileId);
+}
+
+function saveProfessorPreference(profileId, preference, database = db) {
+  const courseKey = professorPreferenceCourseKey(preference.courseCode, preference.courseName);
+  database.prepare(`
+    INSERT INTO ProfessorPreferences (
+      profile_id, course_key, course_code, course_name, professor_id, professor_name
+    ) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(profile_id, course_key, professor_id) DO UPDATE SET
+      course_code = excluded.course_code,
+      course_name = excluded.course_name,
+      professor_name = excluded.professor_name
+  `).run(
+    profileId,
+    courseKey,
+    preference.courseCode || null,
+    preference.courseName,
+    preference.professorId,
+    preference.professorName
+  );
+  return database.prepare(`
+    SELECT id, course_key AS courseKey, course_code AS courseCode,
+      course_name AS courseName, professor_id AS professorId,
+      professor_name AS professorName, created_at AS createdAt
+    FROM ProfessorPreferences WHERE profile_id = ? AND course_key = ? AND professor_id = ?
+  `).get(profileId, courseKey, preference.professorId);
+}
+
+function deleteProfessorPreference(profileId, preferenceId, database = db) {
+  return database.prepare('DELETE FROM ProfessorPreferences WHERE profile_id = ? AND id = ?')
+    .run(profileId, preferenceId).changes > 0;
+}
+
+function getDocentiDataCache(profileId, database = db) {
+  const row = database.prepare('SELECT data_json AS dataJson, fetched_at AS fetchedAt FROM DocentiDataCache WHERE profile_id = ?').get(profileId);
+  if (!row) return null;
+  try {
+    const data = JSON.parse(row.dataJson);
+    if (!data || typeof data !== 'object' || Array.isArray(data) || data.available === false) return null;
+    const fetchedAt = Date.parse(row.fetchedAt);
+    return { data, fetchedAt: Number.isFinite(fetchedAt) ? fetchedAt : 0 };
+  } catch {
+    database.prepare('DELETE FROM DocentiDataCache WHERE profile_id = ?').run(profileId);
+    return null;
+  }
+}
+
+function saveDocentiDataCache(profileId, data, database = db, fetchedAt = new Date()) {
+  if (!profileId || !data || typeof data !== 'object' || Array.isArray(data) || data.available === false) return false;
+  if (!database.prepare('SELECT 1 FROM StudentProfile WHERE id = ?').get(profileId)) return false;
+  const dataJson = JSON.stringify(data);
+  database.prepare(`
+    INSERT INTO DocentiDataCache (profile_id, data_json, fetched_at) VALUES (?, ?, ?)
+    ON CONFLICT(profile_id) DO UPDATE SET data_json = excluded.data_json, fetched_at = excluded.fetched_at
+  `).run(profileId, dataJson, fetchedAt instanceof Date ? fetchedAt.toISOString() : new Date(fetchedAt).toISOString());
+  return true;
+}
+
+function getTeacherAnnouncementsCache(professorId, database = db) {
+  const row = database.prepare('SELECT data_json AS dataJson, fetched_at AS fetchedAt FROM TeacherAnnouncementsCache WHERE professor_id = ?').get(professorId);
+  if (!row) return null;
+  try {
+    const data = JSON.parse(row.dataJson);
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+    const fetchedAt = Date.parse(row.fetchedAt);
+    return { data, fetchedAt: Number.isFinite(fetchedAt) ? fetchedAt : 0 };
+  } catch {
+    database.prepare('DELETE FROM TeacherAnnouncementsCache WHERE professor_id = ?').run(professorId);
+    return null;
+  }
+}
+
+function saveTeacherAnnouncementsCache(professorId, data, database = db, fetchedAt = new Date()) {
+  if (!professorId || !data || typeof data !== 'object' || Array.isArray(data) || data.announcementError) return false;
+  database.prepare('DELETE FROM TeacherAnnouncementsCache WHERE fetched_at < ?')
+    .run(new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString());
+  database.prepare(`
+    INSERT INTO TeacherAnnouncementsCache (professor_id, data_json, fetched_at) VALUES (?, ?, ?)
+    ON CONFLICT(professor_id) DO UPDATE SET data_json = excluded.data_json, fetched_at = excluded.fetched_at
+  `).run(professorId, JSON.stringify(data), fetchedAt instanceof Date ? fetchedAt.toISOString() : new Date(fetchedAt).toISOString());
+  return true;
+}
+
 module.exports = {
   normalizeName,
   getStudentProfile,
@@ -275,5 +371,13 @@ module.exports = {
   getPlanCourses,
   getSelectedElectiveIds,
   replaceSelectedElectives,
-  clearSelectedElectives
+  clearSelectedElectives,
+  professorPreferenceCourseKey,
+  getProfessorPreferences,
+  saveProfessorPreference,
+  deleteProfessorPreference,
+  getDocentiDataCache,
+  saveDocentiDataCache,
+  getTeacherAnnouncementsCache,
+  saveTeacherAnnouncementsCache
 };

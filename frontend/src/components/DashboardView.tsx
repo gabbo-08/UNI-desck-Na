@@ -7,6 +7,7 @@ import {
   BookOpen,
   Award,
   CalendarDays,
+  CalendarRange,
   GraduationCap,
   RefreshCw,
   LogIn,
@@ -47,18 +48,24 @@ import {
   type ProfiloStudente,
   type SlowData,
   type TassaItem,
+  type SubscriptionDocenti,
+  type ProfessorPreference,
+  type PlanCourse,
+  fetchProfessorPreferences,
 } from '@/lib/api';
 import ProfileSetupView from '@/components/ProfileSetupView';
 import StudyPlanView from '@/components/StudyPlanView';
 import TimetableView from '@/components/TimetableView';
+import AgendaView from '@/components/AgendaView';
 import DocentiView from '@/components/DocentiView';
 import ThemeSwitch from '@/components/ThemeSwitch';
 import PinReveal from '@/components/PinReveal';
 
-type View = 'home' | 'career' | 'prenotazioni' | 'taxes' | 'docenti' | 'timetable' | 'plan';
+type View = 'home' | 'agenda' | 'career' | 'prenotazioni' | 'taxes' | 'docenti' | 'timetable' | 'plan';
 
 const NAV: { id: View; label: string; icon: typeof House }[] = [
   { id: 'home', label: 'Home', icon: House },
+  { id: 'agenda', label: 'Agenda', icon: CalendarRange },
   { id: 'career', label: 'Carriera & Voti', icon: BookOpen },
   { id: 'prenotazioni', label: 'Prenotazioni', icon: CalendarCheck },
   { id: 'taxes', label: 'Tasse & Pagamenti', icon: CreditCard },
@@ -100,10 +107,28 @@ function formatDate(dateStr?: string | null) {
 function dataItalianaTs(value?: string | null): number {
   if (!value) return 0;
   const testo = String(value);
+  // Alcune risposte dei portali riportano il timestamp Unix in millisecondi.
+  // Se non lo riconosciamo, l'appello finisce tra quelli futuri e non nello storico.
+  if (/^\d{12,14}$/.test(testo)) {
+    const timestamp = Number(testo);
+    return Number.isFinite(timestamp) && !Number.isNaN(new Date(timestamp).getTime()) ? timestamp : 0;
+  }
   const it = testo.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-  if (it) return new Date(Number(it[3]), Number(it[2]) - 1, Number(it[1])).getTime();
+  const separata = it || testo.match(/(\d{1,2})[-.](\d{1,2})[-.](\d{4})/);
+  if (separata) {
+    const [, day, month, year] = separata;
+    const date = new Date(Number(year), Number(month) - 1, Number(day));
+    return date.getFullYear() === Number(year) && date.getMonth() === Number(month) - 1 && date.getDate() === Number(day)
+      ? date.getTime()
+      : 0;
+  }
   const iso = testo.match(/^(\d{4})-(\d{2})-(\d{2})/);
-  if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3])).getTime();
+  if (iso) {
+    const date = new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
+    return date.getFullYear() === Number(iso[1]) && date.getMonth() === Number(iso[2]) - 1 && date.getDate() === Number(iso[3])
+      ? date.getTime()
+      : 0;
+  }
   return 0;
 }
 
@@ -138,7 +163,7 @@ function formatGiornoLungo(iso: string): string {
 }
 
 export default function DashboardView() {
-  const [token, setToken] = useState<string | null>(null);
+  const [authenticated, setAuthenticated] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
 
   const [profile, setProfile] = useState<ProfiloStudente | null>(null);
@@ -158,7 +183,7 @@ export default function DashboardView() {
   const [dismissedSlowNotice, setDismissedSlowNotice] = useState<'loading' | 'ready' | 'error' | null>(null);
 
   const clearSession = () => {
-    setToken(null);
+    setAuthenticated(false);
     setProfile(null);
     setData(null);
     setOnboardingRequired(false);
@@ -167,12 +192,21 @@ export default function DashboardView() {
     setCredentials({ codiceFiscale: '', password: '', email: '' });
   };
 
-  const caricaDati = async (jwtToken: string) => {
+  useEffect(() => {
+    const onSessionExpired = () => {
+      clearSession();
+      setError('Sessione scaduta. Inserisci di nuovo le credenziali.');
+    };
+    window.addEventListener('segrepass:session-expired', onSessionExpired);
+    return () => window.removeEventListener('segrepass:session-expired', onSessionExpired);
+  }, []);
+
+  const caricaDati = async (refresh = false) => {
     await Promise.resolve();
     setLoading(true);
     setError('');
     try {
-      const metriche = await fetchMetriche(jwtToken);
+      const metriche = await fetchMetriche({ refresh });
       setData(metriche);
     } catch (err: unknown) {
       if (err instanceof Error && err.message === 'SESSION_EXPIRED') {
@@ -192,10 +226,13 @@ export default function DashboardView() {
     restoreSession()
       .then(async session => {
         if (!active || !session) return;
-        setToken(session.token);
+        setAuthenticated(true);
         setProfile(session.profile);
         setOnboardingRequired(session.onboardingRequired);
-        await caricaDati(session.token);
+        await caricaDati();
+      })
+      .catch((sessionError: unknown) => {
+        if (active) setError(sessionError instanceof Error ? sessionError.message : 'Impossibile verificare la sessione.');
       })
       .finally(() => {
         if (active) setCheckingSession(false);
@@ -209,7 +246,7 @@ export default function DashboardView() {
   }, [slowNotice]);
 
   useEffect(() => {
-    if (!token) {
+    if (!authenticated) {
       Promise.resolve().then(() => setSlowNotice(null));
       return;
     }
@@ -219,7 +256,7 @@ export default function DashboardView() {
 
     const poll = async () => {
       try {
-        const slow: SlowData = await fetchSlowData(token);
+        const slow: SlowData = await fetchSlowData();
         if (!active) return;
 
         if (slow.status === 'ready') {
@@ -258,7 +295,7 @@ export default function DashboardView() {
       active = false;
       if (timer) clearTimeout(timer);
     };
-  }, [token]);
+  }, [authenticated]);
 
 const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -303,7 +340,7 @@ const handleLogin = async (e: React.FormEvent) => {
       });
       
       setLoginStep('Finalizzazione sessione...');
-      setToken(access.token);
+      setAuthenticated(true);
       setProfile(access.profile);
       setOnboardingRequired(access.onboardingRequired);
       setData(access.metriche);
@@ -353,11 +390,11 @@ const handleLogin = async (e: React.FormEvent) => {
   const [timetableError, setTimetableError] = useState('');
 
   useEffect(() => {
-    if (!token) return;
+    if (!authenticated) return;
     let active = true;
     setTimetableLoading(true);
     setTimetableError('');
-    fetchTimetable(token)
+    fetchTimetable()
       .then((res) => { if (active) setTimetableEvents(res.timetable?.events ?? []); })
       .catch((err: unknown) => {
         if (!active) return;
@@ -366,7 +403,7 @@ const handleLogin = async (e: React.FormEvent) => {
       })
       .finally(() => { if (active) setTimetableLoading(false); });
     return () => { active = false; };
-  }, [token]);
+  }, [authenticated]);
 
   // Prossima lezione: il primo giorno con lezioni da oggi in avanti.
   // Per oggi conta solo ciò che non è ancora finito.
@@ -393,45 +430,53 @@ const handleLogin = async (e: React.FormEvent) => {
   // Prenotazioni del portale Docenti: caricate al login e mostrate insieme agli appelli Segrepass.
   const [docentiBookings, setDocentiBookings] = useState<BookedExamDocenti[]>([]);
   const [docentiTests, setDocentiTests] = useState<TestDocenti[]>([]);
+  const [docentiSubscriptions, setDocentiSubscriptions] = useState<SubscriptionDocenti[]>([]);
+  const [professorPreferences, setProfessorPreferences] = useState<ProfessorPreference[]>([]);
   const [bookingId, setBookingId] = useState<string | null>(null);
 
  const fetchingDocentiRef = useRef(false);
 
   useEffect(() => {
-    if (!token) return;
+    if (!authenticated) return;
     if (fetchingDocentiRef.current) return; // Blocca le chiamate parallele
 
     let active = true;
     fetchingDocentiRef.current = true; // Segnala che la chiamata è in corso
 
-    fetchDocentiSummary(token)
-      .then(({ bookedExams: bookings, tests }) => {
+    fetchDocentiSummary()
+      .then(({ bookedExams: bookings, tests, subscriptions }) => {
         if (active) {
           setDocentiBookings(bookings);
           setDocentiTests(tests);
+          setDocentiSubscriptions(subscriptions);
         }
       })
       .catch(() => {
         if (active) {
           setDocentiBookings([]);
           setDocentiTests([]);
+          setDocentiSubscriptions([]);
         }
       })
-      .finally(() => { 
-         // Aspetta 2 secondi prima di sbloccare, evitando il rimbalzo di React Strict Mode
-         setTimeout(() => { fetchingDocentiRef.current = false; }, 2000); 
-      });
+      .finally(() => { fetchingDocentiRef.current = false; });
 
     return () => { active = false; };
-  }, [token]);
+  }, [authenticated]);
+
+  useEffect(() => {
+    if (!authenticated) return;
+    void fetchProfessorPreferences().then(setProfessorPreferences).catch(() => setProfessorPreferences([]));
+  }, [authenticated]);
 
   const listaPrenotazioni = useMemo<Prenotazione[]>(() => {
     const daPortale: Prenotazione[] = docentiBookings.map((b, idx) => ({
       id: `docenti-${idx}`,
-      materia: b.courseName || b.descrInse || JSON.stringify(b),
+      materia: b.courseName || b.descrInse || b.examName || b.materia || b.name || 'Esame Docenti',
       docente: b.professor || b.docente || b.cognomeDocente || 'Non specificato',
       dataAppello: b.examDate || b.dataAppello,
-      aula: b.location || b.aula,
+      inizioPrenotazione: b.inizioPrenotazione,
+      finePrenotazione: b.finePrenotazione,
+      aula: b.location || b.aula || b.room,
       note: b.bookingDate ? `Prenotato il ${b.bookingDate}` : undefined,
       isMyProfessor: true,
     }));
@@ -446,7 +491,7 @@ const handleLogin = async (e: React.FormEvent) => {
 
     const visti = new Set<string>();
     const unite = [...(data?.prenotazioni || []), ...daPortale, ...testPortale].filter((p) => {
-      const chiave = `${(p.materia || '').toLowerCase()}|${p.dataAppello || ''}`;
+      const chiave = `${(p.materia || '').toLowerCase()}|${p.dataAppello || ''}|${(p.docente || '').toLowerCase()}`;
       if (visti.has(chiave)) return false;
       visti.add(chiave);
       return true;
@@ -510,11 +555,36 @@ const handleLogin = async (e: React.FormEvent) => {
     });
   }, [listaPrenotazioni, searchPrenotazione]);
 
-  // Appelli Segrepass futuri: azione principale. Tutto il resto (passato o già prenotato) è storico.
+  // Gli appelli passati di Segrepass non sono prenotazioni personali: lo storico
+  // deve provenire esclusivamente dalle prenotazioni lette dal portale Docenti.
   const appelliDisponibili = useMemo(
     () => prenotazioniFiltrate.filter(p => !isAppelloPassato(p) && !p.id?.startsWith('docenti-')),
     [prenotazioniFiltrate]
   );
+  const appelliPerCorso = useMemo(() => {
+    const key = (value?: string) => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').replace(/\bII\b/g, '2').replace(/\bIII\b/g, '3').replace(/\bIV\b/g, '4').replace(/\bI\b/g, '1').trim();
+    const teacherMatch = (a?: string, b?: string) => {
+      const tokens = (value?: string) => key(value).split(' ').filter(token => token.length > 2);
+      const left = tokens(a); const right = new Set(tokens(b));
+      if (!left.length || !right.size) return false;
+      if (left.length === 1) return right.has(left[0]);
+      return right.has(left[0]) && right.has(left[left.length - 1]);
+    };
+    const groups = new Map<string, { title: string; items: Prenotazione[] }>();
+    for (const item of appelliDisponibili) {
+      const title = item.materia || 'Esame senza titolo';
+      const k = key(title);
+      const group = groups.get(k) || { title, items: [] };
+      group.items.push(item); groups.set(k, group);
+    }
+    return [...groups.values()].map(group => {
+      const enrolled = docentiSubscriptions.filter(sub => key(sub.courseName) === key(group.title));
+      const preferred = professorPreferences.filter(pref => key(pref.courseName) === key(group.title));
+      const targetTeachers = enrolled.length ? enrolled.map(s => s.professor || '').filter(Boolean) : preferred.map(p => p.professorName);
+      const primary = targetTeachers.length ? group.items.find(item => targetTeachers.some(name => teacherMatch(name, item.docente))) : undefined;
+      return { ...group, primary, targetName: targetTeachers.join(', '), hasEnrollment: enrolled.length > 0, alternatives: group.items.filter(item => item !== primary) };
+    });
+  }, [appelliDisponibili, docentiSubscriptions, professorPreferences]);
   const storicoPrenotazioni = useMemo(
     () => prenotazioniFiltrate.filter(p => !appelliDisponibili.includes(p)),
     [prenotazioniFiltrate, appelliDisponibili]
@@ -524,15 +594,15 @@ const handleLogin = async (e: React.FormEvent) => {
     [storicoPrenotazioni]
   );
   const storicoEsami = useMemo(
-    () => storicoPrenotazioni.filter(p => !p.id?.startsWith('docenti-test-')),
-    [storicoPrenotazioni]
+    () => prenotazioniFiltrate.filter(p => p.id?.startsWith('docenti-') && !p.id?.startsWith('docenti-test-')),
+    [prenotazioniFiltrate]
   );
 
   const handleBookCareerExam = async (appello: Prenotazione) => {
-    if (!token || !appello.annopri || !appello.numAppello || !appello.bookingEnabled || !appello.id) return;
+    if (!authenticated || !appello.annopri || !appello.numAppello || !appello.bookingEnabled || !appello.id) return;
     setBookingId(appello.id);
     try {
-      await bookCareerExam(token, appello);
+      await bookCareerExam(appello);
       setData(current => current ? {
         ...current,
         prenotazioni: (current.prenotazioni || []).map(item =>
@@ -555,7 +625,7 @@ const handleLogin = async (e: React.FormEvent) => {
     );
   }
 
-  if (!token) {
+  if (!authenticated) {
     return (
       <main className={`${pageBg} flex items-center justify-center p-4`}>
         <form onSubmit={handleLogin} className={`${CARD} w-full max-w-sm space-y-4 p-6`}>
@@ -589,7 +659,7 @@ const handleLogin = async (e: React.FormEvent) => {
             onChange={(e) => setCredentials((c) => ({ ...c, password: e.target.value }))}
             className="w-full rounded-xl border border-white/10 bg-white/5 py-2.5 px-3 text-xs text-white placeholder-slate-400 focus:border-[#5AB0F0] focus:outline-none"
           />
-          <p className="text-center text-xs text-slate-500">La password non viene salvata in chiaro: resta cifrata nel cookie di sessione.</p>
+          <p className="text-center text-xs text-slate-500">Le credenziali vengono conservate solo cifrate sul server.</p>
           <button
             type="submit"
             disabled={loading}
@@ -610,7 +680,6 @@ const handleLogin = async (e: React.FormEvent) => {
     return (
       <main className={`${pageBg} px-4 py-8 sm:px-8`}>
         <ProfileSetupView
-          token={token}
           initialProfile={profile}
           onSaved={handleProfileSaved}
           onCancel={() => setEditingProfile(false)}
@@ -619,7 +688,7 @@ const handleLogin = async (e: React.FormEvent) => {
     );
   }
 
-  const refresh = () => token && caricaDati(token);
+  const refresh = () => authenticated && caricaDati(true);
 
   return (
     <div className={pageBg}>
@@ -951,6 +1020,7 @@ const handleLogin = async (e: React.FormEvent) => {
 
               <div className="grid gap-4 lg:grid-cols-3">
                 {[
+                  { id: 'agenda' as const, title: 'Agenda', text: 'Lezioni, appelli e scadenze in un calendario', cta: 'Apri Agenda', icon: CalendarRange },
                   { id: 'timetable' as const, title: 'Orario Lezioni', text: 'Consulta aule, orari e docenti', cta: 'Apri Orario', icon: CalendarDays },
                   { id: 'plan' as const, title: 'Piano di Studi', text: 'Esami superati e materie da sostenere', cta: 'Apri Piano', icon: ClipboardList },
                   { id: 'docenti' as const, title: 'Avvisi Docenti', text: 'Bacheche, ricevimenti e contatti', cta: 'Apri Avvisi', icon: Megaphone },
@@ -978,6 +1048,16 @@ const handleLogin = async (e: React.FormEvent) => {
           )}
 
           {/* PRENOTAZIONI VIEW */}
+          {activeView === 'agenda' && (
+            <AgendaView
+              lessons={timetableEvents}
+              exams={listaPrenotazioni}
+              taxes={data?.tasse}
+              timetableLoading={timetableLoading}
+              timetableError={timetableError}
+            />
+          )}
+
           {activeView === 'prenotazioni' && (
             <section className="space-y-4">
               <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -1012,35 +1092,19 @@ const handleLogin = async (e: React.FormEvent) => {
                         Nessun appello aperto al momento.
                       </div>
                     ) : (
-                      appelliDisponibili.map((p, idx) => (
-                        <div
-                          key={`disp-${p.id ?? idx}`}
-                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 rounded-2xl border-2 border-emerald-400 bg-[#0A2238]/90 p-4 shadow-[0_0_24px_-6px_rgba(52,211,153,0.6)]"
-                        >
-                          <div className="min-w-0 space-y-1.5">
-                            <p className="text-base font-bold text-white">{p.materia}</p>
-                            <p className="text-xs text-slate-300">Prof. {p.docente || 'Non specificato'}</p>
-                            <div className="flex flex-wrap items-center gap-3 pt-1 text-xs text-slate-300">
-                              {p.dataAppello && <span>📅 <strong className="text-white">{dataLeggibile(p.dataAppello)}</strong></span>}
-                              {p.ora && <span>⏰ <strong className="text-white">{p.ora}</strong></span>}
-                              {p.aula && <span>📍 <strong className="text-white">{p.aula}</strong></span>}
-                            </div>
-                            {p.note && <p className="max-w-xl text-[11px] italic text-slate-400">{p.note}</p>}
+                      appelliPerCorso.map((group, idx) => (
+                        <div key={`group-${group.title}-${idx}`} className="space-y-2 rounded-2xl border border-white/10 bg-[#071426]/50 p-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+                            <h4 className="text-sm font-bold text-white">{group.title}</h4>
+                            {group.targetName && <span className={`rounded-full px-2 py-1 text-[10px] font-semibold ${group.primary ? 'bg-emerald-400/15 text-emerald-300' : 'bg-amber-400/15 text-amber-200'}`}>{group.hasEnrollment ? `Iscritto a: ${group.targetName}` : `Preferito: ${group.targetName}`}</span>}
                           </div>
-                          {p.bookingEnabled ? (
-                            <button
-                              type="button"
-                              disabled={bookingId === p.id}
-                              onClick={() => void handleBookCareerExam(p)}
-                              className="shrink-0 rounded-lg bg-emerald-400 px-4 py-2 text-center text-xs font-bold text-[#042016] shadow-[0_0_16px_-4px_rgba(52,211,153,0.8)] disabled:opacity-50"
-                            >
-                              {bookingId === p.id ? 'Prenotazione...' : 'Prenota'}
-                            </button>
-                          ) : (
-                            <span className="shrink-0 rounded-lg bg-white/10 px-4 py-2 text-center text-xs font-bold text-slate-300">
-                              Appello disponibile
-                            </span>
-                          )}
+                          {!group.primary && group.targetName && <p className="px-1 text-[11px] text-amber-200/80">L?appello del docente selezionato non risulta pubblicato; gli altri appelli sono mostrati sotto.</p>}
+                          {[...(group.primary ? [group.primary] : []), ...group.alternatives].map((p, appelloIndex) => (
+                            <div key={`disp-${p.id ?? appelloIndex}`} className={`flex flex-col gap-3 rounded-xl p-3 sm:flex-row sm:items-center sm:justify-between ${p === group.primary ? 'border-2 border-emerald-400 bg-[#0A2238]/90' : 'border border-white/10 bg-white/[0.03]'}`}>
+                              <div className="min-w-0 space-y-1"><p className="text-sm font-bold text-white">Prof. {p.docente || 'Non specificato'}{p === group.primary ? ' ? docente selezionato' : ''}</p><div className="flex flex-wrap gap-3 text-[11px] text-slate-400">{p.dataAppello && <span>{dataLeggibile(p.dataAppello)}</span>}{p.ora && <span>{p.ora}</span>}{p.aula && <span>{p.aula}</span>}</div></div>
+                              {p.bookingEnabled ? <button type="button" disabled={bookingId === p.id} onClick={() => void handleBookCareerExam(p)} className="shrink-0 rounded-lg bg-emerald-400 px-3 py-2 text-xs font-bold text-[#042016] disabled:opacity-50">{bookingId === p.id ? 'Prenotazione...' : 'Prenota'}</button> : <span className="shrink-0 text-[10px] text-slate-400">Appello disponibile</span>}
+                            </div>
+                          ))}
                         </div>
                       ))
                     )}
@@ -1063,7 +1127,7 @@ const handleLogin = async (e: React.FormEvent) => {
 
                   {storicoEsami.length > 0 && (
                     <div className="space-y-3">
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Storico Prenotazioni</h3>
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">Storico prenotazioni Docenti</h3>
                       {storicoEsami.map((p, idx) => (
                         <div
                           key={`st-${p.id ?? idx}`}
@@ -1273,21 +1337,22 @@ const handleLogin = async (e: React.FormEvent) => {
 
           {activeView === 'docenti' && (
             <DocentiView
-              token={token}
+              authenticated={authenticated}
               coursePrefix={codiceCorso || null}
               courseCodes={teacherCourseCodes}
               studentId={matricola}
+              availableCourses={(data?.pianoDiStudiRaw || []) as PlanCourse[]}
             />
           )}
-          {activeView === 'plan' && profile && <StudyPlanView token={token} profile={profile} />}
-          {activeView === 'timetable' && profile && <TimetableView token={token} profile={profile} />}
+          {activeView === 'plan' && profile && <StudyPlanView authenticated={authenticated} profile={profile} />}
+          {activeView === 'timetable' && profile && <TimetableView authenticated={authenticated} profile={profile} />}
         </main>
       </div>
 
       {/* TAB BAR (mobile) */}
       <nav
         aria-label="Sezioni"
-        className="fixed inset-x-0 bottom-0 z-20 grid grid-cols-7 border-t border-white/10 bg-[#061426]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
+        className="fixed inset-x-0 bottom-0 z-20 grid grid-cols-8 border-t border-white/10 bg-[#061426]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
       >
         {NAV.map(({ id, label, icon: Icon }) => {
           const selected = activeView === id;

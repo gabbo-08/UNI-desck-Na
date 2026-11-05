@@ -1,4 +1,3 @@
-
 // src/lib/api.ts
 
 export type CredenzialiSegrepass = {
@@ -111,6 +110,8 @@ export type Prenotazione = {
   docente?: string;
   dataAppello?: string;
   ora?: string;
+  inizioPrenotazione?: string | null;
+  finePrenotazione?: string | null;
   aula?: string;
   isMyProfessor?: boolean;
   note?: string;
@@ -137,7 +138,7 @@ export type Metriche = {
 };
 
 export type GlobalUserState = {
-  token: string | null;
+  authenticated: boolean;
   profile: ProfiloStudente | null;
   metriche: Metriche | null;
   pin: string | null;
@@ -241,6 +242,8 @@ export type TimetableEvent = {
   teachers?: string[];
   room?: string | null;
   campus?: string | null;
+  enrollmentStatus?: 'confirmed' | 'different_teacher' | 'not_enrolled';
+  enrolledProfessor?: string | null;
 };
 
 export type Timetable = {
@@ -269,6 +272,10 @@ export type DocenteAnnouncementItem = {
 export type DocenteAnnouncementGroup = {
   professor?: string;
   slug?: string;
+  courseName?: string;
+  isFavorite?: boolean;
+  announcementLoading?: boolean;
+  announcementError?: boolean;
   items: DocenteAnnouncementItem[];
   latestDate?: number;
   count?: number;
@@ -281,10 +288,15 @@ export type SubscriptionDocenti = {
   professor?: string;
   section?: string;
   academicYear?: string;
+  isFavorite?: boolean;
+  preferenceId?: number;
 };
 
 export type BookedExamDocenti = {
   courseName?: string;
+  examName?: string;
+  materia?: string;
+  name?: string;
   descrInse?: string;
   professor?: string;
   docente?: string;
@@ -292,8 +304,11 @@ export type BookedExamDocenti = {
   examDate?: string;
   dataAppello?: string;
   bookingDate?: string;
+  inizioPrenotazione?: string | null;
+  finePrenotazione?: string | null;
   location?: string;
   aula?: string;
+  room?: string;
   status?: string;
 };
 
@@ -320,7 +335,11 @@ export type DocentiSummary = {
   bookedExams: BookedExamDocenti[];
   groups: GroupDocenti[];
   tests: TestDocenti[];
+  meta?: { refreshing?: boolean; fetchedAt?: string | null; stale?: boolean };
 };
+
+export type DocentiTeacherSearchResult = { id: string; name: string; role?: string | null };
+export type ProfessorPreference = { id: number; courseKey: string; courseCode?: string | null; courseName: string; professorId: string; professorName: string; createdAt: string };
 
 export type ProfileUpdatePayload = {
   courseId?: string;
@@ -349,7 +368,7 @@ export type SlowData = {
 };
 
 export type LoginResponse = {
-  token: string;
+  authenticated: true;
   profileId: string;
   profile: ProfiloRecord;
   onboardingRequired: boolean;
@@ -357,118 +376,191 @@ export type LoginResponse = {
 };
 
 export type RestoreSessionResponse = {
-  token: string;
+  authenticated: true;
   profile: ProfiloRecord;
   onboardingRequired: boolean;
 };
 
-const API_BASE = (process.env.NEXT_PUBLIC_BACKEND_URL || '').replace(/\/+$/, '');
+/* ------------------------------------------------------------------ */
+/* Errori                                                              */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Errore di una chiamata al backend. `status` è il codice HTTP, oppure 0 se il
+ * backend non è raggiungibile (rete assente, server spento, CORS).
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code?: string;
+
+  constructor(message: string, status: number, code?: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.code = code;
+    Object.setPrototypeOf(this, ApiError.prototype);
+  }
+}
+
+/** Sessione scaduta o token non valido: serve un nuovo login. */
+export function isSessionExpired(error: unknown): boolean {
+  return error instanceof Error && error.message === 'SESSION_EXPIRED';
+}
+
+/**
+ * Il backend funziona ma un servizio esterno (EasyAcademy, Segrepass, Docenti)
+ * non risponde, oppure il backend stesso non è raggiungibile.
+ * Sono i casi in cui ha senso mostrare l'ultima copia salvata.
+ */
+function defaultErrorMessage(status: number): string {
+  if (status === 424 || status === 502 || status === 503 || status === 504) {
+    return 'Servizio esterno temporaneamente non disponibile. Riprova tra poco.';
+  }
+  if (status >= 500) return 'Errore interno del server.';
+  return 'Errore di comunicazione con il server.';
+}
+
+/* ------------------------------------------------------------------ */
+/* Pulizia delle vecchie cache locali sensibili                        */
+/* ------------------------------------------------------------------ */
+
+// Rimuove i dati personali salvati dalle versioni precedenti dell'app.
+const CACHE_PREFIX = 'segrepass:cache:';
+const LEGACY_CACHE_PREFIX = 'segrepass:docenti-summary';
+
+/** Cancella dal dispositivo le copie locali dei dati personali. Chiamata al logout. */
+export function clearClientCache(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const storage = window.localStorage;
+    for (let i = storage.length - 1; i >= 0; i -= 1) {
+      const key = storage.key(i);
+      if (key && (key.startsWith(CACHE_PREFIX) || key.startsWith(LEGACY_CACHE_PREFIX))) {
+        storage.removeItem(key);
+      }
+    }
+  } catch {
+    /* storage non disponibile */
+  }
+}
+
+if (typeof window !== 'undefined') clearClientCache();
+
+/* ------------------------------------------------------------------ */
+/* Base                                                                */
+/* ------------------------------------------------------------------ */
+
+const API_BASE = (process.env.NEXT_PUBLIC_BACKEND_URL || '').trim().replace(/\/+$/, '');
+const API_TIMEOUT_MS = 260_000;
 
 export function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
-function profileCacheScope(token: string): string | null {
-  try {
-    const encodedPayload = token.split('.')[1];
-    if (!encodedPayload) return null;
-    const payload = JSON.parse(atob(encodedPayload.replace(/-/g, '+').replace(/_/g, '/')));
-    return typeof payload.sub === 'string' && payload.sub ? payload.sub : null;
-  } catch {
-    return null;
-  }
-}
-
-function authHeaders(token?: string): Record<string, string> {
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (token) headers.Authorization = `Bearer ${token}`;
+function jsonHeaders(options: RequestInit = {}): Headers {
+  const headers = new Headers(options.headers);
+  if (options.body !== undefined && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   return headers;
 }
 
-async function fetchWithAuth(url: string, token: string, options: RequestInit = {}) {
-  const res = await fetch(url, {
-    ...options,
-    credentials: 'include',
-    headers: {
-      ...authHeaders(token),
-      ...(options.headers || {})
-    }
-  });
-
-  if (res.status === 401 || res.status === 403) {
-    throw new Error('SESSION_EXPIRED');
+async function fetchWithAuth(url: string, options: RequestInit = {}) {
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...options,
+      credentials: 'include',
+      cache: 'no-store',
+      headers: jsonHeaders(options),
+      signal: options.signal || AbortSignal.timeout(API_TIMEOUT_MS)
+    });
+  } catch (error) {
+    // Se il chiamante ha annullato la richiesta, l'annullamento passa invariato.
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
+    throw new ApiError('Server non raggiungibile. Controlla la connessione.', 0, 'NETWORK');
   }
 
+  // Un proxy o un 502 possono rispondere con HTML: in quel caso il corpo è vuoto.
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(data.error || 'Errore di comunicazione con il server.');
+    if (res.status === 401 && data?.code === 'SESSION_EXPIRED') {
+      if (typeof window !== 'undefined') window.dispatchEvent(new Event('segrepass:session-expired'));
+      throw new ApiError('SESSION_EXPIRED', res.status, 'SESSION_EXPIRED');
+    }
+    throw new ApiError(data?.error || data?.message || defaultErrorMessage(res.status), res.status, data?.code);
   }
   return data;
 }
 
+/* ------------------------------------------------------------------ */
+/* Autenticazione                                                      */
+/* ------------------------------------------------------------------ */
+
 export async function loginAPI(credentials: CredenzialiSegrepass): Promise<LoginResponse> {
-  const res = await fetch(apiUrl('/api/auth/login'), {
+  return fetchWithAuth(apiUrl('/api/auth/login'), {
     method: 'POST',
-    credentials: 'include',
-    headers: authHeaders(),
     body: JSON.stringify(credentials)
-  });
-
-  const data = await res.json().catch(() => ({}));
-
-  if (!res.ok) {
-    throw new Error(data.error || 'Credenziali non valide o login fallito.');
-  }
-
-  return data as LoginResponse;
+  }) as Promise<LoginResponse>;
 }
 
 export async function restoreSession(): Promise<RestoreSessionResponse | null> {
-  const res = await fetch(apiUrl('/api/auth/session'), {
-    method: 'GET',
-    credentials: 'include',
-    headers: authHeaders()
-  });
-  if (!res.ok) return null;
-  return (await res.json()) as RestoreSessionResponse;
+  try {
+    return await fetchWithAuth(apiUrl('/api/auth/session')) as RestoreSessionResponse;
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) return null;
+    throw error;
+  }
 }
 
 export async function logoutAPI(): Promise<void> {
-  await fetch(apiUrl('/api/auth/logout'), {
+  clearClientCache();
+  await fetchWithAuth(apiUrl('/api/auth/logout'), {
     method: 'POST',
-    credentials: 'include',
-    headers: authHeaders()
   }).catch(() => undefined);
 }
 
-export async function fetchMetriche(token: string): Promise<Metriche> {
-  return fetchWithAuth(apiUrl('/api/metriche'), token) as Promise<Metriche>;
+/* ------------------------------------------------------------------ */
+/* Carriera                                                            */
+/* ------------------------------------------------------------------ */
+
+export async function fetchMetriche(options: { refresh?: boolean } = {}): Promise<Metriche> {
+  return fetchWithAuth(apiUrl(`/api/metriche${options.refresh ? '?refresh=1' : ''}`)) as Promise<Metriche>;
 }
 
-export async function fetchSlowData(token: string): Promise<SlowData> {
-  return fetchWithAuth(apiUrl('/api/career/slow-data'), token) as Promise<SlowData>;
+export async function fetchSlowData(): Promise<SlowData> {
+  return fetchWithAuth(apiUrl('/api/career/slow-data')) as Promise<SlowData>;
 }
 
-export async function fetchStudyPlan(token: string, courseId: string, cohortYear: number): Promise<StudyPlan> {
+export async function fetchStudyPlan(courseId: string, cohortYear: number): Promise<StudyPlan> {
   return fetchWithAuth(
-    apiUrl(`/api/study-plans/${encodeURIComponent(courseId)}/${encodeURIComponent(String(cohortYear))}`),
-    token
+    apiUrl(`/api/study-plans/${encodeURIComponent(courseId)}/${encodeURIComponent(String(cohortYear))}`)
   ) as Promise<StudyPlan>;
 }
 
-export async function updateProfile(token: string, profileData: ProfileUpdatePayload): Promise<ProfileUpdateResponse> {
-  return fetchWithAuth(apiUrl('/api/profile'), token, {
+export async function updateProfile(profileData: ProfileUpdatePayload): Promise<ProfileUpdateResponse> {
+  return fetchWithAuth(apiUrl('/api/profile'), {
     method: 'PUT',
     body: JSON.stringify(profileData)
   }) as Promise<ProfileUpdateResponse>;
 }
 
-export async function fetchCareerPlan(token: string): Promise<CareerPlan> {
-  return fetchWithAuth(apiUrl('/api/career-plan'), token) as Promise<CareerPlan>;
+export async function fetchCareerPlan(): Promise<CareerPlan> {
+  return fetchWithAuth(apiUrl('/api/career-plan')) as Promise<CareerPlan>;
 }
 
+/* ------------------------------------------------------------------ */
+/* Orario (EasyAcademy)                                                */
+/* ------------------------------------------------------------------ */
+
+function normalizeTimetable(res: unknown): TimetableResponse {
+  const raw = (res ?? {}) as Partial<TimetableResponse>;
+  const events = Array.isArray(raw.timetable?.events) ? raw.timetable!.events : [];
+  return { ...raw, timetable: { ...raw.timetable, events } } as TimetableResponse;
+}
+
+/**
+ * I dati personali non vengono conservati nel browser: gli errori arrivano al chiamante.
+ */
 export async function fetchTimetable(
-  token: string,
   filters: TimetableFilters = {},
   options: { refresh?: boolean } = {}
 ): Promise<TimetableResponse> {
@@ -478,89 +570,96 @@ export async function fetchTimetable(
   if (filters.semester) params.set('semester', String(filters.semester));
   if (filters.channel) params.set('channel', filters.channel);
   if (filters.academicYear) params.set('academicYear', filters.academicYear);
-  if (options.refresh) params.set('refresh', '1');
 
+  if (options.refresh) params.set('refresh', '1');
   const query = params.toString();
-  return fetchWithAuth(apiUrl(`/api/timetable${query ? `?${query}` : ''}`), token) as Promise<TimetableResponse>;
+  const res = await fetchWithAuth(apiUrl(`/api/timetable${query ? `?${query}` : ''}`));
+  return normalizeTimetable(res);
 }
 
 /* ------------------------------------------------------------------ */
 /* WebDocenti                                                          */
-/* Le credenziali Docenti stanno nel JWT (cifrate): il frontend non    */
-/* invia mai la password. Il backend risponde direttamente con l'array */
+/* Le credenziali Docenti restano cifrate nel database server-side.    */
+/* Il browser invia solo il cookie HttpOnly e riceve i DTO dell'API.    */
 /* o con l'oggetto.                                                    */
 /* ------------------------------------------------------------------ */
 
-export async function fetchDocentiAnnouncements(token: string): Promise<DocenteAnnouncementGroup[]> {
-  const res = await fetchWithAuth(apiUrl('/api/docenti/announcements'), token);
-  // Gestisce sia il ritorno diretto dell'array che il wrap nell'oggetto { announcements: [] }
-  if (Array.isArray(res)) return res;
-  return Array.isArray(res?.announcements) ? res.announcements : [];
+async function fetchDocentiList<T>(path: string, wrapperKey: string): Promise<T[]> {
+  const res = await fetchWithAuth(apiUrl(path));
+  // Gestisce sia il ritorno diretto dell'array che il wrap nell'oggetto { [wrapperKey]: [] }
+  if (Array.isArray(res)) return res as T[];
+  return Array.isArray(res?.[wrapperKey]) ? (res[wrapperKey] as T[]) : [];
 }
 
-export async function fetchDocentiSubscriptions(token: string): Promise<SubscriptionDocenti[]> {
-  const res = await fetchWithAuth(apiUrl('/api/docenti/subscriptions'), token);
-  if (Array.isArray(res)) return res;
-  return Array.isArray(res?.subscriptions) ? res.subscriptions : [];
+export function fetchDocentiAnnouncements(): Promise<DocenteAnnouncementGroup[]> {
+  return fetchDocentiList<DocenteAnnouncementGroup>('/api/docenti/announcements', 'announcements');
 }
 
-export async function fetchDocentiBookedExams(token: string): Promise<BookedExamDocenti[]> {
-  const res = await fetchWithAuth(apiUrl('/api/docenti/booked-exams'), token);
-  if (Array.isArray(res)) return res;
-  return Array.isArray(res?.bookedExams) ? res.bookedExams : [];
+export function fetchDocentiSubscriptions(): Promise<SubscriptionDocenti[]> {
+  return fetchDocentiList<SubscriptionDocenti>('/api/docenti/subscriptions', 'subscriptions');
 }
 
-export async function fetchDocentiGroups(token: string): Promise<GroupDocenti[]> {
-  const res = await fetchWithAuth(apiUrl('/api/docenti/groups'), token);
-  if (Array.isArray(res)) return res;
-  return Array.isArray(res?.groups) ? res.groups : [];
+export function fetchDocentiBookedExams(): Promise<BookedExamDocenti[]> {
+  return fetchDocentiList<BookedExamDocenti>('/api/docenti/booked-exams', 'bookedExams');
 }
 
-export async function fetchDocentiTests(token: string): Promise<TestDocenti[]> {
-  const res = await fetchWithAuth(apiUrl('/api/docenti/tests'), token);
-  if (Array.isArray(res)) return res;
-  return Array.isArray(res?.tests) ? res.tests : [];
+export function fetchDocentiGroups(): Promise<GroupDocenti[]> {
+  return fetchDocentiList<GroupDocenti>('/api/docenti/groups', 'groups');
 }
 
-export async function fetchDocentiSummary(token: string): Promise<DocentiSummary> {
-  const scope = profileCacheScope(token);
-  const cacheKey = scope ? `segrepass:docenti-summary:${scope}` : null;
-  if (typeof window !== 'undefined') window.localStorage.removeItem('segrepass:docenti-summary');
-  const cached = cacheKey && typeof window !== 'undefined' ? window.localStorage.getItem(cacheKey) : null;
-  const parseSummary = (value: unknown): DocentiSummary => ({
-    announcements: Array.isArray((value as DocentiSummary)?.announcements) ? (value as DocentiSummary).announcements : [],
-    subscriptions: Array.isArray((value as DocentiSummary)?.subscriptions) ? (value as DocentiSummary).subscriptions : [],
-    bookedExams: Array.isArray((value as DocentiSummary)?.bookedExams) ? (value as DocentiSummary).bookedExams : [],
-    groups: Array.isArray((value as DocentiSummary)?.groups) ? (value as DocentiSummary).groups : [],
-    tests: Array.isArray((value as DocentiSummary)?.tests) ? (value as DocentiSummary).tests : []
-  });
-  try {
-    const res = await fetchWithAuth(apiUrl('/api/docenti/summary'), token);
-    const summary = parseSummary(res);
-    if (cacheKey && typeof window !== 'undefined') window.localStorage.setItem(cacheKey, JSON.stringify(summary));
-    return summary;
-  } catch (error) {
-    if (!cached) throw error;
-    try {
-      return parseSummary(JSON.parse(cached));
-    } catch {
-      if (cacheKey) window.localStorage.removeItem(cacheKey);
-      throw error;
-    }
-  }
+export function fetchDocentiTests(): Promise<TestDocenti[]> {
+  return fetchDocentiList<TestDocenti>('/api/docenti/tests', 'tests');
+}
+
+function normalizeDocentiSummary(value: unknown): DocentiSummary {
+  const v = (value ?? {}) as Partial<DocentiSummary>;
+  return {
+    announcements: Array.isArray(v.announcements) ? v.announcements : [],
+    subscriptions: Array.isArray(v.subscriptions) ? v.subscriptions : [],
+    bookedExams: Array.isArray(v.bookedExams) ? v.bookedExams : [],
+    groups: Array.isArray(v.groups) ? v.groups : [],
+    tests: Array.isArray(v.tests) ? v.tests : [],
+    meta: v.meta
+  };
+}
+
+/**
+ * Non persiste le risposte Docenti nel browser.
+ */
+export async function fetchDocentiSummary(options: { refresh?: boolean } = {}): Promise<DocentiSummary> {
+  const res = await fetchWithAuth(apiUrl(`/api/docenti/summary${options.refresh ? '?refresh=1' : ''}`));
+  return normalizeDocentiSummary(res);
+}
+
+export async function fetchFavoriteAnnouncements(): Promise<DocenteAnnouncementGroup[]> {
+  const result = await fetchWithAuth(apiUrl('/api/docenti/favorite-announcements'));
+  return Array.isArray(result) ? result : [];
+}
+
+export async function searchDocentiTeachers(query: string): Promise<DocentiTeacherSearchResult[]> {
+  const result = await fetchWithAuth(apiUrl(`/api/docenti/teachers/search?q=${encodeURIComponent(query)}`));
+  return Array.isArray(result) ? result : [];
+}
+export async function fetchProfessorPreferences(): Promise<ProfessorPreference[]> {
+  const result = await fetchWithAuth(apiUrl('/api/docenti/preferences'));
+  return Array.isArray(result) ? result : [];
+}
+export async function saveProfessorPreference(value: Omit<ProfessorPreference, 'id' | 'courseKey' | 'createdAt'>): Promise<ProfessorPreference> {
+  return fetchWithAuth(apiUrl('/api/docenti/preferences'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
+}
+export async function deleteProfessorPreference(id: number): Promise<void> {
+  await fetchWithAuth(apiUrl(`/api/docenti/preferences/${id}`), { method: 'DELETE' });
 }
 
 export async function fetchTeacherDetail(
-  token: string,
   professorIdentifier: string,
   course?: string | null
 ): Promise<DettaglioDocente> {
   const query = course ? `?course=${encodeURIComponent(course)}` : '';
-  return fetchWithAuth(apiUrl(`/api/docenti/teacher/${encodeURIComponent(professorIdentifier)}${query}`), token) as Promise<DettaglioDocente>;
+  return fetchWithAuth(apiUrl(`/api/docenti/teacher/${encodeURIComponent(professorIdentifier)}${query}`)) as Promise<DettaglioDocente>;
 }
 
 export async function fetchTeacherFolder(
-  token: string,
   teacherId: string,
   folderId: string,
   section: 'areapubb' | 'aree-ftp' | 'arearis',
@@ -569,21 +668,25 @@ export async function fetchTeacherFolder(
   const query = new URLSearchParams({ section });
   if (course) query.set('course', course);
   const res = await fetchWithAuth(
-    apiUrl(`/api/docenti/teacher/${encodeURIComponent(teacherId)}/folder/${encodeURIComponent(folderId)}?${query}`),
-    token
+    apiUrl(`/api/docenti/teacher/${encodeURIComponent(teacherId)}/folder/${encodeURIComponent(folderId)}?${query}`)
   );
   return Array.isArray(res?.items) ? res.items : [];
 }
 
-export async function fetchAllPrenotazioni(token: string): Promise<Prenotazione[]> {
-  // 1. Recupera le prenotazioni da Segrepass (tramite slow-data o metriche)
-  const slowData = await fetchSlowData(token).catch(() => null);
+/* ------------------------------------------------------------------ */
+/* Prenotazioni                                                        */
+/* ------------------------------------------------------------------ */
+
+export async function fetchAllPrenotazioni(): Promise<Prenotazione[]> {
+  // Le due fonti sono indipendenti: se una fallisce, l'altra si vede lo stesso.
+  const [slowData, docentiExams] = await Promise.all([
+    fetchSlowData().catch(() => null),
+    fetchDocentiBookedExams().catch(() => [] as BookedExamDocenti[])
+  ]);
+
   const prenotazioniSegrepass = slowData?.prenotazioni || [];
 
-  // 2. Recupera le prenotazioni da WebDocenti
-  const docentiExams = await fetchDocentiBookedExams(token).catch(() => []);
-
-  // 3. Mappa le prenotazioni di Docenti nel formato standard
+  // Mappa le prenotazioni di Docenti nel formato standard
   const prenotazioniDocentiMappate: Prenotazione[] = docentiExams.map((exam, index) => ({
     id: `docenti_${index}`,
     materia: exam.courseName || 'Esame Docenti',
@@ -593,15 +696,13 @@ export async function fetchAllPrenotazioni(token: string): Promise<Prenotazione[
     note: exam.status ? `Stato: ${exam.status}` : undefined
   }));
 
-  // 4. Unisci le due liste
   return [...prenotazioniSegrepass, ...prenotazioniDocentiMappate];
 }
 
 export async function bookCareerExam(
-  token: string,
   appello: Pick<Prenotazione, 'annopri' | 'numAppello'>
 ): Promise<{ success: boolean; message?: string }> {
-  return fetchWithAuth(apiUrl('/api/career/book'), token, {
+  return fetchWithAuth(apiUrl('/api/career/book'), {
     method: 'POST',
     body: JSON.stringify({
       annopri: appello.annopri,

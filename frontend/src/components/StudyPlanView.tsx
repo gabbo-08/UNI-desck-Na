@@ -9,7 +9,7 @@ import {
   type ProfiloRecord
 } from '@/lib/api';
 
-type Props = { token: string; profile: ProfiloRecord | null };
+type Props = { authenticated: boolean; profile: ProfiloRecord | null };
 
 function statusLabel(status?: string) {
   if (status === 'passed') return 'Superato';
@@ -18,7 +18,7 @@ function statusLabel(status?: string) {
   return 'Da sostenere';
 }
 
-export default function StudyPlanView({ token, profile }: Props) {
+export default function StudyPlanView({ authenticated, profile }: Props) {
   const [data, setData] = useState<CareerPlan | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -26,10 +26,11 @@ export default function StudyPlanView({ token, profile }: Props) {
   const extProfile = profile ?? {};
 
   const loadPlan = async () => {
+    if (!authenticated) return;
     setLoading(true);
     setError('');
     try {
-      setData(await fetchCareerPlan(token));
+      setData(await fetchCareerPlan());
     } catch (loadError: unknown) {
       setError(loadError instanceof Error ? loadError.message : 'Impossibile caricare il piano.');
       setData(null);
@@ -41,7 +42,8 @@ export default function StudyPlanView({ token, profile }: Props) {
   useEffect(() => {
     let active = true;
 
-    fetchCareerPlan(token)
+    if (!authenticated) return;
+    fetchCareerPlan()
       .then(result => { if (active) setData(result); })
       .catch(loadError => {
         if (active) setError(loadError instanceof Error ? loadError.message : 'Impossibile caricare il piano.');
@@ -49,7 +51,7 @@ export default function StudyPlanView({ token, profile }: Props) {
       .finally(() => { if (active) setLoading(false); });
 
     return () => { active = false; };
-  }, [token]);
+  }, [authenticated]);
 
   const isUnsupportedCourse = error.toLowerCase().includes('manifesto') ||
     error.toLowerCase().includes('non disponibile') ||

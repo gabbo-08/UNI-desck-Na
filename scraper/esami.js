@@ -5,7 +5,7 @@ async function scrapeEsamiSostenuti(context, esisUrl) {
   await enableFastMode(page);
   
   try {
-    await page.goto(esisUrl, { waitUntil: 'networkidle2', timeout: 15000 });
+    await page.goto(esisUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
     
     let clicked = false;
     for (const frame of page.frames()) {

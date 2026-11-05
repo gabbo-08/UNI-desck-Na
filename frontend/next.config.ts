@@ -1,6 +1,6 @@
 import type { NextConfig } from 'next';
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://127.0.0.1:3001';
+const BACKEND_URL = (process.env.NEXT_PUBLIC_BACKEND_URL?.trim() || 'http://127.0.0.1:3001').replace(/\/+$/, '');
 
 const nextConfig: NextConfig = {
   // In sviluppo React esegue due volte gli effetti: ogni chiamata al backend partiva doppia.
@@ -17,7 +17,7 @@ const nextConfig: NextConfig = {
     keepAlive: true,
   },
   experimental: {
-    proxyTimeout: 120000, // Timeout a 2 minuti per il proxy delle chiamate API
+    proxyTimeout: 270000, // Leggermente oltre il timeout client e quello del pool Puppeteer.
   },
 };
 

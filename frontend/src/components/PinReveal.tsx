@@ -11,7 +11,8 @@ export default function PinReveal({ pin }: PinRevealProps) {
   const [visible, setVisible] = useState(false);
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState(false);
-  const validPin = pin && /^\d{5}$/.test(pin) ? pin : null;
+  // Il portale ESIS può restituire PIN di 4, 5 o 6 cifre.
+  const validPin = pin && /^\d{4,6}$/.test(pin) ? pin : null;
 
   useEffect(() => {
     if (!visible) return;

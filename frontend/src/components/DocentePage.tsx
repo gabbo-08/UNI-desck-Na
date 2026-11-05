@@ -10,7 +10,7 @@ import {
 import DocenteDetailView from '@/components/DocenteDetailView';
 
 type DocentePageProps = {
-  token: string;
+  authenticated: boolean;
   professorIdentifier: string;
   coursePrefix?: string | null;
   courseCodes?: string[];
@@ -44,7 +44,7 @@ function mapFolderItem(item: unknown, index: number): MaterialeDocente {
  * quando la pagina è aperta e il corso limita i dati restituiti dal backend.
  */
 export default function DocentePage({
-  token,
+  authenticated,
   professorIdentifier,
   coursePrefix,
   courseCodes = [],
@@ -56,16 +56,20 @@ export default function DocentePage({
   const [loading, setLoading] = useState(true);
   const loadFolder = async (folder: MaterialeDocente, section: 'pubblico' | 'ftp' | 'riservato') => {
     const apiSection = section === 'pubblico' ? 'areapubb' : section === 'ftp' ? 'aree-ftp' : 'arearis';
-    const items = await fetchTeacherFolder(token, data?.profilo.id || professorIdentifier, folder.id, apiSection, courseCodes.length ? courseCodes.join(',') : coursePrefix);
+    const items = await fetchTeacherFolder(data?.profilo.id || professorIdentifier, folder.id, apiSection, courseCodes.length ? courseCodes.join(',') : coursePrefix);
     return items.map(mapFolderItem);
   };
 
   useEffect(() => {
     let active = true;
+    if (!authenticated) {
+      setLoading(false);
+      return () => { active = false; };
+    }
     setLoading(true);
     setError(null);
     const courseFilter = courseCodes.length > 0 ? courseCodes.join(',') : coursePrefix;
-    fetchTeacherDetail(token, professorIdentifier, courseFilter)
+    fetchTeacherDetail(professorIdentifier, courseFilter)
       .then(value => {
         if (active) setData(value);
       })
@@ -81,7 +85,7 @@ export default function DocentePage({
     return () => {
       active = false;
     };
-  }, [courseCodes, coursePrefix, professorIdentifier, token]);
+  }, [courseCodes, coursePrefix, professorIdentifier, authenticated]);
 
   if (loading) {
     return <div className="rounded-2xl border border-white/10 bg-white/5 p-8 text-center text-sm text-slate-400">Caricamento scheda docente...</div>;

@@ -43,9 +43,10 @@ test('i metodi safe non richiedono Origin', () => {
   }
 });
 
-test('le richieste con Bearer esplicito sono esenti', () => {
+test('le richieste con Bearer non sono esenti dai controlli CSRF', () => {
   const result = execute({ headers: { authorization: 'bearer abc123' } });
-  assert.equal(result.nextCalled, true);
+  assert.equal(result.nextCalled, false);
+  assert.equal(result.statusCode, 403);
 });
 
 test('una richiesta mutante senza Origin/Referer viene bloccata', () => {
@@ -167,5 +168,5 @@ test('il middleware è realmente applicato in una app Express', async t => {
     headers: { Authorization: 'Bearer test-token', 'Content-Type': 'application/json' },
     body: '{}'
   });
-  assert.equal(withBearer.status, 200);
+  assert.equal(withBearer.status, 403);
 });

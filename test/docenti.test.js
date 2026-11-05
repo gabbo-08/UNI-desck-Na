@@ -6,9 +6,38 @@ const {
   mapAnnouncement,
   findTeacher,
   fetchAnnouncementsForProfessors,
-  fetchTeacherDetail
+  fetchTeacherDetail,
+  fetchTeacherPhoto,
+  matchesImageSignature
 } = require('../scraper/docenti');
 const { mapSubscription, isUsableSubscription, mapDocentiTest } = require('../scraper/docenti');
+
+test('accetta solo firme immagine supportate e coerenti col MIME type', () => {
+  const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0x00]);
+  assert.equal(matchesImageSignature('image/png', png), true);
+  assert.equal(matchesImageSignature('image/jpeg', jpeg), true);
+  assert.equal(matchesImageSignature('image/svg+xml', Buffer.from('<svg/>')), false);
+  assert.equal(matchesImageSignature('image/png', jpeg), false);
+});
+
+test('richiede la foto Docenti con la negoziazione immagini usata dal browser', async t => {
+  let requestedHeaders;
+  t.mock.method(global, 'fetch', async (_url, options) => {
+    requestedHeaders = options.headers;
+    return new Response(Buffer.from([0xff, 0xd8, 0xff, 0x00]), {
+      status: 200,
+      headers: { 'content-type': 'image/jpeg' }
+    });
+  });
+
+  const photo = await fetchTeacherPhoto('teacher-1');
+
+  assert.equal(photo.contentType, 'image/jpeg');
+  assert.equal(photo.buffer.length, 4);
+  assert.match(requestedHeaders.Accept, /image\/webp/);
+  assert.match(requestedHeaders.Accept, /\*\/\*;q=0\.8/);
+});
 
 function withoutDocentiEnv(t) {
   const previousUsername = process.env.DOCENTI_USERNAME;
@@ -48,14 +77,32 @@ test('separa corsi sottoscritti e appelli prenotati', () => {
     },
     {
       headers: ['Esame', 'Data Appello', 'Stato', 'Aula'],
-      records: [{ Esame: 'Reti di calcolatori', 'Data Appello': '10/01/2027', Stato: 'Prenotato', Aula: 'T1' }]
+      records: [
+        { Esame: 'Reti di calcolatori', 'Data Appello': '10/01/2027', Stato: 'Prenotato', Aula: 'T1' },
+        { Esame: 'Non sono presenti iscrizioni...', 'Data Appello': '', Stato: '', Aula: '' }
+      ]
     }
   ]);
 
   assert.equal(result.subscriptions.length, 1);
   assert.equal(result.subscriptions[0].professor, 'Docente A');
   assert.equal(result.bookedExams.length, 1);
+  assert.equal(result.bookedExams[0].courseName, 'Reti di calcolatori');
   assert.equal(result.bookedExams[0].examDate, '10/01/2027');
+  assert.equal(result.bookedExams[0].location, 'T1');
+});
+
+test('scarta righe senza insegnamento e non interpreta tabelle anagrafiche come iscrizioni', () => {
+  const unrelated = normalizeDocentiTables([{
+    title: 'Dati studente',
+    headers: ['Nome', 'Cognome', 'Corso di laurea'],
+    records: [{ Nome: 'Gabriel', Cognome: 'Cacace', 'Corso di laurea': 'Ingegneria Informatica' }]
+  }]);
+  assert.deepEqual(unrelated.subscriptions, []);
+
+  const professorOnly = mapSubscription({ nomeDocente: 'Flavia', cognomeDocente: 'Giannetti' });
+  assert.equal(isUsableSubscription(professorOnly), false);
+  assert.equal(isUsableSubscription({ courseName: 'GIANNETTI FLAVIA', professor: 'GIANNETTI FLAVIA' }), false);
 });
 
 test('separa test e gruppi dalla tabella personale Docenti', () => {
@@ -150,6 +197,13 @@ test('findTeacher ignora nomi troppo corti senza fare richieste', async () => {
   assert.equal(called, false);
 });
 
+test('findTeacher rifiuta il solo cognome quando la ricerca contiene nome e cognome', async () => {
+  const teacher = await findTeacher('MARIA ROSSI', {
+    fetchJson: async () => ({ content: [{ id: 't-rossi', nome: 'ANNA', cognome: 'ROSSI' }] })
+  });
+  assert.equal(teacher, null);
+});
+
 test('fetchAnnouncementsForProfessors raggruppa gli avvisi per docente', async () => {
   const calls = [];
   const groups = await fetchAnnouncementsForProfessors(
@@ -182,7 +236,7 @@ test('fetchAnnouncementsForProfessors raggruppa gli avvisi per docente', async (
   assert.equal(groups[0].professor, 'LUCA BOCCARUSSO');
   assert.equal(groups[0].items[0].title, 'Calendario esami');
   // Il nome duplicato produce una sola ricerca; il docente inesistente viene scartato.
-  assert.equal(calls.filter(path => path.startsWith('/docenti?')).length, 2);
+  assert.equal(calls.filter(path => path.startsWith('/docenti?')).length, 3);
 });
 
 test('fetchAnnouncementsForProfessors scarta risposte senza contenuto valido', async () => {

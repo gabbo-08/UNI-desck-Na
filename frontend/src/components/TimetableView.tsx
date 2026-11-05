@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { CalendarDays, LoaderCircle, RefreshCw } from 'lucide-react';
 import { fetchTimetable, type ProfiloRecord, type TimetableResponse } from '@/lib/api';
 
-type Props = { token: string; profile: ProfiloRecord | null };
+type Props = { authenticated: boolean; profile: ProfiloRecord | null };
 
 function formatLessonDate(value: string | null) {
   if (!value) return null;
@@ -19,7 +19,7 @@ function formatTime(ts?: number) {
   return new Date(ts).toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
 }
 
-export default function TimetableView({ token, profile }: Props) {
+export default function TimetableView({ authenticated, profile }: Props) {
   const extProfile = profile ?? {};
   const [data, setData] = useState<TimetableResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -27,22 +27,23 @@ export default function TimetableView({ token, profile }: Props) {
 
   // L'orario usa anno, canale e corso del profilo: nessun form da compilare.
   const load = useCallback(async (refresh: boolean) => {
+    if (!authenticated) return;
     setLoading(true);
     setError('');
     try {
-      setData(await fetchTimetable(token, {}, { refresh }));
+      setData(await fetchTimetable({}, { refresh }));
     } catch (loadError: unknown) {
       setData(null);
       setError(loadError instanceof Error ? loadError.message : 'Impossibile caricare l’orario.');
     } finally {
       setLoading(false);
     }
-  }, [token]);
+  }, [authenticated]);
 
   useEffect(() => {
-    if (!token) return;
+    if (!authenticated) return;
     void load(false);
-  }, [token, load]);
+  }, [authenticated, load]);
 
   const timetable = data?.timetable;
   const events = [...(timetable?.events ?? [])].sort((a, b) =>
@@ -121,6 +122,9 @@ export default function TimetableView({ token, profile }: Props) {
                     <p className="mt-1 text-sm text-zinc-400">
                       {event.teachers?.length ? event.teachers.join(', ') : 'Docente non indicato'}
                     </p>
+                    <span className={`mt-2 inline-flex rounded-full px-2 py-1 text-[10px] font-semibold ${event.enrollmentStatus === 'confirmed' ? 'bg-emerald-400/10 text-emerald-300' : event.enrollmentStatus === 'different_teacher' ? 'bg-amber-400/10 text-amber-200' : 'bg-zinc-700/60 text-zinc-300'}`}>
+                      {event.enrollmentStatus === 'confirmed' ? `Iscrizione Docenti: ${event.enrolledProfessor || 'confermata'}` : event.enrollmentStatus === 'different_teacher' ? `Docente diverso · iscritto a ${event.enrolledProfessor || 'un altro docente'}` : event.enrollmentStatus === 'not_enrolled' ? 'Nessuna iscrizione Docenti rilevata' : 'Iscrizioni Docenti non disponibili'}
+                    </span>
                   </div>
                   <div className="text-sm text-zinc-400 sm:text-right">
                     {event.room || 'Aula non indicata'}{event.campus ? ` · ${event.campus}` : ''}

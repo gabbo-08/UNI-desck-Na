@@ -1,5 +1,6 @@
 
 const { queueScrapingTask } = require('../scraper/pool');
+const { enableFastMode } = require('../scraper/utils');
 const { normalizeCourseName, nameSimilarity } = require('../lib/matching');
 
 const AGENDA_URL = 'https://easyacademy.unina.it/agendastudenti/index.php?view=easycourse&_lang=it&include=corso';
@@ -22,22 +23,59 @@ function errorWithStatus(message, status, code) {
   return error;
 }
 
-function parsePopupText(rawText) {
-  const text = String(rawText || '').replace(/\u00a0/g, ' ').replace(/\r/g, '');
-  const between = (start, end) => {
-    const startAt = text.indexOf(start);
-    if (startAt < 0) return '';
-    const valueStart = startAt + start.length;
-    const endAt = text.indexOf(end, valueStart);
-    return text.slice(valueStart, endAt < 0 ? text.length : endAt).trim();
+async function navigateToAgenda(page) {
+  // EasyAcademy currently serves an expired certificate. Intercept certificate
+  // errors for this navigation only, and continue only its date-invalid error.
+  // All other hosts/errors remain subject to Chromium's normal TLS checks.
+  await enableFastMode(page);
+  const cdp = await page.createCDPSession();
+  const handleCertificateError = async ({ eventId, errorType, requestURL }) => {
+    let action = 'cancel';
+    try {
+      const url = new URL(requestURL);
+      const dateInvalid = errorType === 'dateInvalid' || errorType === 'ERR_CERT_DATE_INVALID';
+      if (url.protocol === 'https:' && url.hostname === 'easyacademy.unina.it' && dateInvalid) {
+        action = 'continue';
+      }
+    } catch {
+      // Invalid URLs are rejected below.
+    }
+    await cdp.send('Security.handleCertificateError', { eventId, action });
   };
 
-  const rawName = between('Nome insegnamento', 'Argomento lezione');
-  const teacherText = between('Docenti', 'Data e Ora');
-  const dateTime = between('Data e Ora', 'Aula').replace(/\s+/g, ' ').trim();
-  const room = (text.match(/Nome aula:\s*([\s\S]*?)(?=Capacità:|Capienza:|Sede:|Google Maps|Percorso didattico|Numero eventi|$)/i)?.[1] || '').replace(/\s+/g, ' ').trim();
+  cdp.on('Security.certificateError', handleCertificateError);
+  try {
+    await cdp.send('Security.enable');
+    await cdp.send('Security.setOverrideCertificateErrors', { override: true });
+    await page.goto(AGENDA_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForFunction(() => Array.from(document.querySelector('#cdl_aa')?.options || [])
+      .some(option => option.value), { timeout: 15000 });
+  } finally {
+    cdp.off('Security.certificateError', handleCertificateError);
+    await cdp.send('Security.setOverrideCertificateErrors', { override: false }).catch(() => {});
+    await cdp.send('Security.disable').catch(() => {});
+    await cdp.detach().catch(() => {});
+  }
+}
+
+function parsePopupText(rawText) {
+  const text = String(rawText || '').replace(/\u00a0/g, ' ').replace(/\r/g, '');
+  const normalized = text.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const between = (start, end) => {
+    const lower = normalized.toLowerCase();
+    const startAt = lower.indexOf(start.toLowerCase());
+    if (startAt < 0) return '';
+    const valueStart = startAt + start.length;
+    const endAt = lower.indexOf(end.toLowerCase(), valueStart);
+    return normalized.slice(valueStart, endAt < 0 ? normalized.length : endAt).trim().replace(/^:\s*/, '');
+  };
+
+  const rawName = between('Nome insegnamento', 'Argomento lezione') || between('Insegnamento', 'Docenti');
+  const teacherText = between('Docenti', 'Data e Ora') || between('Docente', 'Data e Ora');
+  const dateTime = (between('Data e Ora', 'Aula') || between('Data e Ora', 'Nome aula')).replace(/\s+/g, ' ').trim();
+  const room = (normalized.match(/(?:Nome\s+)?Aula\s*:\s*([\s\S]*?)(?=Capacita:|Capienza:|Sede:|Google Maps|Percorso didattico|Numero eventi|$)/i)?.[1] || '').replace(/\s+/g, ' ').trim();
   // La sede si ferma prima di: [indirizzo], Google Maps, Percorso didattico, Numero eventi.
-  const campus = (text.match(/Sede:\s*([\s\S]*?)(?=\[|Google Maps|Percorso didattico|Numero eventi|Capacità:|$)/i)?.[1] || '').replace(/\s+/g, ' ').trim();
+  const campus = (normalized.match(/Sede:\s*([\s\S]*?)(?=\[|Google Maps|Percorso didattico|Numero eventi|Capacita:|$)/i)?.[1] || '').replace(/\s+/g, ' ').trim();
   const coursePath = between('Percorso didattico', 'Numero eventi collegati').replace(/\s+/g, ' ').trim();
   const dateMatch = dateTime.match(/(?:\w+\s+)?(\d{1,2})\s+([a-zà-ù]+)\s+(\d{4})\s*(\d{2}:\d{2})\s*-\s*(\d{2}:\d{2})/i);
   const month = dateMatch ? MONTHS[normalizeLabel(dateMatch[2])] : null;
@@ -152,7 +190,7 @@ async function scrapeTimetablePage(page, filters) {
   const { courseId, courseName, academicYear, studyYear, semester, channel, surnameInitial, key } = filters;
 
   try {
-    await page.goto(AGENDA_URL, { waitUntil: 'networkidle2', timeout: 30000 });
+    await navigateToAgenda(page);
     const academicYearOptions = await page.$$eval('#cdl_aa option', options => options.map(option => ({ value: option.value, text: option.text.trim() })));
     const selectedAcademicYear = academicYear
       ? academicYear.match(/\d{4}/)?.[0]
@@ -196,8 +234,10 @@ async function scrapeTimetablePage(page, filters) {
     if (!course) throw errorWithStatus('Corso non trovato nell’offerta EasyAcademy.', 404, 'COURSE_NOT_FOUND');
 
     await page.select('#cdl_co', course.option.value);
-    await page.waitForFunction(year => Array.from(document.querySelector('#cdl_a2_multi')?.options || [])
-      .some(option => new RegExp(`^\\s*${year}\\s*[-–]`).test(option.text)), { timeout: 15000 }, studyYear);
+    // EasyAcademy sometimes omits the study-year prefix from group labels;
+    // wait for the options to load, then let selectStudyGroup handle both formats.
+    await page.waitForFunction(() => Array.from(document.querySelector('#cdl_a2_multi')?.options || [])
+      .some(option => option.value), { timeout: 15000 });
     const groups = await page.$$eval('#cdl_a2_multi option', options => options.map(option => ({ value: option.value, text: option.text.trim() })));
     const group = selectStudyGroup(groups, studyYear, channel, surnameInitial);
     if (!group) {
@@ -241,8 +281,9 @@ async function scrapeTimetablePage(page, filters) {
       events: events.map(event => ({
         id: event.id,
         ...parsePopupText(event.text),
+        courseName: parsePopupText(event.text).courseName || course.text,
         selectedGroup: group.text
-      })).filter(event => event.courseName)
+      }))
     };
     writeCache(key, result);
     return result;
@@ -274,6 +315,7 @@ module.exports = {
   selectStudyGroup,
   matchesStudyGroup,
   clearTimetableCache,
+  navigateToAgenda,
   CACHE_TTL_MS,
   CACHE_VERSION
 };

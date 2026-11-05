@@ -6,8 +6,6 @@ function check(name, ok, message) {
   checks.push({ name, ok, message });
 }
 
-check('JWT_SECRET', Boolean(process.env.JWT_SECRET && process.env.JWT_SECRET.trim().length >= 32),
-  'obbligatorio e deve contenere almeno 32 caratteri');
 check('CRED_KEY', /^[0-9a-fA-F]{64}$/.test(process.env.CRED_KEY || ''),
   'obbligatoria in formato esadecimale di 32 byte (64 caratteri)');
 
@@ -18,7 +16,16 @@ check('DOCENTI_USERNAME', !username || username === username.trim(), 'presenta s
 check('DOCENTI_PASSWORD', !password || password === password.trim(), 'presenta spazi ai bordi');
 
 check('PORT', !process.env.PORT || /^\d+$/.test(process.env.PORT), 'deve essere un numero');
-check('FRONTEND_URL', !process.env.FRONTEND_URL || /^https?:\/\//.test(process.env.FRONTEND_URL), 'deve essere un URL http(s)');
+const frontendOrigins = String(process.env.FRONTEND_URL || '').split(',').map(value => value.trim()).filter(Boolean);
+const validFrontendOrigins = frontendOrigins.every(value => {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+});
+check('FRONTEND_URL', validFrontendOrigins, 'deve contenere URL http(s) validi separati da virgole');
 
 for (const { name, ok, message } of checks) {
   console.log(`${ok ? '[OK]' : '[!]'} ${name}: ${ok ? 'valida' : message}`);
@@ -27,5 +34,5 @@ for (const { name, ok, message } of checks) {
 console.log(`\nDocenti: ${hasDocentiCredentials ? 'credenziali presenti' : 'credenziali assenti (solo avvisi pubblici)'}`);
 console.log(`Ambiente: ${process.env.NODE_ENV || 'development'}`);
 
-const fatal = !checks.find(item => item.name === 'JWT_SECRET').ok;
+const fatal = !checks.find(item => item.name === 'CRED_KEY').ok;
 process.exit(fatal ? 1 : 0);

@@ -1,44 +1,22 @@
-// middleware/auth.js
-const jwt = require('jsonwebtoken');
-const { JWT_SECRET } = require('../lib/config');
 const { readAuthToken } = require('../lib/cookies');
-const { open } = require('../lib/secret-box');
+const { resolveServerSession } = require('../services/server-sessions');
 
 function extractToken(req) {
-  const header = req.headers.authorization || '';
-  const match = header.match(/^Bearer\s+(.+)$/i);
-  if (match) return match[1].trim();
-  // Il token persistente vive in un cookie httpOnly, non in localStorage.
-  return readAuthToken(req) || req.headers['x-session-token'] || null;
+  return readAuthToken(req);
 }
 
 function authMiddleware(req, res, next) {
   const token = extractToken(req);
-  if (!token) {
-    return res.status(401).json({ error: 'Accesso negato: token di sessione mancante.' });
+  const session = token ? resolveServerSession(token) : null;
+  if (!session) {
+    return res.status(401).json({ error: 'Sessione assente o scaduta. Effettua nuovamente il login.', code: 'SESSION_EXPIRED' });
   }
 
-  try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    const profileId = payload.sub || payload.codiceFiscale;
-    if (!profileId) {
-      return res.status(401).json({ error: 'Sessione non valida: profilo assente.' });
-    }
-
-    req.user = {
-      sub: payload.sub || payload.codiceFiscale,
-      codiceFiscale: payload.codiceFiscale || payload.sub,
-      email: payload.email || undefined,
-      // La password viaggia cifrata nel JWT (campo "pw"): qui viene decifrata.
-      password: payload.pw ? open(payload.pw) || undefined : undefined
-    };
-    return next();
-  } catch (error) {
-    const expired = error.name === 'TokenExpiredError';
-    return res.status(401).json({
-      error: expired ? 'Sessione scaduta. Effettua nuovamente il login.' : 'Sessione non valida.'
-    });
-  }
+  // req.user è un DTO identificativo; le credenziali si decifrano solo nei
+  // servizi che ne hanno bisogno, tramite req.authSession.
+  req.user = { sub: session.profileId };
+  req.authSession = session;
+  return next();
 }
 
-module.exports = { authMiddleware };
+module.exports = { authMiddleware, extractToken };

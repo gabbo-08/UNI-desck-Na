@@ -1,19 +1,16 @@
 
 // services/student-session.js
-const jwt = require('jsonwebtoken');
 const { getDatiCarriera } = require('../scraper/segrepass');
 const { getDocentiData } = require('../scraper/docenti');
 const { buildStudentProfile } = require('./profile-extractor');
 const snapshots = require('./career-snapshots');
 const careerCache = require('./career-cache');
 const slowSync = require('./slow-sync');
-const { clearDocentiCache } = require('./docenti-cache');
+const { clearDocentiCache, sanitizeDocentiSnapshot, SNAPSHOT_VERSION: DOCENTI_SNAPSHOT_VERSION, TTL_MS: DOCENTI_CACHE_TTL_MS } = require('./docenti-cache');
 const dbModule = require('../db');
-const { upsertStudentProfile, getStudentProfile, getStudyPlan } = require('../db/repository');
-const { setCredentials } = require('../utils/sessionStore');
+const { upsertStudentProfile, getStudentProfile, getStudyPlan, getDocentiDataCache, saveDocentiDataCache } = require('../db/repository');
 const { clearDocentiRouteCache } = require('../routes/docenti');
-const { JWT_SECRET, JWT_TTL } = require('../lib/config');
-const { seal } = require('../lib/secret-box');
+const { createServerSession } = require('./server-sessions');
 
 const db = dbModule.db || dbModule;
 const EMPTY_DOCENTI = Object.freeze({ subscriptions: [], bookedExams: [], announcements: [] });
@@ -47,6 +44,19 @@ function loadDocentiInBackground(profileId, dependencies = {}) {
   if (snapshots.isDocentiLoading(profileId)) return Promise.resolve();
 
   const credentials = docentiCredentials(dependencies);
+  const database = dependencies.database || db;
+  const persisted = getDocentiDataCache(profileId, database);
+  if (persisted && Date.now() - persisted.fetchedAt < DOCENTI_CACHE_TTL_MS) {
+    const sanitized = sanitizeDocentiSnapshot(persisted.data);
+    if (sanitized.available && persisted.data._cacheVersion !== DOCENTI_SNAPSHOT_VERSION) {
+      try { saveDocentiDataCache(profileId, sanitized, database, new Date(persisted.fetchedAt)); } catch {}
+    }
+    if (sanitized.available) {
+      snapshots.setDocentiSnapshot(profileId, sanitized);
+      return Promise.resolve(sanitized);
+    }
+  }
+
   if (!credentials.username || !credentials.password) {
     snapshots.setDocentiSnapshot(profileId, {
       available: false,
@@ -57,12 +67,26 @@ function loadDocentiInBackground(profileId, dependencies = {}) {
   }
 
   const scraper = dependencies.getDocentiData || getDocentiData;
-  snapshots.markDocentiLoading(profileId);
+  const generation = snapshots.markDocentiLoading(profileId);
 
   return Promise.resolve()
-    .then(() => scraper(credentials))
-    .then(data => snapshots.setDocentiSnapshot(profileId, data))
+    .then(() => scraper({ ...credentials, profileKey: profileId }))
+    .then(data => {
+      if (snapshots.isCurrentDocentiLoad(profileId, generation)) {
+        const sanitized = data?.available === false ? data : sanitizeDocentiSnapshot(data);
+        if (sanitized?.available !== false) {
+          try {
+            saveDocentiDataCache(profileId, sanitized, database);
+          } catch (error) {
+            console.warn('[docenti-cache] Snapshot persistente non aggiornato:', error?.message || error);
+          }
+          clearDocentiCache(profileId);
+        }
+        snapshots.setDocentiSnapshot(profileId, sanitized);
+      }
+    })
     .catch(error => {
+      if (!snapshots.isCurrentDocentiLoad(profileId, generation)) return;
       console.warn(`[docenti] Acquisizione per ${profileId} non riuscita: ${error?.message}`);
       snapshots.setDocentiSnapshot(profileId, {
         available: false,
@@ -70,7 +94,7 @@ function loadDocentiInBackground(profileId, dependencies = {}) {
         ...EMPTY_DOCENTI
       });
     })
-    .finally(() => snapshots.clearDocentiLoading(profileId));
+    .finally(() => snapshots.clearDocentiLoading(profileId, generation));
 }
 
 /**
@@ -112,7 +136,6 @@ async function createStudentSession({ codiceFiscale, password, email } = {}, dep
 
   const database = dependencies.database || db;
   const scraper = dependencies.getDatiCarriera || getDatiCarriera;
-  const jwtSecret = dependencies.jwtSecret || JWT_SECRET;
   const cfClean = normalizedIdentifier;
 
   // Cache per studente: se i dati sono freschi si evita lo scraping completo.
@@ -156,7 +179,7 @@ async function createStudentSession({ codiceFiscale, password, email } = {}, dep
   snapshots.setTaxesSnapshot(cfClean, tasse);
   // Ogni login invalida i dati Docenti precedenti e forza un refresh completo:
   // niente dati stale di sessioni precedenti, anche a parità di credenziali.
-  snapshots.setDocentiSnapshot(cfClean, null);
+  snapshots.invalidateDocentiSnapshot(cfClean);
   clearDocentiCache(cfClean);
   clearDocentiRouteCache(cfClean);
   slowSync.resetSlowSync(cfClean);
@@ -169,14 +192,11 @@ async function createStudentSession({ codiceFiscale, password, email } = {}, dep
   // non il codice fiscale.
   const docentiEmail = normalizeEmail(email) || resolveDocentiEmail(storedProfile || profile, cfClean);
 
-  // La password viaggia nel JWT in forma cifrata (campo "pw"), così le rotte
-  // /api/docenti la recuperano da req.user.password anche dopo un riavvio del
-  // server o una ricarica della pagina.
-  const token = jwt.sign(
-    { sub: cfClean, codiceFiscale: cfClean, email: docentiEmail || undefined, pw: seal(password) },
-    jwtSecret,
-    { expiresIn: JWT_TTL }
-  );
+  const serverSession = createServerSession(cfClean, {
+    codiceFiscale: cfClean,
+    email: docentiEmail || null,
+    password
+  }, { database });
 
   // Eventuali credenziali esplicite passate dal chiamante (es. test) hanno
   // la precedenza; non esistono credenziali di servizio globali.
@@ -185,10 +205,6 @@ async function createStudentSession({ codiceFiscale, password, email } = {}, dep
     || (configuredDocenti.username && configuredDocenti.password
       ? configuredDocenti
       : (docentiEmail ? { username: docentiEmail, password } : {}));
-
-  if (credentials.username && credentials.password) {
-    setCredentials(cfClean, credentials);
-  }
 
   const docentiSnapshot = snapshots.getDocentiSnapshot(cfClean);
   const alreadyLoading = snapshots.isDocentiLoading(cfClean);
@@ -209,8 +225,8 @@ async function createStudentSession({ codiceFiscale, password, email } = {}, dep
   };
 
   return {
-    token,
-    expiresIn: JWT_TTL,
+    token: serverSession.token,
+    expiresIn: '7d',
     profileId: cfClean,
     profile: storedProfile || profile,
     onboardingRequired: !hasProfileSetup(storedProfile || profile),

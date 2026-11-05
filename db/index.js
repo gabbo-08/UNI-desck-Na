@@ -2,7 +2,7 @@ const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 5;
 const DEFAULT_DB_PATH = path.resolve(__dirname, '../data/unicorno.sqlite');
 
 function ensureDataDir() {
@@ -12,15 +12,19 @@ function ensureDataDir() {
 
 function initSchema(database) {
   database.exec(`
-    -- Tabella Sessioni Utente (autenticazione opzionale)
-    CREATE TABLE IF NOT EXISTS UserSessions (
-      token TEXT PRIMARY KEY,
+    -- Le sessioni persistono solo l'hash del token e le credenziali cifrate.
+    CREATE TABLE IF NOT EXISTS Sessions (
+      token_hash TEXT PRIMARY KEY,
       profile_id TEXT NOT NULL,
-      expires_at DATETIME NOT NULL
+      credentials_ciphertext TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      absolute_expires_at TEXT NOT NULL,
+      idle_expires_at TEXT NOT NULL
     );
 
-    CREATE INDEX IF NOT EXISTS idx_user_sessions_expires
-      ON UserSessions (expires_at);
+    CREATE INDEX IF NOT EXISTS idx_sessions_expiry
+      ON Sessions (absolute_expires_at, idle_expires_at);
 
     -- Profilo studente (anagrafica e configurazione carriera)
     CREATE TABLE IF NOT EXISTS StudentProfile (
@@ -75,7 +79,45 @@ function initSchema(database) {
       FOREIGN KEY (profile_id) REFERENCES StudentProfile(id) ON DELETE CASCADE,
       FOREIGN KEY (plan_course_id) REFERENCES PlanCourses(id) ON DELETE CASCADE
     );
+
+    -- Docenti preferiti associati a un insegnamento dello studente.
+    CREATE TABLE IF NOT EXISTS ProfessorPreferences (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      profile_id TEXT NOT NULL,
+      course_key TEXT NOT NULL,
+      course_code TEXT,
+      course_name TEXT NOT NULL,
+      professor_id TEXT NOT NULL,
+      professor_name TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(profile_id, course_key, professor_id),
+      FOREIGN KEY (profile_id) REFERENCES StudentProfile(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_professor_preferences_profile
+      ON ProfessorPreferences (profile_id, course_key);
+
+    -- Snapshot senza credenziali del riepilogo Docenti, aggiornato dopo ogni
+    -- sincronizzazione riuscita. Permette una risposta immediata al login.
+    CREATE TABLE IF NOT EXISTS DocentiDataCache (
+      profile_id TEXT PRIMARY KEY,
+      data_json TEXT NOT NULL,
+      fetched_at TEXT NOT NULL,
+      FOREIGN KEY (profile_id) REFERENCES StudentProfile(id) ON DELETE CASCADE
+    );
+
+    -- Gli avvisi sono pubblici e condivisi: una copia per docente evita di
+    -- richiedere la stessa bacheca ad ogni accesso di ogni studente.
+    CREATE TABLE IF NOT EXISTS TeacherAnnouncementsCache (
+      professor_id TEXT PRIMARY KEY,
+      data_json TEXT NOT NULL,
+      fetched_at TEXT NOT NULL
+    );
   `);
+
+  // Elimina le vecchie sessioni JWT salvate in chiaro: non sono compatibili
+  // con il nuovo formato e potrebbero contenere credenziali nel payload.
+  database.exec('DROP TABLE IF EXISTS UserSessions');
 
   const profileColumns = database.prepare('PRAGMA table_info(StudentProfile)').all();
   if (!profileColumns.some(column => column.name === 'matricola')) {
