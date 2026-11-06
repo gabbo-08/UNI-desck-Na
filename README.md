@@ -84,26 +84,49 @@ segrepass-api/        backend Node.js / Express
 └── test/
 ```
 
-## Avvio in locale
+## Avvio in locale dal PC
 
-**Prerequisiti:** Node.js (LTS) e un account studente Unina valido.
+**Prerequisiti:** Node.js 20 o successivo e un account studente Unina valido.
 
-```bash
+```powershell
 git clone <url-del-repository>
 cd segrepass-api
+Copy-Item .env.example .env
+```
 
-# Backend
+Imposta nel file `.env` una `CRED_KEY` casuale di 64 caratteri esadecimali e le altre variabili richieste. Non condividere né committare `.env`.
+
+Apri due terminali PowerShell:
+
+```powershell
+# Terminale 1 — dalla root del repository
 npm install
-# crea un file .env con CRED_KEY=<chiave segreta casuale> e le altre variabili richieste
 npm start
+```
 
-# Frontend (in un altro terminale)
+```powershell
+# Terminale 2 — dalla root del repository
 cd frontend
 npm install
 npm run dev
 ```
 
-Apri poi l'indirizzo mostrato dal frontend e accedi con le tue credenziali istituzionali.
+Sul PC apri <http://localhost:3000> e accedi con le tue credenziali istituzionali. Lascia entrambi i terminali aperti mentre usi l'app.
+
+## Test da telefono Android — versione sperimentale
+
+In questa versione l'app Android è un contenitore WebView: **frontend e backend continuano a girare sul PC**. Il telefono deve essere sulla stessa rete Wi-Fi; non avvia i servizi da solo e il PC deve rimanere acceso.
+
+1. Avvia backend e frontend seguendo i passaggi sopra. Il frontend è configurato per accettare connessioni dalla rete locale.
+2. Sul PC esegui `ipconfig` e annota l'indirizzo IPv4 della scheda collegata alla Wi-Fi (per esempio `192.168.1.101`). Non usare `0.0.0.0`: è solo l'indirizzo su cui il server si mette in ascolto.
+3. In `.env`, imposta `FRONTEND_URL=http://IP-DEL-PC:3000` usando lo stesso IP. Riavvia il backend dopo la modifica. Questo consente al controllo CSRF e a CORS di accettare il frontend aperto dal telefono.
+4. In [frontend/next.config.ts](frontend/next.config.ts), aggiorna `allowedDevOrigins` con l'IP del PC se è diverso da quello già configurato. Riavvia `npm run dev` dopo la modifica.
+5. Installa l'APK `arm64` sul telefono Android. Puoi generarlo come descritto in [android_app/README.md](android_app/README.md) e trasferirlo con USB o un altro metodo locale.
+6. Collega telefono e PC alla stessa Wi-Fi. Al primo avvio dell'app inserisci `http://IP-DEL-PC:3000`; l'indirizzo verrà salvato e riaperto ai successivi tocchi sull'icona.
+
+Se Windows Firewall lo chiede, consenti Node.js sulla rete privata. Se non riesci a collegarti, verifica che PC e telefono siano sulla stessa rete e che frontend e backend siano ancora attivi. Questa configurazione HTTP è per prove in rete locale: non esporre il server a Internet. Per usarlo da reti esterne serve un server raggiungibile con HTTPS e una configurazione dedicata.
+
+Il file `.env` contiene segreti e configurazioni personali: resta locale e non va aggiunto a Git.
 
 ## Stato del progetto
 
