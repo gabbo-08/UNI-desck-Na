@@ -1,147 +1,383 @@
-# Segrepass Unina (Non Ufficiale)
+# 🎓 Segrepass Unina
 
-> ⚠️ **DISCLAIMER:** Questo progetto **NON è una piattaforma ufficiale**, non è gestito, approvato o sponsorizzato dall'**Università degli Studi di Napoli Federico II**. Si tratta di un'iniziativa **indipendente sviluppata da uno studente per gli studenti**, creata al solo scopo di migliorare la fruizione dei propri dati universitari tramite un'interfaccia moderna.
->
-> **Note su Sicurezza e Responsabilità:**
-> - L'applicazione interagisce con i servizi universitari tramite automazione e scraping.
-> - L'utilizzo dell'applicazione avviene a proprio rischio e pericolo. Lo sviluppatore non si assume alcuna responsabilità per malfunzionamenti, disservizi o per qualsiasi problema derivante dall'uso non corretto delle credenziali.
-> - Nessun dato viene ceduto a terzi; le credenziali vengono cifrate e gestite in sessione locale.
+### La tua carriera universitaria, in un'unica dashboard.
+
+Segrepass Unina è una dashboard web e Progressive Web App (PWA), sviluppata per gli studenti dell'Università degli Studi di Napoli Federico II.
+
+Il progetto nasce con l'obiettivo di centralizzare e semplificare la consultazione delle informazioni universitarie, raccogliendo in un'unica interfaccia moderna e responsive i dati normalmente distribuiti tra i diversi portali e servizi dell'Ateneo.
 
 ---
 
-Dashboard web e PWA per gli studenti dell'Università degli Studi di Napoli Federico II.
-L'applicazione aggrega in un'unica interfaccia responsiva carriera accademica, tasse, appelli d'esame, prenotazioni, piano di studi, orario delle lezioni e avvisi dei docenti.
+> [!WARNING]
+> **DISCLAIMER – PROGETTO NON UFFICIALE**
+>
+> Segrepass Unina è un progetto indipendente, sviluppato da uno studente per gli studenti. Non è una piattaforma ufficiale, né è gestito, approvato, affiliato o sponsorizzato dall'Università degli Studi di Napoli Federico II.
+>
+> **Sicurezza e responsabilità**
+> - L'applicazione interagisce con i servizi universitari attraverso strumenti di automazione e tecniche di scraping.
+> - L'utilizzo è volontario e sotto la responsabilità dell'utente.
+> - Lo sviluppatore non garantisce la disponibilità, la correttezza o la continuità dei dati recuperati dai servizi esterni.
+> - L'utente è responsabile della corretta gestione delle proprie credenziali.
+> - Nessun dato viene intenzionalmente ceduto a terzi. Le credenziali sono gestite attraverso meccanismi di cifratura e sessioni applicative.
+>
+> L'applicazione non sostituisce i portali ufficiali dell'Ateneo, che rimangono gli unici riferimenti per le comunicazioni e gli adempimenti universitari.
+
+## 📑 Indice
+
+- [Funzionalità](#-funzionalità)
+- [Tecnologie utilizzate](#-tecnologie-utilizzate)
+- [Architettura del progetto](#-architettura-del-progetto)
+- [Requisiti](#-requisiti)
+- [Installazione](#-installazione)
+- [Configurazione](#-configurazione)
+- [Avvio in sviluppo](#-avvio-in-sviluppo)
+- [Build e deployment](#-build-e-deployment)
+- [Installazione PWA](#-installazione-pwa)
+- [Sicurezza e privacy](#-sicurezza-e-privacy)
+- [Licenza](#-licenza)
+
+---
 
 ## 🚀 Funzionalità
 
-- **Autenticazione:** Login sicuro tramite credenziali Segrepass e verifica dell'email istituzionale (`@studenti.unina.it`).
-- **Anagrafica automatica:** Riconoscimento della matricola sia in formato numerico che alfanumerico (es. `DE123456`, `DC234567`).
-- **Dashboard Studente:**
-  - Visualizzazione di corsi, canale, anno di corso e coorte.
-  - Calcolo dinamico della media ponderata, media aritmetica e base di laurea.
-  - Progresso CFU e percentuale di completamento della carriera.
-  - Riepilogo esami sostenuti, prenotazioni attive, tasse e storico pagamenti.
-- **Caricamento Asincrono:** Recupero in background dei dati più lenti (tasse, appelli) senza bloccare l'interfaccia principale.
-- **Integrazione Portale Docenti:** Sincronizzazione automatica di corsi, appelli e avvisi del corpo docente.
-- **Piano di Studi & Orari:** Consultazione del piano di studi e dell'orario settimanale delle lezioni.
-- **Cache & Persistenza:** Storage locale con SQLite e cache invalidabile per evitare richieste inutili e velocizzare i caricamenti.
-- **Sicurezza:** Sessioni gestite tramite token JWT; le password non vengono mai salvate in chiaro nel database.
-- **UI & UX:**
-  - Tema Light e Dark nativo con design token CSS dedicati.
-  - Interfaccia completamente responsive (Desktop e Mobile).
-  - Notifiche ed errori richiudibili.
-- **PWA (Progressive Web App):** Installabile direttamente su Android e iOS.
+### 👤 Autenticazione e profilo
+- Accesso tramite credenziali Segrepass.
+- Verifica dell'indirizzo email istituzionale (`@studenti.unina.it`).
+- Riconoscimento automatico della matricola, sia numerica sia alfanumerica (es. `DE123456`, `DC234567`).
+- Gestione delle sessioni tramite token JWT.
+
+### 📊 Dashboard studente
+- Visualizzazione di corso di laurea, canale, anno di corso e coorte.
+- Calcolo dinamico della media ponderata e aritmetica.
+- Calcolo della base di laurea.
+- Monitoraggio dei CFU acquisiti e della percentuale di completamento della carriera.
+- Riepilogo degli esami sostenuti.
+- Consultazione delle prenotazioni attive.
+- Riepilogo delle tasse universitarie e dello storico dei pagamenti.
+
+### 📚 Carriera universitaria
+- Consultazione del piano di studi.
+- Visualizzazione degli esami e delle attività formative.
+- Recupero delle informazioni relative agli appelli.
+- Sincronizzazione delle informazioni provenienti dai servizi universitari.
+
+### 👨‍🏫 Integrazione Portale Docenti
+- Recupero delle informazioni sui docenti.
+- Associazione tra insegnamenti e relativi docenti.
+- Consultazione degli appelli e degli avvisi pubblicati.
+- Integrazione dei dati provenienti dal Portale Docenti.
+
+### 📅 Orario delle lezioni
+- Consultazione dell'orario settimanale.
+- Organizzazione delle attività didattiche.
+- Visualizzazione delle informazioni relative agli insegnamenti.
+
+### ⚡ Prestazioni e caricamento asincrono
+- Recupero in background delle informazioni più lente, come tasse e appelli.
+- Caricamento progressivo dei dati senza bloccare l'interfaccia principale.
+- Cache a livello di servizio per ridurre le richieste ripetute.
+- Persistenza locale tramite SQLite.
+- Meccanismi di invalidazione della cache per mantenere aggiornate le informazioni.
+
+### 🎨 Interfaccia e accessibilità
+- Design moderno e responsive.
+- Tema Light e Dark.
+- Design token CSS dedicati.
+- Notifiche ed errori richiudibili.
+- Ottimizzazione per desktop, tablet e smartphone.
+
+### 📱 Progressive Web App
+- Installazione direttamente su dispositivi Android e iOS.
+- Accesso tramite icona nella schermata Home.
+- Esperienza di utilizzo simile a un'applicazione nativa.
 
 ---
 
-## 🛠️ Architettura del Progetto
+## 🧰 Tecnologie utilizzate
+
+| Area | Tecnologie |
+|---|---|
+| Frontend | Next.js, React, Tailwind CSS |
+| Backend | Node.js, Express.js |
+| Automazione | Puppeteer, Puppeteer Cluster |
+| Database | SQLite |
+| Autenticazione | JWT |
+| Caching | Cache applicativa |
+| Distribuzione | Render |
+| Applicazione mobile | Progressive Web App (PWA) |
+
+---
+
+## 🏗️ Architettura del progetto
+
+Il progetto adotta un'architettura client-server, separando l'interfaccia utente dalla logica applicativa e dai moduli di acquisizione dei dati.
 
 ```text
-├── frontend/        # Interfaccia utente (Next.js, React, Tailwind CSS)
-├── server.js        # Entry point del server API Express
-├── scraper/         # Moduli di automazione Puppeteer per i portali Unina
-├── services/        # Gestione sessioni JWT, cache ed elaborazione dati
-├── routes/          # Endpoint REST API
-├── db/              # Gestionale SQLite e repository profili
-└── test/            # Suite di test Node.js
-Il backend impiega Puppeteer Cluster per parallelizzare le sessioni di scraping. La cache a livello di servizio consente di minimizzare i tempi di risposta ed evitare richieste ridondanti ai server di Ateneo.
+segrepass-unina/
+│
+├── frontend/             # Frontend Next.js e React
+│
+├── scraper/              # Moduli Puppeteer per i portali Unina
+│
+├── services/             # Servizi applicativi
+│   ├── sessioni          # Gestione sessioni JWT
+│   ├── cache             # Gestione della cache
+│   └── elaborazione      # Elaborazione e normalizzazione dati
+│
+├── routes/               # Endpoint REST API
+│
+├── db/                   # Database SQLite e repository
+│
+├── test/                 # Suite di test Node.js
+│
+├── server.js             # Entry point backend Express
+│
+├── package.json          # Dipendenze e script backend
+│
+└── .env                  # Variabili d'ambiente (non versionato)
+```
 
-📋 Requisiti di Sistema
-Node.js >= 20.x
+### Flusso di elaborazione
 
-npm >= 10.x
+Il backend utilizza Puppeteer Cluster per gestire le operazioni di automazione e recupero delle informazioni dai portali universitari.
 
-Chromium / Google Chrome (compatibile con Puppeteer)
+I dati recuperati vengono successivamente elaborati dai servizi applicativi, che si occupano della loro normalizzazione, memorizzazione e restituzione al frontend attraverso API REST.
 
-Credenziali valide per l'accesso ai servizi Unina
+La presenza di una cache a livello di servizio consente di limitare le richieste ridondanti e migliorare i tempi di risposta.
 
-📦 Installazione
-Clona il repository ed installa le dipendenze sia per il backend che per il frontend:
+---
 
+## 📋 Requisiti
 
-# Clona il repository
-git clone [https://github.com/tuo-username/segrepass-unina.git](https://github.com/tuo-username/segrepass-unina.git)
+Prima di procedere con l'installazione, assicurarsi di disporre di:
+
+- **Node.js:** versione `20.x` o superiore.
+- **npm:** versione `10.x` o superiore.
+- **Chromium / Google Chrome:** compatibile con Puppeteer.
+- **Credenziali valide:** account abilitato all'accesso ai servizi universitari.
+
+---
+
+## 📦 Installazione
+
+### 1. Clonazione del repository
+
+```bash
+git clone https://github.com/tuo-username/segrepass-unina.git
+
 cd segrepass-unina
+```
 
-# Installa le dipendenze del backend
+### 2. Installazione delle dipendenze backend
+
+```bash
 npm install
+```
 
-# Installa le dipendenze del frontend
+### 3. Installazione delle dipendenze frontend
+
+Da PowerShell:
+
+```powershell
 Set-Location frontend
 npm install
 Set-Location ..
-⚙️ Configurazione Environment
-Crea un file .env nella root principale del progetto (non committare mai questo file su Git):
+```
 
-# Configurazione Server
-JWT_SECRET=inserisci_una_chiave_jwt_molto_lunga_e_casuale
+---
+
+## ⚙️ Configurazione
+
+Creare un file `.env` nella directory principale del progetto.
+
+> [!IMPORTANT]
+> Il file `.env` contiene informazioni sensibili e non deve essere caricato o condiviso pubblicamente su GitHub.
+
+### Variabili d'ambiente
+
+```env
+# =====================================
+# SERVER
+# =====================================
+
 PORT=3001
 HOST=0.0.0.0
 FRONTEND_URL=http://localhost:3000
 
-# Parametri Opzionali / Cache
+# =====================================
+# AUTENTICAZIONE E SICUREZZA
+# =====================================
+
+JWT_SECRET=inserisci_una_chiave_lunga_e_casuale
+CRED_KEY=chiave_di_cifratura_dedicata
+
+# =====================================
+# DATABASE
+# =====================================
+
 DB_PATH=./data/segrepass.sqlite
+
+# =====================================
+# PARAMETRI CARRIERA
+# =====================================
+
 CFU_TOTALI_CORSO=180
+
+# =====================================
+# CACHE
+# =====================================
+
 CAREER_CACHE_TTL_MS=300000
 TIMETABLE_CACHE_TTL_MS=300000
-CRED_KEY=chiave_di_cifratura_credenziali_dedicata
+
+# =====================================
+# DEBUG E PROXY
+# =====================================
+
 DEBUG_SCRAPER=0
 TRUST_PROXY=1
-Verifica che le variabili d'ambiente siano corrette tramite lo script di controllo:
+```
 
+### Verifica della configurazione
 
+Dopo aver configurato le variabili, eseguire:
+
+```bash
 npm run check:env
-💻 Avvio in Sviluppo
-Avvia il server backend:
+```
 
+Lo script verifica la presenza e la configurazione delle variabili d'ambiente richieste dal progetto.
 
+---
+
+## 💻 Avvio in sviluppo
+
+L'applicazione richiede l'avvio separato di backend e frontend.
+
+### 1. Backend
+
+Dalla directory principale:
+
+```bash
 npm run dev
-Il backend sarà attivo su http://127.0.0.1:3001.
+```
 
-In un secondo terminale, avvia il frontend Next.js:
+Il server API sarà disponibile all'indirizzo:
 
+`http://127.0.0.1:3001`
 
+### 2. Frontend
+
+Aprire un secondo terminale:
+
+```powershell
 Set-Location frontend
 npm run dev
-Apri il browser su http://127.0.0.1:3000.
+```
 
-🏗️ Build di Produzione e Deployment
-Backend (Express + Puppeteer)
-PowerShell
+Il frontend Next.js sarà disponibile all'indirizzo:
+
+`http://localhost:3000`
+
+A questo punto sarà possibile accedere alla dashboard tramite il browser.
+
+---
+
+## 🏗️ Build e deployment
+
+### Backend – Express + Puppeteer
+
+Per avviare il backend in modalità produzione:
+
+```bash
 npm start
-Note per il deploy su Render:
-Imposta le seguenti variabili nel pannello di controllo di Render:
+```
 
-Build Command: npm run build:render
+### Deployment su Render
 
-Start Command: npm run start:render
+Per distribuire il backend su Render, configurare i seguenti parametri:
 
-Nota: build:render e start:render assicurano la corretta installazione dell'eseguibile Chromium nell'ambiente isolato di Render evitando l'errore Could not find Chrome.
+| Parametro | Valore |
+|---|---|
+| Build Command | `npm run build:render` |
+| Start Command | `npm run start:render` |
 
-Frontend (Next.js)
-PowerShell
+Gli script dedicati al deployment gestiscono l'installazione e la configurazione di Chromium nell'ambiente di esecuzione, evitando problemi legati all'assenza del browser richiesto da Puppeteer.
+
+Configurare inoltre tutte le variabili d'ambiente necessarie direttamente dal pannello di Render.
+
+### Frontend – Next.js
+
+Per generare la build di produzione:
+
+```powershell
 Set-Location frontend
+
 npm run build
+
 npm start
-Il frontend gestisce le chiamate verso il backend tramite rewrite /api/*, nascondendo gli endpoint interni del server.
+```
 
-📱 Installazione PWA su Dispositivi Mobili
-Una volta distribuito il frontend su un dominio con HTTPS:
+Il frontend gestisce le comunicazioni con il backend attraverso le rewrite `/api/*`, evitando di esporre direttamente gli endpoint interni dell'API.
 
-Android (Chrome): Apri l'URL, premi il menu con i tre pallini ⋮ e seleziona Installa app.
+---
 
-iOS (Safari): Apri l'URL, premi l'icona Condividi e seleziona Aggiungi alla schermata Home.
+## 📱 Installazione PWA
 
-Nota: La PWA richiede che il server backend sia costantemente raggiungibile via HTTPS (configurando NEXT_PUBLIC_BACKEND_URL).
+Segrepass Unina può essere installata su dispositivi mobili come una normale applicazione.
 
-🔒 Sicurezza e Privacy
-Non committare mai credenziali, file .env o chiavi private nel repository.
+È necessario che il frontend sia distribuito tramite una connessione HTTPS.
 
-In ambiente di produzione utilizzare esclusivamente connessioni protette via HTTPS.
+### Android – Google Chrome
 
-Impostare FRONTEND_URL specificando l'origine esatta dell'applicazione web per prevenire attacchi CORS.
+1. Aprire il sito tramite Chrome.
+2. Selezionare il menu con i tre puntini (⋮).
+3. Premere **Installa app** oppure **Aggiungi alla schermata Home**.
 
-Le credenziali utente vengono trattate in memoria ed archiviate localmente previa cifratura.
+### iOS – Safari
 
-📄 Licenza
-Questo progetto è distribuito sotto licenza ISC
+1. Aprire il sito tramite Safari.
+2. Premere l'icona **Condividi**.
+3. Selezionare **Aggiungi alla schermata Home**.
+
+> [!NOTE]
+> Per il corretto funzionamento delle funzionalità che richiedono dati aggiornati, il backend deve essere raggiungibile dall'applicazione tramite HTTPS. Verificare anche la configurazione di `NEXT_PUBLIC_BACKEND_URL`, se utilizzata dal progetto.
+
+---
+
+## 🔒 Sicurezza e privacy
+
+La sicurezza delle informazioni personali e delle credenziali universitarie è un aspetto centrale del progetto.
+
+Alcune indicazioni fondamentali:
+
+- Non caricare mai credenziali, token, chiavi private o file `.env` nel repository.
+- Utilizzare esclusivamente connessioni HTTPS in produzione.
+- Configurare `FRONTEND_URL` con l'origine effettiva del frontend per limitare le richieste CORS.
+- Utilizzare chiavi JWT robuste e non riutilizzate.
+- Mantenere separate le chiavi dedicate alla cifratura delle credenziali.
+- Evitare di registrare password e dati sensibili nei log applicativi.
+
+Le modalità effettive di trattamento, conservazione e cifratura dei dati dipendono dalla configurazione dell'istanza distribuita.
+
+---
+
+## 📄 Licenza
+
+Il progetto è distribuito sotto licenza **ISC**.
+
+Per maggiori informazioni, consultare il file `LICENSE` presente nel repository.
+
+---
+
+## 👨‍💻 Autore
+
+**Segrepass Unina** nasce come progetto indipendente realizzato da uno studente per gli studenti.
+
+L'obiettivo è rendere più semplice, immediata e accessibile la consultazione della propria carriera universitaria, attraverso un'esperienza digitale unificata.
+
+**Un solo spazio. Tutta la tua carriera universitaria.**
+
+---
+
+<sub>Segrepass Unina è un progetto indipendente e non ufficiale. I servizi universitari originali rimangono gli unici riferimenti ufficiali per le informazioni e le procedure accademiche.</sub>
