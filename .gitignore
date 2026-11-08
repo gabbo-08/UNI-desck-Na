@@ -14,3 +14,9 @@ data/*.sqlite-wal
 data/*.sqlite-shm
 *.log
 tutto_il_progetto.txt
+
+# Dati personali, database e dump: non devono mai finire nel repository
+db/*.db
+data/
+logs/
+project-dump/
