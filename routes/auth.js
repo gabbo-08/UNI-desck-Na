@@ -17,6 +17,7 @@ router.post('/login', async (req, res) => {
     return res.json(toLoginDto(session));
   } catch (error) {
     console.error('[Auth Error]', error.message);
+    if (error.retryAfterMs) res.set('Retry-After', String(Math.ceil(error.retryAfterMs / 1000)));
     return res.status(sessionErrorStatus(error)).json({ error: sessionErrorMessage(error) });
   }
 });

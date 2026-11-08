@@ -11,6 +11,8 @@ const dbModule = require('../db');
 const { upsertStudentProfile, getStudentProfile, getStudyPlan, getDocentiDataCache, saveDocentiDataCache } = require('../db/repository');
 const { clearDocentiRouteCache } = require('../routes/docenti');
 const { createServerSession } = require('./server-sessions');
+const { assertLoginAllowed, recordLoginFailure, recordLoginSuccess } = require('../lib/login-throttle');
+const { sessionErrorStatus } = require('../lib/errors');
 
 const db = dbModule.db || dbModule;
 const EMPTY_DOCENTI = Object.freeze({ subscriptions: [], bookedExams: [], announcements: [] });
@@ -138,14 +140,27 @@ async function createStudentSession({ codiceFiscale, password, email } = {}, dep
   const scraper = dependencies.getDatiCarriera || getDatiCarriera;
   const cfClean = normalizedIdentifier;
 
+  // Limite globale per account (indipendente dall'IP): va verificato prima
+  // di contattare il portale, così un account in cooldown non genera scraping.
+  assertLoginAllowed(cfClean);
+
   // Cache per studente: se i dati sono freschi si evita lo scraping completo.
   // La chiave include un HMAC della password, così una password errata non
   // può riutilizzare i dati di un login precedente.
-  const careerResult = await careerCache.getOrLoadCareer(
-    cfClean,
-    password,
-    () => scraper({ codiceFiscale: cfClean, password }, { phase: 'fast' })
-  );
+  let careerResult;
+  try {
+    careerResult = await careerCache.getOrLoadCareer(
+      cfClean,
+      password,
+      () => scraper({ codiceFiscale: cfClean, password }, { phase: 'fast' })
+    );
+  } catch (error) {
+    // Solo i fallimenti di credenziali (401) alimentano il cooldown: un portale
+    // irraggiungibile (502) non deve bloccare gli utenti legittimi.
+    if (sessionErrorStatus(error) === 401) recordLoginFailure(cfClean);
+    throw error;
+  }
+  recordLoginSuccess(cfClean);
   const datiCarriera = careerResult.value;
   const fromCache = careerResult.fromCache;
 
