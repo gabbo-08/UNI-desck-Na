@@ -10,7 +10,9 @@ const { enableFastMode } = require('./utils');
 
 const NODI_SEGREPASS = ['segrepass1', 'segrepass2', 'segrepass3'];
 const NODE_TIMEOUT_MS = 8000;
-const DEBUG = process.env.DEBUG_SCRAPER === '1';
+// Il debug dello scraper è escluso in produzione: anche con DEBUG_SCRAPER=1,
+// NODE_ENV=production lo disattiva per non esporre dati personali nei log.
+const DEBUG = process.env.DEBUG_SCRAPER === '1' && process.env.NODE_ENV !== 'production';
 
 function portalError(code, message) {
   const error = new Error(message);
@@ -28,7 +30,30 @@ function classifyLoginPage({ pageText = '', hasLoginForm = false, hasAuthenticat
 }
 
 function debugLog(...args) {
-  if (DEBUG) console.log(...args);
+  if (!DEBUG) return;
+  // Gli argomenti funzione sono thunk: valutati solo con debug attivo, così
+  // in produzione non serializziamo dati personali a ogni scraping.
+  console.log(...args.map(arg => (typeof arg === 'function' ? arg() : arg)));
+}
+
+// Oscura i dati personali nei dump di debug: PIN/CNP, anagrafica e tasse sono
+// redatti interamente; gli altri identificatori sono mascherati per chiave.
+const SENSITIVE_DEBUG_KEYS = new Set([
+  'pin', 'cnp', 'codicenumericopersonale', 'password',
+  'matricola', 'codicefiscale', 'cf', 'nome', 'nomecompleto', 'cognome',
+  'anagrafica', 'tasse'
+]);
+
+function redactForDebug(value) {
+  if (Array.isArray(value)) return value.map(redactForDebug);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [key, val] of Object.entries(value)) {
+      out[key] = SENSITIVE_DEBUG_KEYS.has(key.toLowerCase()) ? '[REDACTED]' : redactForDebug(val);
+    }
+    return out;
+  }
+  return value;
 }
 
 function maskId(value) {
@@ -270,8 +295,8 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
       if (frameMatricola) anagraficaDinamica.matricola = frameMatricola[1].replace(/\s+/g, '').trim();
     }
 
-    debugLog('\n--- [DEBUG] ANAGRAFICA ESTRATTA ---');
-    debugLog(JSON.stringify(anagraficaDinamica, null, 2));
+    debugLog('\n--- [DEBUG] ANAGRAFICA ESTRATTA (oscurata) ---');
+    debugLog(() => JSON.stringify(redactForDebug({ anagrafica: anagraficaDinamica }), null, 2));
     debugLog('------------------------------------\n');
 
     console.log('[Segrepass] Clic su "Segreteria OnLine"...');
@@ -365,7 +390,7 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
         }).catch(() => null))).then(values => values.find(Boolean) || null);
         if (frameMatricola) anagraficaDinamica.matricola = frameMatricola;
       }
-      debugLog(`[Segrepass] Matricola ESIS: ${anagraficaDinamica.matricola || 'n/d'}`);
+      debugLog(`[Segrepass] Matricola ESIS: ${anagraficaDinamica.matricola ? maskId(anagraficaDinamica.matricola) : 'n/d'}`);
     }
 
     let pianoHeader = {};
@@ -392,7 +417,7 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
       pinInfo = pinRes;
 
       debugLog('\n--- [DEBUG] TABELLA ESAMI GREZZA ---');
-      debugLog(JSON.stringify(tabellaEsami, null, 2));
+      debugLog(() => JSON.stringify(redactForDebug(tabellaEsami), null, 2));
       debugLog('-------------------------------------\n');
 
       esamiList = (tabellaEsami.records || []).map(record => {
@@ -443,12 +468,12 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
       taxes = taxesRes;
       appelliCalendario = appelliRes;
 
-      debugLog('\n--- [DEBUG] TASSE ESTRATTE ---');
-      debugLog(JSON.stringify(taxes, null, 2));
+      debugLog('\n--- [DEBUG] TASSE ESTRATTE (oscurate) ---');
+      debugLog(() => JSON.stringify(redactForDebug({ tasse: taxes }), null, 2));
       debugLog('------------------------------\n');
 
       debugLog('\n--- [DEBUG] APPELLI ESTRATTI ---');
-      debugLog(JSON.stringify(appelliCalendario, null, 2));
+      debugLog(() => JSON.stringify(redactForDebug(appelliCalendario), null, 2));
       debugLog('--------------------------------\n');
     }
 
@@ -483,12 +508,12 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
     };
 
     debugLog('\n=============================================');
-    debugLog('[Segrepass] PAYLOAD FINALE:');
-    debugLog(JSON.stringify(payloadFinale, null, 2));
+    debugLog('[Segrepass] PAYLOAD FINALE (dati personali oscurati):');
+    debugLog(() => JSON.stringify(redactForDebug(payloadFinale), null, 2));
     debugLog('=============================================\n');
 
     return payloadFinale;
   });
 }
 
-module.exports = { getDatiCarriera, classifyLoginPage, scrapePin };
+module.exports = { getDatiCarriera, classifyLoginPage, scrapePin, redactForDebug };
