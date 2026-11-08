@@ -115,10 +115,14 @@ app.use('/api', (req, res) => {
 });
 
 app.use((err, req, res, next) => {
-  console.error('[Server Error]', err);
+  // Gli errori di parsing del body possono incorporare frammenti della richiesta
+  // (anche credenziali): non logghiamo né restituiamo il loro messaggio grezzo.
+  const isParseError = err?.type === 'entity.parse.failed' || err instanceof SyntaxError;
   const status = err.status || 500;
+  const clientMessage = isParseError ? 'Richiesta non valida.' : (err.message || 'Richiesta non valida.');
+  console.error('[Server Error]', err?.code || err?.name || 'Error', isParseError ? '(payload non valido)' : clientMessage);
   res.status(status).json({
-    error: status >= 500 ? 'Errore interno del server.' : (err.message || 'Richiesta non valida.')
+    error: status >= 500 ? 'Errore interno del server.' : clientMessage
   });
 });
 
