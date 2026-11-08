@@ -151,9 +151,11 @@ async function main() {
     record('GET /api/study-plans/:course/:cohort', 'SALTATO', 'profilo incompleto');
   }
 
-  const taxes = await call('/api/career-taxes/taxes');
-  const taxesBody = await taxes.json().catch(() => ({}));
-  record('GET /api/career-taxes/taxes', taxes.status, `pagati=${count(taxesBody.paid)} debiti=${count(taxesBody.pending)}`);
+  // Le tasse arrivano da /api/career/slow-data (credenziali di sessione, mai nel body).
+  const taxesResponse = await call('/api/career/slow-data');
+  const taxesPayload = await taxesResponse.json().catch(() => ({}));
+  const taxes = taxesPayload.taxes || {};
+  record('GET /api/career/slow-data (tasse)', taxesResponse.status, `stato=${taxesPayload.status} pagati=${count(taxes.paid)} debiti=${count(taxes.pending)}`);
 
   const studyYear = profile?.profile?.current_course_year;
   const channel = profile?.profile?.channel;

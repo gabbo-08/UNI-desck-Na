@@ -13,7 +13,6 @@ const profileRoutes = require('./routes/profile');
 const careerPlanRoutes = require('./routes/career-plan');
 const studyPlanRoutes = require('./routes/study-plans');
 const timetableRoutes = require('./routes/timetable');
-const careerTaxesRoutes = require('./routes/career-taxes');
 const docentiRoutes = require('./routes/docenti');
 const metricheRoutes = require('./routes/metriche');
 
@@ -99,7 +98,6 @@ app.use('/api/auth', authRoutes);
 app.use('/api/profile', authMiddleware, profileRoutes);
 app.use('/api/career-plan', authMiddleware, careerPlanRoutes);
 app.use('/api/career', authMiddleware, careerRoutes);
-app.use('/api/career-taxes', authMiddleware, careerTaxesRoutes);
 app.use('/api/metriche', authMiddleware, metricheRoutes);
 app.use('/api/study-plans', authMiddleware, studyPlanRoutes);
 app.use('/api/timetable', authMiddleware, timetableRoutes);

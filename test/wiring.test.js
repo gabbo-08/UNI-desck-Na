@@ -7,7 +7,6 @@ test('i moduli critici si caricano senza dipendenze mancanti', () => {
   assert.doesNotThrow(() => {
     require('../routes/auth');
     require('../routes/docenti');
-    require('../routes/career-taxes');
     require('../middleware/auth');
     require('../services/student-session');
     require('../scraper/docenti');
