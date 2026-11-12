@@ -1,6 +1,7 @@
 const { enableFastMode } = require('./utils');
+const { safeErrorMeta } = require('../lib/safe-log');
 
-const DEBUG = process.env.DEBUG_SCRAPER === '1';
+const DEBUG = process.env.DEBUG_SCRAPER === '1' && process.env.NODE_ENV !== 'production';
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function clickMenu(page) {
@@ -160,7 +161,7 @@ async function scrapeCalendarioAppelli(context, esisUrl) {
     console.log(`[prenotazioni] Appelli attivi: ${appelli.length} in ${seconds}s.`);
     return appelli;
   } catch (error) {
-    console.warn('[prenotazioni] Errore lettura appelli:', error.message);
+    console.warn('[prenotazioni] Errore lettura appelli:', safeErrorMeta(error));
     return [];
   } finally {
     await listPage.close().catch(() => {});

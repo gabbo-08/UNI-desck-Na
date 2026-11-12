@@ -1,5 +1,6 @@
 const { enableFastMode, extractTables } = require('./utils');
 const { findPaymentTables } = require('../lib/taxes');
+const { safeErrorMeta } = require('../lib/safe-log');
 
 // Come per segrepass.js: il debug è escluso in produzione e non stampa mai
 // le tabelle finanziarie grezze, che contengono dati personali dello studente.
@@ -50,7 +51,7 @@ async function scrapeTasse(context, esisUrl) {
     return result;
 
   } catch (err) {
-    console.warn('[tasse] Errore estrazione:', err.message);
+    console.warn('[tasse] Errore estrazione:', safeErrorMeta(err));
     return {
       available: false,
       reason: 'TAXES_DATA_NOT_AVAILABLE',

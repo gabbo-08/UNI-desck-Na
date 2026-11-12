@@ -1,6 +1,7 @@
 // services/slow-sync.js
 const snapshots = require('./career-snapshots');
 const { getDatiCarriera } = require('../scraper/segrepass');
+const { safeErrorMeta } = require('../lib/safe-log');
 
 const statuses = new Map();
 const inFlight = new Map(); // Modificato in Map per conservare la Promise in esecuzione
@@ -57,7 +58,7 @@ function startSlowSync(profileId, credentials, dependencies = {}) {
     })
     .catch(error => {
       if ((generations.get(profileId) || 0) !== generation) return getSlowStatus(profileId);
-      console.warn(`[slow-sync] Dati lenti non disponibili: ${error?.message || error}`);
+      console.warn('[slow-sync] Dati lenti non disponibili:', safeErrorMeta(error));
       statuses.set(profileId, {
         state: 'error',
         error: error?.code || 'SLOW_SYNC_FAILED',

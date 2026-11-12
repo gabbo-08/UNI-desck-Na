@@ -5,6 +5,12 @@ frontend
 .env
 .env.*
 *.log
+logs/
+data/
+project-dump/
+android_app/build/
+frontend/.next/
+frontend/node_modules/
 db/*.db
 db/*.db-wal
 db/*.db-shm

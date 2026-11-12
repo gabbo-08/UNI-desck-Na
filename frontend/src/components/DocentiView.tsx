@@ -38,6 +38,9 @@ const EMPTY = `${CARD} p-8 text-center text-sm text-slate-400`;
 function readableError(err: unknown): string {
   const message = err instanceof Error ? err.message : '';
   if (message === 'SESSION_EXPIRED') return 'Sessione scaduta. Esci e accedi di nuovo.';
+  if (/Integrazione Docenti disabilitata/i.test(message)) {
+    return 'Portale Docenti non attivo. Esci e accedi di nuovo spuntando "Attiva anche il portale Docenti".';
+  }
   if (/CREDENTIALS_REQUIRED/i.test(message)) {
     return 'Credenziali Docenti non disponibili nella sessione. Esci e accedi di nuovo con l\u2019email istituzionale.';
   }

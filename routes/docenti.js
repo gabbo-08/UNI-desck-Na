@@ -1,6 +1,6 @@
 // routes/docenti.js
 const express = require('express');
-const { getDocentiData, fetchAnnouncementsForProfessors, fetchAnnouncementsForTeacherIds, fetchTeacherDetail, fetchTeacherPhoto, fetchTeacherFolder, matchesImageSignature, searchTeachers } = require('../scraper/docenti');
+const { getDocentiData, fetchAnnouncementsForProfessors, fetchAnnouncementsForTeacherIds, fetchTeacherDetail, fetchTeacherPhoto, fetchTeacherFolder, fetchTeacherMaterial, matchesImageSignature, searchTeachers } = require('../scraper/docenti');
 const authModule = require('../middleware/auth');
 const authMiddleware = authModule.authMiddleware || authModule;
 const { db } = require('../db');
@@ -16,11 +16,13 @@ const {
 const { getSessionCredentials } = require('../services/server-sessions');
 const { getDocentiCached: getSharedDocentiCached, clearDocentiCache, isDocentiCacheLoading, TTL_MS: DOCENTI_CACHE_TTL_MS } = require('../services/docenti-cache');
 const { isDocentiLoading, invalidateDocentiSnapshot } = require('../services/career-snapshots');
+const { safeErrorMeta } = require('../lib/safe-log');
 
 const teacherDetailCache = new Map(); // chiave -> { value, promise, storedAt, refreshing }
 const TEACHER_DETAIL_TTL_MS = 15 * 60 * 1000;
 const TEACHER_ANNOUNCEMENT_TTL_MS = 10 * 60 * 1000;
 const teacherAnnouncementLoads = new Map();
+const restrictedMaterialsEnabled = () => String(process.env.ALLOW_RESTRICTED_DOCENTI_MATERIALS || '').toLowerCase() === 'true';
 const DOCENTI_FAILURE_MESSAGES = {
   DOCENTI_CREDENTIALS_REQUIRED: 'Le credenziali Docenti non sono disponibili. Esci e accedi di nuovo.',
   DOCENTI_EMAIL_REQUIRED: 'Per accedere al portale Docenti serve l’email istituzionale @studenti.unina.it. Esci e accedi di nuovo inserendo quell’indirizzo.',
@@ -42,7 +44,11 @@ function resolveCredentials(req) {
     userEmail = String(req.user.sub).toLowerCase();
   }
 
-  return { userEmail, password: credentials.password };
+  return {
+    userEmail,
+    password: credentials.password,
+    enableDocentiSync: credentials.enableDocentiSync === true
+  };
 }
 
 function isHardFailure(data) {
@@ -53,6 +59,25 @@ function requireAuth(req, res, next) {
   // I test (e un eventuale middleware padre) possono già aver impostato req.user.
   if (req.user && req.user.sub) return next();
   return authMiddleware(req, res, next);
+}
+
+function docentiSyncEnabled(dependencies = {}) {
+  return dependencies.enableDocentiSync === true
+    || typeof dependencies.loadDocenti === 'function'
+    || typeof dependencies.fetchFavoriteAnnouncements === 'function'
+    || typeof dependencies.fetchTeacherDetail === 'function'
+    || typeof dependencies.fetchTeacherFolder === 'function'
+    || typeof dependencies.fetchMaterial === 'function'
+    || typeof dependencies.fetchTeacherPhoto === 'function'
+    || typeof dependencies.searchTeachers === 'function'
+    || String(process.env.DOCENTI_SYNC_ENABLED || '').toLowerCase() === 'true'
+    || process.env.NODE_ENV === 'test';
+}
+
+function docentiSyncEnabledForRequest(req, dependencies = {}) {
+  const stored = getSessionCredentials(req.authSession?.tokenHash) || {};
+  if (Object.hasOwn(stored, 'enableDocentiSync')) return stored.enableDocentiSync === true;
+  return docentiSyncEnabled(dependencies);
 }
 
 function identifierForTeacher(req) {
@@ -79,6 +104,9 @@ function refreshTeacherDetail(cacheKey, identifier, coursePrefix, dependencies) 
   const promise = loadTeacherDetail(identifier, { ...dependencies, coursePrefix })
     .then(detail => {
       if (!detail) return null;
+      if (!restrictedMaterialsEnabled() && detail.materiali) {
+        detail.materiali = { ...detail.materiali, riservato: [] };
+      }
       if (detail.profilo?.id) {
         // fetchTeacherDetail already downloads and validates the photo. Keep
         // that result instead of triggering a second upstream request from <img>.
@@ -139,7 +167,7 @@ function startTeacherAnnouncementRefresh(teacher, dependencies) {
         delete shared.announcementLoading;
         delete shared.announcementError;
         try { saveTeacherAnnouncementsCache(id, shared); } catch (error) {
-          console.warn('[docenti-cache] Avvisi persistenti non aggiornati:', error?.message || error);
+          console.warn('[docenti-cache] Avvisi persistenti non aggiornati:', safeErrorMeta(error));
         }
       }
       return group || null;
@@ -184,7 +212,12 @@ function createDocentiRouter(dependencies = {}) {
   const router = express.Router();
 
   async function loadForUser(req, res) {
-    const { userEmail, password } = resolveCredentials(req);
+    if (!docentiSyncEnabledForRequest(req, dependencies)) {
+      res.status(403).json({ success: false, error: 'Integrazione Docenti disabilitata.', code: 'DOCENTI_SYNC_DISABLED' });
+      return null;
+    }
+    const { userEmail, password, enableDocentiSync } = resolveCredentials(req);
+    const requestDependencies = { ...dependencies, enableDocentiSync };
     const injectedLoader = dependencies.loadDocenti;
 
     if (!injectedLoader && (!userEmail || !userEmail.includes('@') || !password)) {
@@ -203,7 +236,7 @@ function createDocentiRouter(dependencies = {}) {
         : await getSharedDocentiCached(
           profileKey,
           { username: userEmail, password },
-          () => getDocentiData({ username: userEmail, password, profileKey }, dependencies)
+          () => getDocentiData({ username: userEmail, password, profileKey }, requestDependencies)
         );
 
       if (isHardFailure(data)) {
@@ -225,7 +258,8 @@ function createDocentiRouter(dependencies = {}) {
       return data;
     } catch (error) {
       const status = error.status || 502;
-      res.status(status).json({ success: false, error: error.message || 'Errore Docenti.', code: error.code || 'DOCENTI_ERROR' });
+      console.warn('[docenti] richiesta non riuscita:', safeErrorMeta(error));
+      res.status(status).json({ success: false, error: 'Errore Docenti.', code: error.code || 'DOCENTI_ERROR' });
       return null;
     }
   }
@@ -278,6 +312,7 @@ function createDocentiRouter(dependencies = {}) {
   });
 
   router.get('/teachers/search', requireAuth, async (req, res) => {
+    if (!docentiSyncEnabledForRequest(req, dependencies)) return res.status(403).json({ error: 'Integrazione Docenti disabilitata.', code: 'DOCENTI_SYNC_DISABLED' });
     const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
     if (query.length < 3 || query.length > 100) return res.status(400).json({ error: 'Inserisci almeno 3 caratteri.' });
     try {
@@ -293,6 +328,9 @@ function createDocentiRouter(dependencies = {}) {
 
   router.get('/preferences', requireAuth, (req, res) => res.json(getProfessorPreferences(req.user.sub)));
   router.get('/favorite-announcements', requireAuth, async (req, res) => {
+    if (!docentiSyncEnabledForRequest(req, dependencies)) {
+      return res.status(403).json({ error: 'Integrazione Docenti disabilitata.', code: 'DOCENTI_SYNC_DISABLED' });
+    }
     const preferences = getProfessorPreferences(req.user.sub);
     const byId = new Map();
     for (const item of preferences) {
@@ -326,6 +364,7 @@ function createDocentiRouter(dependencies = {}) {
   });
 
   router.get('/teacher/:id', requireAuth, async (req, res) => {
+    if (!docentiSyncEnabledForRequest(req, dependencies)) return res.status(403).json({ error: 'Integrazione Docenti disabilitata.', code: 'DOCENTI_SYNC_DISABLED' });
     if (!validExternalId(req.params.id, 80)) return res.status(400).json({ error: 'Identificativo docente non valido.' });
     const coursePrefix = typeof req.query.course === 'string' ? req.query.course.trim() : '';
     if (coursePrefix.length > 200 || !/^[A-Za-z0-9_, -]*$/.test(coursePrefix)) {
@@ -349,11 +388,13 @@ function createDocentiRouter(dependencies = {}) {
       if (!detail) return res.status(404).json({ error: 'Docente non trovato.' });
       return res.json(detail);
     } catch (error) {
-      return res.status(502).json({ error: error.message || 'Dettaglio docente non disponibile.' });
+      console.warn('[docenti] dettaglio non disponibile:', safeErrorMeta(error));
+      return res.status(502).json({ error: 'Dettaglio docente non disponibile.' });
     }
   });
 
   router.get('/teacher/:id/photo', requireAuth, async (req, res) => {
+    if (!docentiSyncEnabledForRequest(req, dependencies)) return res.status(403).json({ error: 'Integrazione Docenti disabilitata.', code: 'DOCENTI_SYNC_DISABLED' });
     if (!validExternalId(req.params.id, 80)) return res.status(400).json({ error: 'Identificativo docente non valido.' });
     const photo = await fetchTeacherPhoto(req.params.id, { ...dependencies, sessionKey: req.user.sub });
     if (!photo) return res.status(404).end();
@@ -369,12 +410,16 @@ function createDocentiRouter(dependencies = {}) {
   });
 
   router.get('/teacher/:id/folder/:folderId', requireAuth, async (req, res) => {
+    if (!docentiSyncEnabledForRequest(req, dependencies)) return res.status(403).json({ error: 'Integrazione Docenti disabilitata.', code: 'DOCENTI_SYNC_DISABLED' });
     try {
       if (!validExternalId(req.params.id, 80)) return res.status(400).json({ error: 'Identificativo docente non valido.' });
       if (!validExternalId(req.params.folderId, 128)) return res.status(400).json({ error: 'Identificativo cartella non valido.' });
       const section = String(req.query.section || 'areapubb');
       if (!['areapubb', 'aree-ftp', 'arearis'].includes(section)) {
         return res.status(400).json({ error: 'Sezione materiale non valida.' });
+      }
+      if (section === 'arearis' && !restrictedMaterialsEnabled()) {
+        return res.status(403).json({ error: 'Materiali riservati disabilitati.', code: 'RESTRICTED_MATERIALS_DISABLED' });
       }
       const items = await fetchTeacherFolder(
         req.params.id,
@@ -385,7 +430,45 @@ function createDocentiRouter(dependencies = {}) {
       );
       return res.json({ items });
     } catch (error) {
-      return res.status(502).json({ error: error.message || 'Contenuto cartella non disponibile.' });
+      console.warn('[docenti] cartella non disponibile:', safeErrorMeta(error));
+      return res.status(502).json({ error: 'Contenuto cartella non disponibile.' });
+    }
+  });
+
+  router.get('/teacher/:id/folder/:folderId/file/:fileId', requireAuth, async (req, res) => {
+    if (!docentiSyncEnabledForRequest(req, dependencies)) return res.status(403).json({ error: 'Integrazione Docenti disabilitata.', code: 'DOCENTI_SYNC_DISABLED' });
+    try {
+      if (!validExternalId(req.params.id, 80)) return res.status(400).json({ error: 'Identificativo docente non valido.' });
+      if (!validExternalId(req.params.folderId, 128) || !validExternalId(req.params.fileId, 160)) {
+        return res.status(400).json({ error: 'Identificativo materiale non valido.' });
+      }
+      const section = String(req.query.section || 'areapubb');
+      if (!['areapubb', 'aree-ftp', 'arearis'].includes(section)) return res.status(400).json({ error: 'Sezione materiale non valida.' });
+      if (section === 'arearis' && !restrictedMaterialsEnabled()) {
+        return res.status(403).json({ error: 'Materiali riservati disabilitati.', code: 'RESTRICTED_MATERIALS_DISABLED' });
+      }
+      const course = typeof req.query.course === 'string' ? req.query.course.trim() : '';
+      if (course.length > 200 || !/^[A-Za-z0-9_, -]*$/.test(course)) return res.status(400).json({ error: 'Filtro corso non valido.' });
+      const material = await fetchTeacherMaterial(
+        req.params.id,
+        req.params.folderId,
+        req.params.fileId,
+        section,
+        course,
+        { ...dependencies, sessionKey: req.user.sub }
+      );
+      if (!material) return res.status(404).json({ error: 'Materiale non disponibile.' });
+      const safeName = String(material.filename || `materiale-${req.params.fileId}`).replace(/[^A-Za-z0-9._ -]+/g, '_').slice(0, 120);
+      res.set({
+        'Content-Type': material.contentType,
+        'Content-Disposition': `inline; filename="${safeName || 'materiale'}"`,
+        'Cache-Control': 'private, no-store',
+        'X-Content-Type-Options': 'nosniff'
+      });
+      return res.send(material.buffer);
+    } catch (error) {
+      console.warn('[docenti] materiale non disponibile:', safeErrorMeta(error));
+      return res.status(502).json({ error: 'Materiale non disponibile.' });
     }
   });
 

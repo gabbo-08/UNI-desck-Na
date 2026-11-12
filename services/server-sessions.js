@@ -97,6 +97,12 @@ function deleteServerSession(token, options = {}) {
   return database.prepare('DELETE FROM Sessions WHERE token_hash = ?').run(sessionTokenHash(token)).changes > 0;
 }
 
+function deleteServerSessionsForProfile(profileId, options = {}) {
+  const database = options.database || defaultDb;
+  if (!profileId) return 0;
+  return database.prepare('DELETE FROM Sessions WHERE profile_id = ?').run(String(profileId)).changes;
+}
+
 function cleanupExpiredSessions(database = defaultDb, now = Date.now()) {
   const instant = new Date(now).toISOString();
   return database.prepare('DELETE FROM Sessions WHERE absolute_expires_at <= ? OR idle_expires_at <= ?')
@@ -117,6 +123,7 @@ module.exports = {
   resolveServerSession,
   getSessionCredentials,
   deleteServerSession,
+  deleteServerSessionsForProfile,
   cleanupExpiredSessions,
   startSessionCleanup,
   sessionTokenHash,

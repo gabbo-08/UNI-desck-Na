@@ -43,15 +43,25 @@ RUN apt-get update && apt-get install -y \
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
     NODE_ENV=production \
-    PORT=3001
+    PORT=3001 \
+    HOST=0.0.0.0 \
+    AUTO_PURGE_PERSONAL_DATA=true
 
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm ci --omit=dev \
+    && useradd --create-home --uid 10001 --shell /usr/sbin/nologin appuser \
+    && mkdir -p /app/data /app/logs \
+    && chown -R appuser:appuser /app
 
-COPY . .
+COPY --chown=appuser:appuser . .
+
+USER appuser
 
 EXPOSE 3001
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:3001/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "server.js"]

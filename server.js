@@ -23,6 +23,9 @@ const { csrfProtection, normalizeOrigin } = require('./lib/csrf');
 const { db } = require('./db');
 const { startSessionCleanup } = require('./services/server-sessions');
 const { initCluster, closeCluster } = require('./scraper/pool');
+const { assertRuntimeConfig } = require('./lib/runtime-config');
+const { purgeExpiredPersonalData } = require('./db/repository');
+const { safeErrorMeta } = require('./lib/safe-log');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -36,10 +39,10 @@ app.use(helmet());
 
 // 🌐 Configurazione CORS
 const frontendOrigins = [...new Set([
-  'http://localhost:3000',
-  'http://127.0.0.1:3000',
-  ...String(process.env.FRONTEND_URL || '').split(',').map(normalizeOrigin).filter(Boolean)
-])];
+  ...(String(process.env.NODE_ENV || '').toLowerCase() === 'production' ? [] : ['http://localhost:3000', 'http://127.0.0.1:3000']),
+  ...String(process.env.FRONTEND_URL || '').split(',').map(normalizeOrigin).filter(Boolean),
+  normalizeOrigin(process.env.PUBLIC_ORIGIN)
+].filter(Boolean))];
 
 app.use(cors({ origin: frontendOrigins, credentials: true }));
 app.use('/api', (_req, res, next) => {
@@ -119,8 +122,8 @@ app.use((err, req, res, next) => {
   // (anche credenziali): non logghiamo né restituiamo il loro messaggio grezzo.
   const isParseError = err?.type === 'entity.parse.failed' || err instanceof SyntaxError;
   const status = err.status || 500;
-  const clientMessage = isParseError ? 'Richiesta non valida.' : (err.message || 'Richiesta non valida.');
-  console.error('[Server Error]', err?.code || err?.name || 'Error', isParseError ? '(payload non valido)' : clientMessage);
+  const clientMessage = 'Richiesta non valida.';
+  console.error('[Server Error]', safeErrorMeta(err), isParseError ? '(payload non valido)' : 'richiesta rifiutata');
   res.status(status).json({
     error: status >= 500 ? 'Errore interno del server.' : clientMessage
   });
@@ -131,12 +134,20 @@ app.use((err, req, res, next) => {
 /* ------------------------------------------------------------------ */
 let server = null;
 let shuttingDown = false;
+let retentionTimer = null;
 
 async function start() {
+  assertRuntimeConfig();
   startSessionCleanup(db);
+  purgeExpiredPersonalData(db);
+  retentionTimer = setInterval(() => {
+    try { purgeExpiredPersonalData(db); } catch (error) { console.error('[Retention Error]', safeErrorMeta(error)); }
+  }, 60 * 60 * 1000);
+  retentionTimer.unref?.();
   await initCluster();
   server = app.listen(PORT, HOST, () => {
-    console.log(`[System] API attive su http://${HOST}:${PORT}`);
+    const publicOrigin = normalizeOrigin(process.env.PUBLIC_ORIGIN) || `http://${HOST}:${PORT}`;
+    console.log(`[System] API attive su ${publicOrigin}`);
   });
 }
 
@@ -154,14 +165,16 @@ async function gracefulShutdown(signal, exitCode = 0) {
   try {
     await closeCluster();
   } catch (error) {
-    console.error('[System] Errore chiusura cluster:', error.message);
+    console.error('[System] Errore chiusura cluster:', safeErrorMeta(error));
   }
 
   try {
     db.close();
   } catch (error) {
-    console.error('[System] Errore chiusura database:', error.message);
+    console.error('[System] Errore chiusura database:', safeErrorMeta(error));
   }
+
+  if (retentionTimer) clearInterval(retentionTimer);
 
   if (!server) {
     clearTimeout(forceExit);
@@ -177,17 +190,17 @@ async function gracefulShutdown(signal, exitCode = 0) {
 }
 
 process.on('uncaughtException', error => {
-  console.error('[System] Eccezione non gestita:', error);
+  console.error('[System] Eccezione non gestita:', safeErrorMeta(error));
   void gracefulShutdown('uncaughtException', 1);
 });
 process.on('unhandledRejection', reason => {
-  console.error('[System] Promise rejection non gestita:', reason);
+  console.error('[System] Promise rejection non gestita:', safeErrorMeta(reason));
   void gracefulShutdown('unhandledRejection', 1);
 });
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 start().catch(error => {
-  console.error('[System] Fallimento critico avvio:', error);
+  console.error('[System] Fallimento critico avvio:', safeErrorMeta(error));
   process.exit(1);
 });

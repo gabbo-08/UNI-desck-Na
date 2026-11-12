@@ -1,4 +1,5 @@
 // utils.js
+const { safeErrorMeta } = require('../lib/safe-log');
 async function enableFastMode(page) {
   try {
     await page.setRequestInterception(true);
@@ -12,7 +13,7 @@ async function enableFastMode(page) {
       }
     });
   } catch (err) {
-    console.error('[Utils] Errore in enableFastMode:', err.message);
+    console.error('[Utils] Errore in enableFastMode:', safeErrorMeta(err));
   }
 }
 

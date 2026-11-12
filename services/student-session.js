@@ -13,9 +13,18 @@ const { clearDocentiRouteCache } = require('../routes/docenti');
 const { createServerSession } = require('./server-sessions');
 const { assertLoginAllowed, recordLoginFailure, recordLoginSuccess } = require('../lib/login-throttle');
 const { sessionErrorStatus } = require('../lib/errors');
+const { safeErrorMeta, safeProfileRef } = require('../lib/safe-log');
 
 const db = dbModule.db || dbModule;
 const EMPTY_DOCENTI = Object.freeze({ subscriptions: [], bookedExams: [], announcements: [] });
+
+function docentiSyncEnabled(dependencies = {}) {
+  if (dependencies.enableDocentiSync === false) return false;
+  return dependencies.enableDocentiSync === true
+    || dependencies.docentiCredentials !== undefined
+    || String(process.env.DOCENTI_SYNC_ENABLED || '').toLowerCase() === 'true'
+    || process.env.NODE_ENV === 'test';
+}
 
 function hasProfileSetup(profile) {
   const course = profile?.course_id || profile?.courseId;
@@ -44,6 +53,11 @@ function loadDocentiInBackground(profileId, dependencies = {}) {
   // Un solo job per studente: due login ravvicinati non devono aprire due
   // sessioni sullo stesso account (il portale invaliderebbe la prima).
   if (snapshots.isDocentiLoading(profileId)) return Promise.resolve();
+
+  if (!docentiSyncEnabled(dependencies)) {
+    snapshots.setDocentiSnapshot(profileId, { available: false, reason: 'DOCENTI_SYNC_DISABLED', ...EMPTY_DOCENTI });
+    return Promise.resolve();
+  }
 
   const credentials = docentiCredentials(dependencies);
   const database = dependencies.database || db;
@@ -80,7 +94,7 @@ function loadDocentiInBackground(profileId, dependencies = {}) {
           try {
             saveDocentiDataCache(profileId, sanitized, database);
           } catch (error) {
-            console.warn('[docenti-cache] Snapshot persistente non aggiornato:', error?.message || error);
+            console.warn('[docenti-cache] Snapshot persistente non aggiornato:', safeErrorMeta(error));
           }
           clearDocentiCache(profileId);
         }
@@ -89,7 +103,7 @@ function loadDocentiInBackground(profileId, dependencies = {}) {
     })
     .catch(error => {
       if (!snapshots.isCurrentDocentiLoad(profileId, generation)) return;
-      console.warn(`[docenti] Acquisizione per ${profileId} non riuscita: ${error?.message}`);
+      console.warn(`[docenti] Acquisizione per ${safeProfileRef(profileId)} non riuscita:`, safeErrorMeta(error));
       snapshots.setDocentiSnapshot(profileId, {
         available: false,
         reason: error?.code || 'DOCENTI_SCRAPE_FAILED',
@@ -128,7 +142,7 @@ function normalizeLoginIdentifier(value) {
     : null;
 }
 
-async function createStudentSession({ codiceFiscale, password, email } = {}, dependencies = {}) {
+async function createStudentSession({ codiceFiscale, password, email, enableDocentiSync } = {}, dependencies = {}) {
   const normalizedIdentifier = normalizeLoginIdentifier(codiceFiscale);
   if (!normalizedIdentifier || typeof password !== 'string' || !password) {
     const error = new Error('Inserisci codice fiscale o email istituzionale e password.');
@@ -207,10 +221,16 @@ async function createStudentSession({ codiceFiscale, password, email } = {}, dep
   // non il codice fiscale.
   const docentiEmail = normalizeEmail(email) || resolveDocentiEmail(storedProfile || profile, cfClean);
 
+  const docentiDependencies = enableDocentiSync === undefined
+    ? dependencies
+    : { ...dependencies, enableDocentiSync: enableDocentiSync === true };
+  const docentiEnabled = docentiSyncEnabled(docentiDependencies);
+
   const serverSession = createServerSession(cfClean, {
     codiceFiscale: cfClean,
     email: docentiEmail || null,
-    password
+    password,
+    enableDocentiSync: docentiEnabled
   }, { database });
 
   // Eventuali credenziali esplicite passate dal chiamante (es. test) hanno
@@ -223,14 +243,14 @@ async function createStudentSession({ codiceFiscale, password, email } = {}, dep
 
   const docentiSnapshot = snapshots.getDocentiSnapshot(cfClean);
   const alreadyLoading = snapshots.isDocentiLoading(cfClean);
-  if (!docentiSnapshot && !alreadyLoading) {
-    loadDocentiInBackground(cfClean, { ...dependencies, docentiCredentials: credentials });
+  if (docentiEnabled && !docentiSnapshot && !alreadyLoading) {
+    loadDocentiInBackground(cfClean, { ...docentiDependencies, docentiCredentials: credentials });
   }
 
-  const docentiLoading = !docentiSnapshot && (alreadyLoading || Boolean(credentials.username && credentials.password));
+  const docentiLoading = docentiEnabled && !docentiSnapshot && (alreadyLoading || Boolean(credentials.username && credentials.password));
   const docentiReason = docentiSnapshot
     ? (docentiSnapshot.available ? null : docentiSnapshot.reason || 'DOCENTI_SCRAPE_FAILED')
-    : (docentiLoading ? null : 'DOCENTI_CREDENTIALS_REQUIRED');
+    : (docentiLoading ? null : (docentiEnabled ? 'DOCENTI_CREDENTIALS_REQUIRED' : 'DOCENTI_SYNC_DISABLED'));
   const metriche = {
     ...datiCarriera,
     anagrafica: {
@@ -256,6 +276,7 @@ async function createStudentSession({ codiceFiscale, password, email } = {}, dep
 module.exports = {
   createStudentSession,
   loadDocentiInBackground,
+  docentiSyncEnabled,
   listPlansForCohort,
   hasProfileSetup,
   normalizeEmail,

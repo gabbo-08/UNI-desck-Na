@@ -38,20 +38,21 @@ Un dato mancante non significa necessariamente che non esista sul portale: può 
 
 ## Come funziona
 
-1. **Accesso.** Si entra con l'email istituzionale `@studenti.unina.it` e la password. L'app apre una sessione sul server e carica subito i dati principali della carriera.
+1. **Accesso.** Si entra con l'email istituzionale `@studenti.unina.it` e la password Segrepass. L'acquisizione del portale Docenti usa la stessa email e richiede un opt-in esplicito.
 2. **Caricamento progressivo.** Le informazioni più lente (tasse, prenotazioni) arrivano in una seconda fase, quindi la dashboard può mostrare i dati principali prima che il caricamento secondario sia finito.
 3. **Ripristino della sessione.** Ricaricando la pagina l'app prova a riprendere la sessione esistente; se è scaduta, chiede di accedere di nuovo.
 4. **Cache.** I dati del portale Docenti possono arrivare da cache: le aperture successive sono più rapide e viene mostrato l'ultimo riepilogo disponibile mentre parte l'aggiornamento. L'interfaccia segnala quando i dati sono in aggiornamento o non disponibili.
 
 ## Sicurezza e privacy
 
-- Le **credenziali** sono conservate **cifrate** sul server e recuperate solo per i servizi che devono interrogare i portali. La password non compare mai nello stato del profilo visibile al frontend: il browser non contiene le credenziali per interrogare direttamente i siti.
+- Le **credenziali** sono conservate **cifrate** sul server e recuperate solo per i servizi esplicitamente abilitati. La password non compare mai nello stato del profilo visibile al frontend: il browser non contiene le credenziali per interrogare direttamente i siti.
+- L'integrazione Docenti è disabilitata per default (`DOCENTI_SYNC_ENABLED=false`) e non parte automaticamente dal solo login Segrepass.
 - Le **sessioni** sono lato server, con token casuali: nel database è salvato solo l'**hash** del token. Il cookie di sessione è opaco e **HttpOnly**.
-- Una sessione dura **al massimo 7 giorni** o scade dopo **12 ore di inattività**; il logout la elimina. Le sessioni scadute vengono ripulite periodicamente.
+- Una sessione dura **al massimo 7 giorni** o scade dopo **12 ore di inattività**; logout e logout-all eliminano anche lo stato runtime. `DELETE /api/auth/account` elimina il profilo e le cache associate.
 - Le richieste che modificano dati sono protette da controlli dedicati e il login ha un limite di tentativi.
 - Nel database dell'app restano solo profilo personalizzato, preferenze docenti, sessioni e cache.
 
-> **Se ospiti l'app per altre persone**, ne custodisci le credenziali istituzionali (in forma cifrata ma recuperabile). Proteggi con cura la chiave di cifratura (`CRED_KEY`) e il server, e informa gli utenti di cosa viene salvato.
+> **Se ospiti l'app per altre persone**, devi definire prima informativa privacy, base giuridica, tempi di conservazione, diritti, fornitori e procedura di incidente. Il progetto non sostituisce l'autorizzazione dei portali Unina né una valutazione legale.
 
 ## Limitazioni note
 
@@ -119,15 +120,21 @@ In questa versione l'app Android è un contenitore WebView: **frontend e backend
 
 1. Avvia backend e frontend seguendo i passaggi sopra. Il frontend è configurato per accettare connessioni dalla rete locale.
 2. Sul PC esegui `ipconfig` e annota l'indirizzo IPv4 della scheda collegata alla Wi-Fi (per esempio `192.168.1.101`). Non usare `0.0.0.0`: è solo l'indirizzo su cui il server si mette in ascolto.
-3. In `.env`, imposta `FRONTEND_URL=http://IP-DEL-PC:3000` usando lo stesso IP. Riavvia il backend dopo la modifica. Questo consente al controllo CSRF e a CORS di accettare il frontend aperto dal telefono.
-4. In [frontend/next.config.ts](frontend/next.config.ts), aggiorna `allowedDevOrigins` con l'IP del PC se è diverso da quello già configurato. Riavvia `npm run dev` dopo la modifica.
+3. Per un APK release usa un endpoint **HTTPS** con certificato valido e imposta `FRONTEND_URL` sulla stessa origine. Riavvia il backend dopo la modifica.
+4. In sviluppo, configura `NEXT_ALLOWED_DEV_ORIGINS` con l'origine LAN necessaria e riavvia `npm run dev`. L'HTTP LAN è consentito solo in debug e non va usato per un'installazione pubblica.
 5. Installa l'APK `arm64` sul telefono Android. Puoi generarlo come descritto in [android_app/README.md](android_app/README.md) e trasferirlo con USB o un altro metodo locale.
-6. Collega telefono e PC alla stessa Wi-Fi. Al primo avvio dell'app inserisci `http://IP-DEL-PC:3000`; l'indirizzo verrà salvato e riaperto ai successivi tocchi sull'icona.
+6. Collega telefono e PC alla stessa Wi-Fi. Nell'APK release inserisci l'URL HTTPS del frontend; l'indirizzo verrà salvato e riaperto ai successivi tocchi sull'icona.
 
-Se Windows Firewall lo chiede, consenti Node.js sulla rete privata. Se non riesci a collegarti, verifica che PC e telefono siano sulla stessa rete e che frontend e backend siano ancora attivi. Questa configurazione HTTP è per prove in rete locale: non esporre il server a Internet. Per usarlo da reti esterne serve un server raggiungibile con HTTPS e una configurazione dedicata.
+Se Windows Firewall lo chiede, consenti Node.js sulla rete privata. Se non riesci a collegarti, verifica che PC e telefono siano sulla stessa rete e che frontend e backend siano ancora attivi. Non esporre servizi HTTP o certificati non validi: per reti esterne serve un server raggiungibile con HTTPS e una configurazione dedicata.
 
 Il file `.env` contiene segreti e configurazioni personali: resta locale e non va aggiunto a Git.
 
 ## Stato del progetto
 
 Progetto personale in sviluppo attivo, pensato per essere usato e testato prima di tutto dal suo autore. Segnalazioni e suggerimenti sono benvenuti tramite le *issue* del repository.
+
+### Aggiornamenti di sicurezza e prestazioni
+
+- I materiali Docenti vengono aperti tramite un endpoint same-origin autenticato, compatibile con l'app Android WebView; i materiali riservati restano disabilitati per default.
+- Orario e Docenti vengono caricati quando la sezione serve, con cache, deduplicazione e backoff progressivo.
+- Sono disponibili export JSON dei dati personali, cancellazione del profilo, logout-all e ricevute delle prenotazioni.

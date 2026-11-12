@@ -186,3 +186,52 @@ test('valida ID docente, cartella e sezione prima delle richieste upstream', asy
   assert.equal((await fetch(`${base}/teacher/teacher-1/folder/folder-1?section=unknown`)).status, 400);
   assert.equal(calls, 0);
 });
+
+test('streamma un materiale PDF nello stesso origin con header privati', async t => {
+  const app = express();
+  app.use('/api/docenti', (req, _res, next) => {
+    req.user = { sub: 'profile-material-test' };
+    next();
+  }, createDocentiRouter({
+    fetchMaterial: async () => ({
+      contentType: 'application/pdf',
+      filename: 'lezione.pdf',
+      buffer: Buffer.from('%PDF-1.7\nmock')
+    })
+  }));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  const url = `http://127.0.0.1:${server.address().port}/api/docenti/teacher/teacher-1/folder/folder-1/file/file-1?section=areapubb`;
+  const response = await fetch(url);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'application/pdf');
+  assert.equal(response.headers.get('cache-control'), 'private, no-store');
+  assert.match(response.headers.get('content-disposition') || '', /inline/);
+  assert.equal(Buffer.from(await response.arrayBuffer()).toString(), '%PDF-1.7\nmock');
+});
+
+test('rifiuta materiali riservati nel proxy se non abilitati', async t => {
+  const app = express();
+  app.use('/api/docenti', (req, _res, next) => {
+    req.user = { sub: 'profile-material-private-test' };
+    next();
+  }, createDocentiRouter({
+    fetchMaterial: async () => ({ contentType: 'application/pdf', filename: 'private.pdf', buffer: Buffer.from('%PDF-') })
+  }));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve, reject) => {
+    server.once('listening', resolve);
+    server.once('error', reject);
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+
+  const url = `http://127.0.0.1:${server.address().port}/api/docenti/teacher/teacher-1/folder/folder-1/file/file-1?section=arearis`;
+  const response = await fetch(url);
+  assert.equal(response.status, 403);
+  assert.equal((await response.json()).code, 'RESTRICTED_MATERIALS_DISABLED');
+});

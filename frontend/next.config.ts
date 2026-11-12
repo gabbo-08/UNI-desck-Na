@@ -3,11 +3,18 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const BACKEND_URL = (process.env.NEXT_PUBLIC_BACKEND_URL?.trim() || 'http://127.0.0.1:3001').replace(/\/+$/, '');
+if (process.env.NODE_ENV === 'production' && !BACKEND_URL.startsWith('https://')) {
+  throw new Error('NEXT_PUBLIC_BACKEND_URL deve usare HTTPS in produzione.');
+}
+const allowedDevOrigins = String(process.env.NEXT_ALLOWED_DEV_ORIGINS || '')
+  .split(',')
+  .map(value => value.trim())
+  .filter(Boolean);
 const FRONTEND_ROOT = path.dirname(fileURLToPath(import.meta.url));
 
 const nextConfig: NextConfig = {
-  // Il telefono usa l'IP LAN del PC invece di localhost durante lo sviluppo.
-  allowedDevOrigins: ['192.168.1.101'],
+  // Origini LAN aggiuntive solo in sviluppo, configurate esplicitamente.
+  allowedDevOrigins,
   // Il backend ha un proprio lockfile nella root del repository.
   turbopack: {
     root: FRONTEND_ROOT,

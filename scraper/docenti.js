@@ -1,6 +1,7 @@
 ﻿const { queueScrapingTask } = require('./pool');
 const { extractTables: extractTablesFromPage } = require('./utils');
 const { getPortalCookies, setPortalCookies, deletePortalCookies } = require('../utils/sessionStore');
+const { safeErrorMeta } = require('../lib/safe-log');
 
 const DOCENTI_ORIGIN = 'https://www.docenti.unina.it';
 const DOCENTI_API = `${DOCENTI_ORIGIN}/webdocenti-be`;
@@ -9,9 +10,11 @@ const DOCENTI_SUMMARIES_URL = `${DOCENTI_ORIGIN}/personal-area/student/summaries
 
 const HTTP_TIMEOUT_MS = 8000;
 const MAX_TEACHER_PHOTO_BYTES = 5 * 1024 * 1024;
+const MAX_TEACHER_MATERIAL_BYTES = 15 * 1024 * 1024;
 const TEACHER_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 const MAX_ANNOUNCEMENT_TEACHERS = 100;
 const ANNOUNCEMENTS_PER_TEACHER = 20;
+const MAX_PAGINATION_PAGES = Math.min(100, Math.max(1, Number.parseInt(process.env.DOCENTI_MAX_PAGINATION_PAGES || '20', 10) || 20));
 
 function matchesImageSignature(contentType, buffer) {
   if (!Buffer.isBuffer(buffer)) return false;
@@ -377,6 +380,59 @@ async function fetchTeacherFolder(teacherId, folderId, section, coursePrefix, de
   return responses.flatMap(value => toArray(value?.contenutoCartella ?? value)).filter(Boolean);
 }
 
+function materialById(items, fileId) {
+  for (const item of toArray(items)) {
+    const id = String(item?.id ?? item?.idFile ?? item?.idDirectory ?? '');
+    if (id === String(fileId)) return item;
+    const nested = materialById(item?.children ?? item?.files ?? item?.figli ?? item?.contenuto, fileId);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+function isPdfSignature(buffer) {
+  return Buffer.isBuffer(buffer) && buffer.subarray(0, 5).toString('ascii') === '%PDF-';
+}
+
+async function fetchTeacherMaterial(teacherId, folderId, fileId, section, coursePrefix, dependencies = {}) {
+  if (typeof dependencies.fetchMaterial === 'function') return dependencies.fetchMaterial({ teacherId, folderId, fileId, section, coursePrefix });
+  const items = await fetchTeacherFolder(teacherId, folderId, section, coursePrefix, dependencies);
+  const material = materialById(items, fileId);
+  if (!material || material?.tipo === 'D') return null;
+  const target = absoluteDocentiUrl(pick(material, ['url', 'downloadUrl', 'link'], null)) || materialFileUrl(fileId);
+  let url;
+  try {
+    url = new URL(target);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' || url.origin !== DOCENTI_ORIGIN) return null;
+
+  const cookie = portalCookieHeader(dependencies.sessionKey);
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/pdf,image/jpeg,image/png,image/gif,image/webp;q=0.9,*/*;q=0.1',
+      Referer: `${DOCENTI_ORIGIN}/`,
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+      ...(cookie ? { Cookie: cookie } : {})
+    },
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
+  });
+  if (!response.ok) return null;
+  const contentType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  const allowed = contentType === 'application/pdf' || TEACHER_IMAGE_TYPES.has(contentType);
+  if (!allowed) return null;
+  const contentLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > MAX_TEACHER_MATERIAL_BYTES) return null;
+  const buffer = await readBoundedBody(response, MAX_TEACHER_MATERIAL_BYTES);
+  if (!buffer) return null;
+  if (contentType === 'application/pdf' && !isPdfSignature(buffer)) return null;
+  if (TEACHER_IMAGE_TYPES.has(contentType) && !matchesImageSignature(contentType, buffer)) return null;
+  const name = String(pick(material, ['nome', 'name', 'nomeFile', 'filename'], `materiale-${fileId}`))
+    .replace(/[^A-Za-z0-9._ -]+/g, '_').slice(0, 120) || `materiale-${fileId}`;
+  return { contentType, buffer, filename: name };
+}
+
 function mapBookedExam(item) {
   return {
     courseName: courseNameOf(item) === PLACEHOLDER_COURSE ? 'Esame' : courseNameOf(item),
@@ -510,7 +566,7 @@ async function collectTeacherTests(page, subscriptions, extractTables) {
           return [normalizeCollectedTest(rawTest, subscription)];
         });
       } catch (error) {
-        console.warn(`[Docenti] Test non disponibili per ${teacherId}: ${error.message || error}`);
+        console.warn(`[Docenti] Test non disponibili per ${teacherId}:`, safeErrorMeta(error));
         results[index] = [];
       } finally {
         api?.stop();
@@ -960,7 +1016,7 @@ async function collectPaginatedEntries(page, entries) {
     const size = Number(url.searchParams.get('s') || 500);
     if (!Number.isFinite(start) || !Number.isFinite(size) || size <= 0) continue;
 
-    for (let pageIndex = start + 1; pageIndex < start + 100; pageIndex += 1) {
+    for (let pageIndex = start + 1; pageIndex < start + MAX_PAGINATION_PAGES; pageIndex += 1) {
       url.searchParams.set('p', String(pageIndex));
       const next = await page.evaluate(async requestUrl => {
         const response = await fetch(requestUrl, { credentials: 'include' });
@@ -1017,7 +1073,7 @@ async function getDocentiData(userCredentials = {}, dependencies = {}) {
       const api = startApiCollector(page);
 
       await page.goto(DOCENTI_SUMMARIES_URL, { waitUntil: 'networkidle2', timeout: 30000 })
-        .catch(err => console.warn('[Docenti] goto summaries:', err.message));
+        .catch(err => console.warn('[Docenti] goto summaries:', safeErrorMeta(err)));
 
       await api.settle();
       api.stop();
@@ -1117,7 +1173,7 @@ async function getDocentiData(userCredentials = {}, dependencies = {}) {
       };
     });
   } catch (err) {
-    console.warn('[Docenti] Errore scraping:', err.message || err);
+    console.warn('[Docenti] Errore scraping:', safeErrorMeta(err));
     return emptyResult(err.code || 'DOCENTI_PRIVATE_LOGIN_FAILED');
   }
 }
@@ -1199,6 +1255,7 @@ module.exports = {
   matchesImageSignature,
   readBoundedBody,
   fetchTeacherFolder,
+  fetchTeacherMaterial,
   normalizeDocentiTables,
   mapSubscription,
   isUsableSubscription,

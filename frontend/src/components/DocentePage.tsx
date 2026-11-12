@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import {
   fetchTeacherDetail,
   fetchTeacherFolder,
+  teacherMaterialUrl,
   type DettaglioDocente,
   type MaterialeDocente,
 } from '@/lib/api';
@@ -18,14 +19,7 @@ type DocentePageProps = {
   onToggleSubscription?: (course: string, subscribed: boolean) => Promise<void>;
 };
 
-function openMaterial(file: MaterialeDocente) {
-  const target = file.url;
-  if (target && /^https?:\/\//i.test(target)) {
-    window.open(target, '_blank', 'noopener,noreferrer');
-  }
-}
-
-function mapFolderItem(item: unknown, index: number): MaterialeDocente {
+function mapFolderItem(item: unknown, index: number, folderId: string, section: 'areapubb' | 'aree-ftp' | 'arearis'): MaterialeDocente {
   const raw = item && typeof item === 'object' ? item as Record<string, unknown> : {};
   const id = String(raw.id ?? raw.idFile ?? raw.idDirectory ?? raw.nome ?? `item-${index}`);
   const tipo = raw.tipo === 'D' || raw.idDirectory || raw.children ? 'cartella' : 'file';
@@ -34,8 +28,10 @@ function mapFolderItem(item: unknown, index: number): MaterialeDocente {
     nome: String(raw.nome ?? raw.name ?? raw.nomeFile ?? raw.filename ?? 'Materiale'),
     tipo,
     url: typeof raw.url === 'string' ? raw.url : null,
+    folderId,
+    section,
     percorso: typeof raw.percorso === 'string' ? raw.percorso : null,
-    children: Array.isArray(raw.children) ? raw.children.map(mapFolderItem) : undefined,
+    children: Array.isArray(raw.children) ? raw.children.map((child, childIndex) => mapFolderItem(child, childIndex, folderId, section)) : undefined,
   };
 }
 
@@ -54,10 +50,23 @@ export default function DocentePage({
   const [data, setData] = useState<DettaglioDocente | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const openMaterial = (file: MaterialeDocente) => {
+    const teacherId = data?.profilo.id || professorIdentifier;
+    if (file.folderId && file.section && file.tipo === 'file') {
+      const target = teacherMaterialUrl(teacherId, file.folderId, file.id, file.section, courseCodes.length ? courseCodes.join(',') : coursePrefix);
+      const popup = window.open(target, '_blank', 'noopener,noreferrer');
+      if (!popup) window.location.assign(target);
+      return;
+    }
+    if (file.url && /^https:\/\//i.test(file.url)) {
+      const popup = window.open(file.url, '_blank', 'noopener,noreferrer');
+      if (!popup) window.location.assign(file.url);
+    }
+  };
   const loadFolder = async (folder: MaterialeDocente, section: 'pubblico' | 'ftp' | 'riservato') => {
     const apiSection = section === 'pubblico' ? 'areapubb' : section === 'ftp' ? 'aree-ftp' : 'arearis';
     const items = await fetchTeacherFolder(data?.profilo.id || professorIdentifier, folder.id, apiSection, courseCodes.length ? courseCodes.join(',') : coursePrefix);
-    return items.map(mapFolderItem);
+    return items.map((item, index) => mapFolderItem(item, index, folder.id, apiSection));
   };
 
   useEffect(() => {

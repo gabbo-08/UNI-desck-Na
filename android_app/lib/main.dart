@@ -1,8 +1,23 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 const _savedUrlKey = 'server_url';
+
+bool _isPrivateHost(String host) {
+  final normalized = host.toLowerCase();
+  if (normalized == 'localhost' || normalized == '::1' || normalized == '127.0.0.1') return true;
+  final parts = normalized.split('.');
+  if (parts.length != 4) return false;
+  final octets = parts.map(int.tryParse).toList();
+  if (octets.any((value) => value == null || value < 0 || value > 255)) return false;
+  final first = octets[0]!;
+  final second = octets[1]!;
+  return first == 10 ||
+      (first == 192 && second == 168) ||
+      (first == 172 && second >= 16 && second <= 31);
+}
 
 void main() {
   runApp(const SegrepassApp());
@@ -13,7 +28,7 @@ class SegrepassApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'Segrepass',
+    title: 'Segrepass Dashboard',
     debugShowCheckedModeBanner: false,
     theme: ThemeData(
       colorScheme: ColorScheme.fromSeed(
@@ -36,6 +51,7 @@ class AppHome extends StatefulWidget {
 class _AppHomeState extends State<AppHome> {
   final _urlController = TextEditingController();
   WebViewController? _webController;
+  Uri? _serverUri;
   bool _loading = true;
   bool _hasError = false;
   bool _showSettings = false;
@@ -48,24 +64,29 @@ class _AppHomeState extends State<AppHome> {
 
   Future<void> _restoreUrl() async {
     final prefs = await SharedPreferences.getInstance();
-    final url = prefs.getString(_savedUrlKey) ?? '';
+    final saved = prefs.getString(_savedUrlKey) ?? '';
+    final url = _normalizeUrl(saved);
+    if (saved.isNotEmpty && url == null) await prefs.remove(_savedUrlKey);
     if (!mounted) return;
     setState(() {
-      _urlController.text = url;
-      _showSettings = url.isEmpty;
+      _urlController.text = url ?? '';
+      _showSettings = url == null;
     });
-    if (url.isNotEmpty) _openUrl(url);
+    if (url != null) _openUrl(url);
   }
 
-  String? _normalizedUrl() {
-    var value = _urlController.text.trim();
+  String? _normalizeUrl(String raw) {
+    var value = raw.trim();
     if (value.isEmpty) return null;
     if (!value.contains('://')) value = 'https://$value';
     final uri = Uri.tryParse(value);
     if (uri == null || !uri.hasAuthority || uri.host.isEmpty) return null;
-    if (uri.scheme != 'https' && uri.scheme != 'http') return null;
+    final localHttpAllowed = kDebugMode && uri.scheme == 'http' && _isPrivateHost(uri.host);
+    if (uri.scheme != 'https' && !localHttpAllowed) return null;
     return uri.toString().replaceFirst(RegExp(r'/+$'), '');
   }
+
+  String? _normalizedUrl() => _normalizeUrl(_urlController.text);
 
   Future<void> _saveAndOpen() async {
     final url = _normalizedUrl();
@@ -85,17 +106,34 @@ class _AppHomeState extends State<AppHome> {
   }
 
   void _openUrl(String url) {
+    final serverUri = Uri.tryParse(url);
+    if (serverUri == null) return;
+    _serverUri = serverUri;
     final controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(
         NavigationDelegate(
-          onPageStarted: (_) => setState(() {
-            _loading = true;
-            _hasError = false;
-          }),
-          onPageFinished: (_) => setState(() => _loading = false),
+          onNavigationRequest: (request) {
+            final target = Uri.tryParse(request.url);
+            final base = _serverUri;
+            final sameOrigin = target != null && base != null &&
+                target.scheme == base.scheme &&
+                target.host.toLowerCase() == base.host.toLowerCase() &&
+                target.port == base.port;
+            return sameOrigin ? NavigationDecision.navigate : NavigationDecision.prevent;
+          },
+          onPageStarted: (_) {
+            if (!mounted) return;
+            setState(() {
+              _loading = true;
+              _hasError = false;
+            });
+          },
+          onPageFinished: (_) {
+            if (mounted) setState(() => _loading = false);
+          },
           onWebResourceError: (error) {
-            if (error.isForMainFrame ?? false) {
+            if ((error.isForMainFrame ?? false) && mounted) {
               setState(() {
                 _loading = false;
                 _hasError = true;
@@ -226,7 +264,7 @@ class _AppHomeState extends State<AppHome> {
       ),
       const SizedBox(height: 20),
       const Text(
-        'Per usare un indirizzo http della rete locale, telefono e computer devono essere sulla stessa Wi‑Fi e il server deve accettare connessioni dalla rete.',
+        'Per sicurezza sono accettati solo indirizzi HTTPS. In debug è consentito HTTP solo verso localhost o una rete privata; non usare questa modalità per distribuzioni pubbliche.',
         style: TextStyle(color: Colors.black54),
       ),
     ],

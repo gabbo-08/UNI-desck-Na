@@ -5,6 +5,7 @@ const { getDocentiSnapshot, isDocentiLoading } = require('./career-snapshots');
 const { deriveKey } = require('../lib/secret-box');
 const { getDocentiDataCache, saveDocentiDataCache } = require('../db/repository');
 const { isUsableSubscription } = require('../scraper/docenti');
+const { safeErrorMeta } = require('../lib/safe-log');
 
 const TTL_MS = 5 * 60 * 1000;
 const SNAPSHOT_VERSION = 2;
@@ -83,7 +84,7 @@ function startLoad(key, profileId, loader) {
       if (inFlight.get(key) === task && value && value.available !== false) {
         const sanitized = sanitizeDocentiSnapshot(value);
         try { saveDocentiDataCache(profileId, sanitized); } catch (error) {
-          console.warn('[docenti-cache] Snapshot persistente non aggiornato:', error?.message || error);
+          console.warn('[docenti-cache] Snapshot persistente non aggiornato:', safeErrorMeta(error));
         }
         cache.set(key, { value: sanitized, storedAt: Date.now() });
         return sanitized;

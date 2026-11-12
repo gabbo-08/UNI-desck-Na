@@ -5,6 +5,8 @@ export type CredenzialiSegrepass = {
   password: string;
   /** Email istituzionale (@studenti.unina.it), necessaria per il portale Docenti. */
   email?: string;
+  /** Opt-in esplicito per inviare la credenziale anche al portale Docenti. */
+  enableDocentiSync?: boolean;
 };
 
 export type Anagrafica = {
@@ -31,6 +33,8 @@ export type MaterialeDocente = {
   nome: string;
   tipo: 'cartella' | 'file';
   url?: string | null;
+  folderId?: string | null;
+  section?: 'areapubb' | 'aree-ftp' | 'arearis' | null;
   children?: MaterialeDocente[];
   percorso?: string | null;
 };
@@ -373,12 +377,23 @@ export type LoginResponse = {
   profile: ProfiloRecord;
   onboardingRequired: boolean;
   metriche: Metriche;
+  docentiReason?: string | null;
+  docentiLoading?: boolean;
 };
 
 export type RestoreSessionResponse = {
   authenticated: true;
   profile: ProfiloRecord;
   onboardingRequired: boolean;
+};
+
+export type BootstrapResponse = RestoreSessionResponse & {
+  metriche: Metriche;
+  sync?: {
+    slow?: { state?: SlowSyncStatus; finishedAt?: number; startedAt?: number };
+    docenti?: { enabled?: boolean; available?: boolean; fetchedAt?: number | null; stale?: boolean };
+    fromCache?: boolean;
+  };
 };
 
 /* ------------------------------------------------------------------ */
@@ -463,7 +478,7 @@ function jsonHeaders(options: RequestInit = {}): Headers {
   return headers;
 }
 
-async function fetchWithAuth(url: string, options: RequestInit = {}) {
+async function fetchWithAuthUncached(url: string, options: RequestInit = {}) {
   let res: Response;
   try {
     res = await fetch(url, {
@@ -491,6 +506,22 @@ async function fetchWithAuth(url: string, options: RequestInit = {}) {
   return data;
 }
 
+// Deduplicate simultaneous read requests (for example dashboard + mobile
+// navigation mounting together) without caching personal data in the browser.
+const inFlightReads = new Map<string, Promise<unknown>>();
+
+function fetchWithAuth(url: string, options: RequestInit = {}) {
+  const method = String(options.method || 'GET').toUpperCase();
+  if (method !== 'GET' || options.signal) return fetchWithAuthUncached(url, options);
+  const existing = inFlightReads.get(url);
+  if (existing) return existing;
+  const request = fetchWithAuthUncached(url, options).finally(() => {
+    if (inFlightReads.get(url) === request) inFlightReads.delete(url);
+  });
+  inFlightReads.set(url, request);
+  return request;
+}
+
 /* ------------------------------------------------------------------ */
 /* Autenticazione                                                      */
 /* ------------------------------------------------------------------ */
@@ -511,11 +542,25 @@ export async function restoreSession(): Promise<RestoreSessionResponse | null> {
   }
 }
 
+export async function fetchBootstrap(): Promise<BootstrapResponse | null> {
+  try {
+    return await fetchWithAuth(apiUrl('/api/auth/bootstrap')) as BootstrapResponse;
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 401) return null;
+    throw error;
+  }
+}
+
 export async function logoutAPI(): Promise<void> {
   clearClientCache();
   await fetchWithAuth(apiUrl('/api/auth/logout'), {
     method: 'POST',
   }).catch(() => undefined);
+}
+
+export async function deleteAccountAPI(): Promise<void> {
+  clearClientCache();
+  await fetchWithAuth(apiUrl('/api/auth/account'), { method: 'DELETE' });
 }
 
 /* ------------------------------------------------------------------ */
@@ -671,6 +716,18 @@ export async function fetchTeacherFolder(
     apiUrl(`/api/docenti/teacher/${encodeURIComponent(teacherId)}/folder/${encodeURIComponent(folderId)}?${query}`)
   );
   return Array.isArray(res?.items) ? res.items : [];
+}
+
+export function teacherMaterialUrl(
+  teacherId: string,
+  folderId: string,
+  fileId: string,
+  section: 'areapubb' | 'aree-ftp' | 'arearis',
+  course?: string | null
+): string {
+  const query = new URLSearchParams({ section });
+  if (course) query.set('course', course);
+  return apiUrl(`/api/docenti/teacher/${encodeURIComponent(teacherId)}/folder/${encodeURIComponent(folderId)}/file/${encodeURIComponent(fileId)}?${query}`);
 }
 
 /* ------------------------------------------------------------------ */

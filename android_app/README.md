@@ -1,6 +1,6 @@
 # Segrepass per Android — versione sperimentale
 
-L'APK è un contenitore WebView che salva l'indirizzo del frontend e lo riapre ai successivi avvii. Backend Node.js e browser automatizzati restano sul PC/server: non vengono eseguiti sul telefono.
+L'APK è un contenitore WebView che salva l'indirizzo del frontend e lo riapre ai successivi avvii. Backend Node.js e browser automatizzati restano sul PC/server: non vengono eseguiti sul telefono. L'APK release accetta solo URL HTTPS; HTTP è ammesso esclusivamente in debug verso una rete privata.
 
 Per l'avvio completo da PC e il test via Wi-Fi, inclusi `FRONTEND_URL`, `allowedDevOrigins` e il riavvio dei servizi, segui la sezione **Test da telefono Android — versione sperimentale** nel [README principale](../README.md).
 

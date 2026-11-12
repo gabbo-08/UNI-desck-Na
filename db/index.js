@@ -1,8 +1,9 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
+const { seal } = require('../lib/secret-box');
 
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 const DEFAULT_DB_PATH = path.resolve(__dirname, '../data/unicorno.sqlite');
 
 function ensureDataDir() {
@@ -97,6 +98,20 @@ function initSchema(database) {
     CREATE INDEX IF NOT EXISTS idx_professor_preferences_profile
       ON ProfessorPreferences (profile_id, course_key);
 
+    CREATE TABLE IF NOT EXISTS BookingReceipts (
+      id TEXT PRIMARY KEY,
+      profile_id TEXT NOT NULL,
+      annopri TEXT NOT NULL,
+      num_appello TEXT NOT NULL,
+      status TEXT NOT NULL,
+      message TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (profile_id) REFERENCES StudentProfile(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_booking_receipts_profile_target
+      ON BookingReceipts (profile_id, annopri, num_appello, created_at);
+
     -- Snapshot senza credenziali del riepilogo Docenti, aggiornato dopo ogni
     -- sincronizzazione riuscita. Permette una risposta immediata al login.
     CREATE TABLE IF NOT EXISTS DocentiDataCache (
@@ -125,6 +140,41 @@ function initSchema(database) {
   }
 }
 
+function sealLegacyJson(value, associatedData) {
+  if (!value || String(value).startsWith('enc:v1:')) return null;
+  try {
+    const parsed = JSON.parse(String(value));
+    return `enc:v1:${seal(JSON.stringify(parsed), associatedData)}`;
+  } catch {
+    return null;
+  }
+}
+
+/** Upgrade valid legacy personal JSON rows to encrypted-at-rest storage. */
+function migratePersonalJson(database) {
+  const profiles = database.prepare('SELECT id, carriera_json, tasse_json FROM StudentProfile').all();
+  const updateProfile = database.prepare('UPDATE StudentProfile SET carriera_json = ?, tasse_json = ? WHERE id = ?');
+  for (const row of profiles) {
+    const career = sealLegacyJson(row.carriera_json, `${row.id}:carriera`);
+    const taxes = sealLegacyJson(row.tasse_json, `${row.id}:tasse`);
+    if (career || taxes) updateProfile.run(career || row.carriera_json || null, taxes || row.tasse_json || null, row.id);
+  }
+
+  const docenti = database.prepare('SELECT profile_id, data_json FROM DocentiDataCache').all();
+  const updateDocenti = database.prepare('UPDATE DocentiDataCache SET data_json = ? WHERE profile_id = ?');
+  for (const row of docenti) {
+    const encrypted = sealLegacyJson(row.data_json, `docenti-cache:${row.profile_id}`);
+    if (encrypted) updateDocenti.run(encrypted, row.profile_id);
+  }
+
+  const announcements = database.prepare('SELECT professor_id, data_json FROM TeacherAnnouncementsCache').all();
+  const updateAnnouncements = database.prepare('UPDATE TeacherAnnouncementsCache SET data_json = ? WHERE professor_id = ?');
+  for (const row of announcements) {
+    const encrypted = sealLegacyJson(row.data_json, `teacher-cache:${row.professor_id}`);
+    if (encrypted) updateAnnouncements.run(encrypted, row.professor_id);
+  }
+}
+
 /**
  * Crea un'istanza isolata del database (usare ':memory:' nei test).
  */
@@ -133,7 +183,11 @@ function createDatabase(filename = DEFAULT_DB_PATH) {
   const database = new Database(filename);
   database.pragma('journal_mode = WAL');
   database.pragma('foreign_keys = ON');
+  database.pragma('secure_delete = ON');
+  database.pragma('wal_autocheckpoint = 1000');
+  const previousSchemaVersion = Number(database.pragma('user_version', { simple: true }) || 0);
   initSchema(database);
+  if (previousSchemaVersion < SCHEMA_VERSION) migratePersonalJson(database);
   database.pragma(`user_version = ${SCHEMA_VERSION}`);
   return database;
 }

@@ -1,38 +1,77 @@
 require('dotenv').config();
 
-const checks = [];
-
-function check(name, ok, message) {
-  checks.push({ name, ok, message });
+function isStrongCredentialKey(value) {
+  return /^[0-9a-fA-F]{64}$/.test(value)
+    && new Set(value.toLowerCase()).size >= 8
+    && !/^([0-9a-fA-F])\1+$/.test(value);
 }
 
-check('CRED_KEY', /^[0-9a-fA-F]{64}$/.test(process.env.CRED_KEY || ''),
-  'obbligatoria in formato esadecimale di 32 byte (64 caratteri)');
+function parseOrigins(value) {
+  return String(value || '').split(',').map(item => item.trim()).filter(Boolean);
+}
 
-const username = process.env.DOCENTI_USERNAME || '';
-const password = process.env.DOCENTI_PASSWORD || '';
-const hasDocentiCredentials = Boolean(username && password);
-check('DOCENTI_USERNAME', !username || username === username.trim(), 'presenta spazi ai bordi');
-check('DOCENTI_PASSWORD', !password || password === password.trim(), 'presenta spazi ai bordi');
+function validateOrigins(origins, { production = false } = {}) {
+  if (!origins.length) return !production;
+  return origins.every(value => {
+    try {
+      const url = new URL(value);
+      return (url.protocol === 'https:' || (!production && url.protocol === 'http:'))
+        && !url.username && !url.password
+        && url.pathname === '/' && !url.search && !url.hash;
+    } catch {
+      return false;
+    }
+  });
+}
 
-check('PORT', !process.env.PORT || /^\d+$/.test(process.env.PORT), 'deve essere un numero');
-const frontendOrigins = String(process.env.FRONTEND_URL || '').split(',').map(value => value.trim()).filter(Boolean);
-const validFrontendOrigins = frontendOrigins.every(value => {
-  try {
-    const url = new URL(value);
-    return url.protocol === 'http:' || url.protocol === 'https:';
-  } catch {
-    return false;
+function runChecks(env = process.env) {
+  const checks = [];
+  const production = String(env.NODE_ENV || '').trim().toLowerCase() === 'production';
+  const check = (name, ok, message) => checks.push({ name, ok, message });
+
+  check('CRED_KEY', isStrongCredentialKey(String(env.CRED_KEY || '')),
+    'obbligatoria come chiave esadecimale casuale di 32 byte (64 caratteri; almeno 8 simboli distinti)');
+
+  const username = env.DOCENTI_USERNAME || '';
+  const password = env.DOCENTI_PASSWORD || '';
+  const hasDocentiCredentials = Boolean(username && password);
+  check('DOCENTI_USERNAME', !username || username === username.trim(), 'presenta spazi ai bordi');
+  check('DOCENTI_PASSWORD', !password || password === password.trim(), 'presenta spazi ai bordi');
+
+  check('PORT', !env.PORT || /^\d{1,5}$/.test(env.PORT) && Number(env.PORT) > 0 && Number(env.PORT) < 65536,
+    'deve essere una porta TCP valida');
+
+  const origins = parseOrigins(env.FRONTEND_URL);
+  check('FRONTEND_URL', validateOrigins(origins, { production }),
+    production
+      ? 'obbligatoria e deve contenere solo origini https valide'
+      : 'deve contenere URL http(s) validi separati da virgole');
+
+  const debugEnabled = /^(1|true|yes|on)$/i.test(String(env.DEBUG_SCRAPER || '').trim());
+  check('DEBUG_SCRAPER', !production || !debugEnabled, 'deve essere disattivato in produzione');
+
+  if (production) {
+    check('TRUST_PROXY', Boolean(String(env.TRUST_PROXY || '').trim()),
+      'obbligatorio in produzione: configura solo proxy fidati oppure usa TRUST_PROXY=0');
+    check('PUBLIC_ORIGIN', Boolean(String(env.PUBLIC_ORIGIN || '').trim()),
+      'obbligatoria in produzione per fissare host e origine pubblici');
+    check('COOKIE_SECURE', String(env.COOKIE_SECURE || 'true').toLowerCase() === 'true',
+      'deve essere true in produzione');
   }
-});
-check('FRONTEND_URL', validFrontendOrigins, 'deve contenere URL http(s) validi separati da virgole');
 
-for (const { name, ok, message } of checks) {
-  console.log(`${ok ? '[OK]' : '[!]'} ${name}: ${ok ? 'valida' : message}`);
+  return { checks, production, hasDocentiCredentials };
 }
 
-console.log(`\nDocenti: ${hasDocentiCredentials ? 'credenziali presenti' : 'credenziali assenti (solo avvisi pubblici)'}`);
-console.log(`Ambiente: ${process.env.NODE_ENV || 'development'}`);
+function main(env = process.env) {
+  const result = runChecks(env);
+  for (const { name, ok, message } of result.checks) {
+    console.log(`${ok ? '[OK]' : '[!]'} ${name}: ${ok ? 'valida' : message}`);
+  }
+  console.log(`\nDocenti: ${result.hasDocentiCredentials ? 'credenziali presenti' : 'credenziali assenti (solo avvisi pubblici)'}`);
+  console.log(`Ambiente: ${env.NODE_ENV || 'development'}`);
+  return result.checks.every(item => item.ok);
+}
 
-const fatal = !checks.find(item => item.name === 'CRED_KEY').ok;
-process.exit(fatal ? 1 : 0);
+if (require.main === module) process.exit(main() ? 0 : 1);
+
+module.exports = { isStrongCredentialKey, parseOrigins, validateOrigins, runChecks, main };

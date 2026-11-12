@@ -6,6 +6,12 @@ const slowSync = require('../services/slow-sync');
 const { getDatiCarriera } = require('../scraper/segrepass');
 const { submitAppelloAction } = require('../scraper/prenotazioni');
 const { getSessionCredentials } = require('../services/server-sessions');
+const { safeErrorMeta } = require('../lib/safe-log');
+const crypto = require('node:crypto');
+const { saveBookingReceipt, getLatestBookingReceipt } = require('../db/repository');
+const bookingInFlight = new Map();
+const bookingDone = new Map();
+const BOOKING_RECEIPT_TTL_MS = 10 * 60 * 1000;
 
 /**
  * GET /api/career/slow-data
@@ -47,6 +53,21 @@ router.get('/slow-data', (req, res) => {
 router.post('/book', async (req, res) => {
   const { annopri, numAppello } = req.body || {};
   const profileId = req.user.sub;
+  if (typeof annopri !== 'string' || typeof numAppello !== 'string' || annopri.length > 80 || numAppello.length > 80) {
+    return res.status(400).json({ success: false, code: 'INVALID_BOOKING_TARGET', error: 'Appello non valido.' });
+  }
+  const bookingKey = `${profileId}:${annopri}:${numAppello}`;
+  const persistedReceipt = getLatestBookingReceipt(profileId, annopri, numAppello);
+  if (persistedReceipt && persistedReceipt.status === 'submitted') {
+    return res.json({ success: true, message: 'Prenotazione già inviata.', receipt: persistedReceipt, alreadySubmitted: true });
+  }
+  const previous = bookingDone.get(bookingKey);
+  if (previous && previous > Date.now()) {
+    return res.json({ success: true, message: 'Prenotazione già inviata.' });
+  }
+  if (bookingInFlight.has(bookingKey)) {
+    return res.status(409).json({ success: false, code: 'BOOKING_IN_PROGRESS', error: 'Prenotazione già in corso.' });
+  }
   const snapshot = snapshots.getSlowSnapshot(profileId);
   const allowed = (snapshot?.prenotazioni || []).some(item =>
     String(item.annopri || '') === String(annopri || '') &&
@@ -61,6 +82,7 @@ router.post('/book', async (req, res) => {
     });
   }
 
+  bookingInFlight.set(bookingKey, true);
   try {
     const credentials = getSessionCredentials(req.authSession.tokenHash);
     if (!credentials?.password) return res.status(401).json({ error: 'Sessione non valida.', code: 'SESSION_EXPIRED' });
@@ -75,13 +97,26 @@ router.post('/book', async (req, res) => {
         )
       }
     );
-    return res.json({ success: true, message: 'Prenotazione effettuata.' });
+    bookingDone.set(bookingKey, Date.now() + BOOKING_RECEIPT_TTL_MS);
+    const receipt = saveBookingReceipt(profileId, {
+      id: crypto.randomUUID(),
+      annopri,
+      numAppello,
+      status: 'submitted',
+      message: 'Prenotazione effettuata.',
+      createdAt: new Date().toISOString()
+    });
+    return res.json({ success: true, message: 'Prenotazione effettuata.', receipt });
   } catch (error) {
     return res.status(error.status || 502).json({
       success: false,
       code: error.code || 'APPELLO_BOOKING_FAILED',
-      error: error.message || 'Prenotazione non riuscita.'
+      error: 'Prenotazione non riuscita.'
     });
+  } finally {
+    bookingInFlight.delete(bookingKey);
+    const now = Date.now();
+    for (const [key, expiresAt] of bookingDone) if (expiresAt <= now) bookingDone.delete(key);
   }
 });
 
