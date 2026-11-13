@@ -10,10 +10,50 @@ const { enableFastMode } = require('./utils');
 
 const NODI_SEGREPASS = ['segrepass1', 'segrepass2', 'segrepass3'];
 const NODE_TIMEOUT_MS = 8000;
-const DEBUG = process.env.DEBUG_SCRAPER === '1';
+// Il debug dello scraper è escluso in produzione: anche con DEBUG_SCRAPER=1,
+// NODE_ENV=production lo disattiva per non esporre dati personali nei log.
+const DEBUG = process.env.DEBUG_SCRAPER === '1' && process.env.NODE_ENV !== 'production';
+
+function portalError(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  return error;
+}
+
+function classifyLoginPage({ pageText = '', hasLoginForm = false, hasAuthenticatedNavigation = false, hasIdentityMarker = false } = {}) {
+  const normalizedText = String(pageText).toLowerCase();
+  if (normalizedText.includes('credenziali non valide') || normalizedText.includes('verificare i dati')) {
+    return 'INVALID_CREDENTIALS';
+  }
+  if (!hasLoginForm && (hasAuthenticatedNavigation || hasIdentityMarker)) return 'AUTHENTICATED';
+  return 'PORTAL_UNAVAILABLE';
+}
 
 function debugLog(...args) {
-  if (DEBUG) console.log(...args);
+  if (!DEBUG) return;
+  // Gli argomenti funzione sono thunk: valutati solo con debug attivo, così
+  // in produzione non serializziamo dati personali a ogni scraping.
+  console.log(...args.map(arg => (typeof arg === 'function' ? arg() : arg)));
+}
+
+// Oscura i dati personali nei dump di debug: PIN/CNP, anagrafica e tasse sono
+// redatti interamente; gli altri identificatori sono mascherati per chiave.
+const SENSITIVE_DEBUG_KEYS = new Set([
+  'pin', 'cnp', 'codicenumericopersonale', 'password',
+  'matricola', 'codicefiscale', 'cf', 'nome', 'nomecompleto', 'cognome',
+  'anagrafica', 'tasse'
+]);
+
+function redactForDebug(value) {
+  if (Array.isArray(value)) return value.map(redactForDebug);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [key, val] of Object.entries(value)) {
+      out[key] = SENSITIVE_DEBUG_KEYS.has(key.toLowerCase()) ? '[REDACTED]' : redactForDebug(val);
+    }
+    return out;
+  }
+  return value;
 }
 
 function maskId(value) {
@@ -49,23 +89,30 @@ async function scrapePin(context, esisUrl) {
     const pinUrl = `${url.origin}/esis/caricaMenu.do?azione=visualizzazionePin`;
     
     await page.goto(pinUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-    await sleep(800);
 
     let pin = null;
     let cnp = null;
 
-    // Ispeziona tutti i frame del frameset ESIS
-    for (const frame of page.frames()) {
-      try {
-        const text = await frame.evaluate(() => (document.body ? document.body.innerText : ''));
-        if (!text) continue;
+    // La pagina PIN è un frameset legacy: domcontentloaded può precedere il
+    // caricamento del frame che contiene i dati. Riprova per alcuni secondi,
+    // leggendo sia il testo sia i valori dei campi (non presenti in innerText).
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline && !pin) {
+      const sources = await Promise.all(page.frames().map(frame => frame.evaluate(() => {
+        const text = document.body?.innerText || '';
+        const fields = Array.from(document.querySelectorAll('input, textarea, select'))
+          .map(element => `${element.getAttribute('name') || ''} ${element.getAttribute('id') || ''} ${element.getAttribute('aria-label') || ''} ${element.value || element.textContent || ''}`)
+          .join('\n');
+        return `${text}\n${fields}`;
+      }).catch(() => '')));
 
-        const pinMatch = text.match(/PIN[^\d]*(\d{4,6})/i);
-        const cnpMatch = text.match(/Codice\s+Numerico\s+Personale[^\d]*(\d+)/i);
-
+      for (const source of sources) {
+        const pinMatch = source.match(/(?:codice\s+)?PIN[^\d]{0,80}(\d{4,6})/i);
+        const cnpMatch = source.match(/Codice\s+Numerico\s+Personale[^\d]{0,80}(\d+)/i);
         if (pinMatch && !pin) pin = pinMatch[1].trim();
         if (cnpMatch && !cnp) cnp = cnpMatch[1].trim();
-      } catch {}
+      }
+      if (!pin) await sleep(300);
     }
 
     return { pin, codiceNumericoPersonale: cnp };
@@ -113,7 +160,7 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
     }
 
     if (!nodoAttivo) {
-      throw new Error('Tutti i nodi di Segrepass (1, 2, 3) sono attualmente offline o in manutenzione. Riprova più tardi.');
+      throw portalError('PORTAL_UNAVAILABLE', 'Il portale Segrepass non è disponibile. Riprova più tardi.');
     }
 
     const inputs = await page.$$('input[type="text"], input[type="password"]');
@@ -126,11 +173,11 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
 
     await userInput.click({ clickCount: 3 });
     await userInput.press('Backspace');
-    await userInput.type(data.codiceFiscale.trim(), { delay: 30 });
+    await userInput.type(data.codiceFiscale.trim());
 
     await passInput.click({ clickCount: 3 });
     await passInput.press('Backspace');
-    await passInput.type(data.password, { delay: 30 });
+    await passInput.type(data.password);
 
     console.log(`[Segrepass] Invio credenziali in corso...`);
     await Promise.all([
@@ -144,10 +191,22 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
     debugLog(`[Segrepass] URL post-login: ${safePath(currentUrl)}`);
 
     const pageText = await page.evaluate(() => document.body.innerText || '').catch(() => '');
-    const isSuccess = pageText.toLowerCase().includes('benvenuto') || pageText.toLowerCase().includes('segreteria online');
-
-    if (!isSuccess && (pageText.toLowerCase().includes('credenziali non valide') || pageText.toLowerCase().includes('verificare i dati'))) {
-      throw new Error('Credenziali non valide o errore di autenticazione su Segrepass.');
+    const loginState = await page.evaluate(() => {
+      const text = document.body?.innerText || '';
+      const normalized = value => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+      const hasLoginForm = Boolean(document.querySelector('input[type="password"]')) &&
+        Boolean(document.querySelector('input[type="submit"], button[type="submit"], input[value="Login"], button.btn'));
+      const hasAuthenticatedNavigation = Array.from(document.querySelectorAll('a, span, div'))
+        .some(element => normalized(element.textContent) === 'segreteria online');
+      const hasIdentityMarker = /\b(?:numero di )?matricola\b|\bmatr\.?\b/i.test(text);
+      return { hasLoginForm, hasAuthenticatedNavigation, hasIdentityMarker };
+    }).catch(() => ({ hasLoginForm: false, hasAuthenticatedNavigation: false, hasIdentityMarker: false }));
+    const loginClassification = classifyLoginPage({ pageText, ...loginState });
+    if (loginClassification === 'INVALID_CREDENTIALS') {
+      throw portalError('INVALID_CREDENTIALS', 'Credenziali Segrepass non valide.');
+    }
+    if (loginClassification !== 'AUTHENTICATED') {
+      throw portalError('PORTAL_UNAVAILABLE', 'Impossibile verificare l’autenticazione sul portale Segrepass.');
     }
 
     const anagraficaDinamica = await page.evaluate(() => {
@@ -236,8 +295,8 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
       if (frameMatricola) anagraficaDinamica.matricola = frameMatricola[1].replace(/\s+/g, '').trim();
     }
 
-    debugLog('\n--- [DEBUG] ANAGRAFICA ESTRATTA ---');
-    debugLog(JSON.stringify(anagraficaDinamica, null, 2));
+    debugLog('\n--- [DEBUG] ANAGRAFICA ESTRATTA (oscurata) ---');
+    debugLog(() => JSON.stringify(redactForDebug({ anagrafica: anagraficaDinamica }), null, 2));
     debugLog('------------------------------------\n');
 
     console.log('[Segrepass] Clic su "Segreteria OnLine"...');
@@ -331,7 +390,7 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
         }).catch(() => null))).then(values => values.find(Boolean) || null);
         if (frameMatricola) anagraficaDinamica.matricola = frameMatricola;
       }
-      debugLog(`[Segrepass] Matricola ESIS: ${anagraficaDinamica.matricola || 'n/d'}`);
+      debugLog(`[Segrepass] Matricola ESIS: ${anagraficaDinamica.matricola ? maskId(anagraficaDinamica.matricola) : 'n/d'}`);
     }
 
     let pianoHeader = {};
@@ -358,7 +417,7 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
       pinInfo = pinRes;
 
       debugLog('\n--- [DEBUG] TABELLA ESAMI GREZZA ---');
-      debugLog(JSON.stringify(tabellaEsami, null, 2));
+      debugLog(() => JSON.stringify(redactForDebug(tabellaEsami), null, 2));
       debugLog('-------------------------------------\n');
 
       esamiList = (tabellaEsami.records || []).map(record => {
@@ -409,12 +468,12 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
       taxes = taxesRes;
       appelliCalendario = appelliRes;
 
-      debugLog('\n--- [DEBUG] TASSE ESTRATTE ---');
-      debugLog(JSON.stringify(taxes, null, 2));
+      debugLog('\n--- [DEBUG] TASSE ESTRATTE (oscurate) ---');
+      debugLog(() => JSON.stringify(redactForDebug({ tasse: taxes }), null, 2));
       debugLog('------------------------------\n');
 
       debugLog('\n--- [DEBUG] APPELLI ESTRATTI ---');
-      debugLog(JSON.stringify(appelliCalendario, null, 2));
+      debugLog(() => JSON.stringify(redactForDebug(appelliCalendario), null, 2));
       debugLog('--------------------------------\n');
     }
 
@@ -449,12 +508,12 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
     };
 
     debugLog('\n=============================================');
-    debugLog('[Segrepass] PAYLOAD FINALE:');
-    debugLog(JSON.stringify(payloadFinale, null, 2));
+    debugLog('[Segrepass] PAYLOAD FINALE (dati personali oscurati):');
+    debugLog(() => JSON.stringify(redactForDebug(payloadFinale), null, 2));
     debugLog('=============================================\n');
 
     return payloadFinale;
   });
 }
 
-module.exports = { getDatiCarriera };
+module.exports = { getDatiCarriera, classifyLoginPage, scrapePin, redactForDebug };

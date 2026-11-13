@@ -1,16 +1,31 @@
 process.env.DB_PATH = ':memory:';
-process.env.JWT_SECRET = 'route-test-secret';
-
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const express = require('express');
-const jwt = require('jsonwebtoken');
 const authRoutes = require('../routes/auth');
 const { csrfProtection } = require('../lib/csrf');
 const { db } = require('../db');
 const { upsertStudentProfile } = require('../db/repository');
+const { createServerSession } = require('../services/server-sessions');
+const { COOKIE_NAME } = require('../lib/cookies');
+const { toLoginDto } = require('../lib/dto');
 
 const ORIGIN = 'http://localhost:3000';
+
+test('il DTO login non espone il token opaco né campi interni del profilo', () => {
+  const body = toLoginDto({
+    token: 'opaque-secret',
+    profileId: 'profile-1',
+    profile: {
+      id: 'profile-1', course_id: 'DE3', course_name: 'Informatica',
+      carriera_json: '[private]', tasse_json: '[private]', email: 'private@example.test'
+    },
+    metriche: { esami: [] }
+  });
+  assert.equal(Object.hasOwn(body, 'token'), false);
+  assert.equal(Object.hasOwn(body.profile, 'carriera_json'), false);
+  assert.equal(Object.hasOwn(body.profile, 'email'), false);
+});
 
 async function withAuthApi(t) {
   const app = express();
@@ -35,7 +50,7 @@ test('GET /session richiede il cookie httpOnly', async t => {
   assert.equal(response.status, 401);
 });
 
-test('GET /session restituisce un nuovo token dal cookie', async t => {
+test('GET /session restituisce un DTO profilo dal cookie senza token nel body', async t => {
   const request = await withAuthApi(t);
   const profileId = 'route-profile-1';
   upsertStudentProfile(db, {
@@ -47,38 +62,41 @@ test('GET /session restituisce un nuovo token dal cookie', async t => {
     channel: 'A-D'
   });
 
-  const cookieToken = jwt.sign({ sub: profileId }, 'route-test-secret', { expiresIn: '5m' });
+  const session = createServerSession(profileId, { codiceFiscale: profileId, password: 'secret' });
   const response = await request('/session', {
-    headers: { cookie: `segrepass_token=${cookieToken}` }
+    headers: { cookie: `${COOKIE_NAME}=${session.token}` }
   });
   const body = await response.json();
 
   assert.equal(response.status, 200);
   assert.equal(body.profile.id, profileId);
   assert.equal(body.onboardingRequired, false);
-  assert.equal(typeof body.token, 'string');
-  assert.match(response.headers.get('set-cookie') || '', /HttpOnly/i);
+  assert.equal(body.authenticated, true);
+  assert.equal(Object.hasOwn(body, 'token'), false);
+  assert.equal(Object.hasOwn(body.profile, 'carriera_json'), false);
 });
 
 test('GET /session risponde 404 se il profilo non esiste', async t => {
   const request = await withAuthApi(t);
-  const cookieToken = jwt.sign({ sub: 'missing-profile' }, 'route-test-secret');
+  const cookieToken = createServerSession('missing-profile', { password: 'secret' });
 
   const response = await request('/session', {
-    headers: { cookie: `segrepass_token=${cookieToken}` }
+    headers: { cookie: `${COOKIE_NAME}=${cookieToken.token}` }
   });
   assert.equal(response.status, 404);
 });
 
-test('POST /logout cancella il cookie', async t => {
+test('POST /logout elimina la sessione e cancella il cookie', async t => {
   const request = await withAuthApi(t);
+  const session = createServerSession('logout-profile', { password: 'secret' });
   const response = await request('/logout', {
     method: 'POST',
-    headers: { Origin: ORIGIN }
+    headers: { Origin: ORIGIN, cookie: `${COOKIE_NAME}=${session.token}` }
   });
 
   assert.equal(response.status, 204);
-  assert.match(response.headers.get('set-cookie') || '', /segrepass_token=;/);
+  assert.match(response.headers.get('set-cookie') || '', new RegExp(`${COOKIE_NAME}=;`));
+  assert.equal(db.prepare('SELECT COUNT(*) AS count FROM Sessions WHERE token_hash = ?').get(session.tokenHash).count, 0);
 });
 
 test('POST /login senza Origin viene bloccato dal CSRF', async t => {

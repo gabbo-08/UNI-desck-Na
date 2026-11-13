@@ -1,7 +1,7 @@
 const { test, expect } = require('@playwright/test');
 
 const session = {
-  token: 'visual-test-token',
+  authenticated: true,
   onboardingRequired: false,
   profile: {
     id: 'student-1',

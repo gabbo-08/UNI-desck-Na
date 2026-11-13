@@ -2,13 +2,13 @@ import type { Metadata, Viewport } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Segrepass Unina',
+  title: 'Segrepass Dashboard',
   description: 'Gestione carriera, tasse, appelli e orario lezioni - Università Federico II',
   manifest: '/manifest.json',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'default',
-    title: 'Segrepass',
+    title: 'Segrepass Dashboard',
   },
 };
 

@@ -101,8 +101,8 @@ export default function CommunicationsView() {
     <section className="space-y-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 className="text-xl font-bold tracking-tight text-white">Casella Istituzionale</h2>
-          <p className="text-xs text-slate-400">Avvisi di Ateneo e notifiche di Microsoft Teams filtrate automaticamente</p>
+          <h2 className="text-xl font-bold tracking-tight text-white">Anteprima comunicazioni (demo)</h2>
+          <p className="text-xs text-amber-200">Dati dimostrativi: questa vista non è collegata alla casella istituzionale o a Microsoft Teams.</p>
         </div>
         <button
           onClick={simulateRefresh}
@@ -150,7 +150,7 @@ export default function CommunicationsView() {
       <div className="grid gap-3">
         {loading ? (
           <div className={`${CARD} p-8 text-center text-sm text-slate-400`}>
-            Sincronizzazione con Microsoft Exchange in corso...
+           Simulazione di aggiornamento demo in corso...
           </div>
         ) : filteredEmails.length > 0 ? (
           filteredEmails.map((email) => (

@@ -1,7 +1,10 @@
 const { enableFastMode, extractTables } = require('./utils');
 const { findPaymentTables } = require('../lib/taxes');
+const { safeErrorMeta } = require('../lib/safe-log');
 
-const DEBUG = process.env.DEBUG_SCRAPER === '1';
+// Come per segrepass.js: il debug è escluso in produzione e non stampa mai
+// le tabelle finanziarie grezze, che contengono dati personali dello studente.
+const DEBUG = process.env.DEBUG_SCRAPER === '1' && process.env.NODE_ENV !== 'production';
 
 async function scrapeTasse(context, esisUrl) {
   const page = await context.newPage();
@@ -38,9 +41,7 @@ async function scrapeTasse(context, esisUrl) {
     ];
 
     if (DEBUG) {
-      console.log(`\n--- [DEBUG TASSE] TABELLE GREZZE: ${tables ? tables.length : 0} ---`);
-      console.log(JSON.stringify(tables, null, 2));
-      console.log('-----------------------------------------------------\n');
+      console.log(`[DEBUG TASSE] Tabelle grezze acquisite: ${tables.length} (contenuto finanziario oscurato)`);
     }
     console.log(`[tasse] Tabelle lette: ${tables.length}`);
 
@@ -50,7 +51,7 @@ async function scrapeTasse(context, esisUrl) {
     return result;
 
   } catch (err) {
-    console.warn('[tasse] Errore estrazione:', err.message);
+    console.warn('[tasse] Errore estrazione:', safeErrorMeta(err));
     return {
       available: false,
       reason: 'TAXES_DATA_NOT_AVAILABLE',

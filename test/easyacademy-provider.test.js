@@ -1,6 +1,64 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { parsePopupText, getCourseOptions, selectStudyGroup } = require('../services/easyacademy-provider');
+const { EventEmitter } = require('node:events');
+const { parsePopupText, getCourseOptions, selectStudyGroup, navigateToAgenda } = require('../services/easyacademy-provider');
+
+test('consente solo il certificato scaduto del dominio EasyAcademy e ripristina TLS dopo la navigazione', async () => {
+  const urls = [];
+  const commands = [];
+  const cdp = new EventEmitter();
+  cdp.send = async (method, params) => {
+    commands.push({ method, params });
+    if (method === 'Security.setOverrideCertificateErrors' && params.override) {
+      cdp.emit('Security.certificateError', { eventId: 1, errorType: 'ERR_CERT_DATE_INVALID', requestURL: 'https://easyacademy.unina.it/' });
+      cdp.emit('Security.certificateError', { eventId: 2, errorType: 'ERR_CERT_DATE_INVALID', requestURL: 'https://example.com/' });
+      cdp.emit('Security.certificateError', { eventId: 3, errorType: 'ERR_CERT_AUTHORITY_INVALID', requestURL: 'https://easyacademy.unina.it/' });
+    }
+  };
+  cdp.detach = async () => {};
+  const page = {
+    async createCDPSession() { return cdp; },
+    async setRequestInterception() {},
+    on() {},
+    async goto(url, options) {
+      urls.push(url);
+      assert.deepEqual(options, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    },
+    async waitForFunction() {}
+  };
+
+  await navigateToAgenda(page);
+
+  assert.deepEqual(urls, ['https://easyacademy.unina.it/agendastudenti/index.php?view=easycourse&_lang=it&include=corso']);
+  assert.deepEqual(commands.filter(command => command.method === 'Security.handleCertificateError'), [
+    { method: 'Security.handleCertificateError', params: { eventId: 1, action: 'continue' } },
+    { method: 'Security.handleCertificateError', params: { eventId: 2, action: 'cancel' } },
+    { method: 'Security.handleCertificateError', params: { eventId: 3, action: 'cancel' } }
+  ]);
+  assert.deepEqual(commands.filter(command => command.method === 'Security.setOverrideCertificateErrors'), [
+    { method: 'Security.setOverrideCertificateErrors', params: { override: true } },
+    { method: 'Security.setOverrideCertificateErrors', params: { override: false } }
+  ]);
+});
+
+test('propaga gli errori di navigazione e ripristina TLS', async () => {
+  const urls = [];
+  const commands = [];
+  const cdp = new EventEmitter();
+  cdp.send = async (method, params) => commands.push({ method, params });
+  cdp.detach = async () => {};
+  const page = {
+    async createCDPSession() { return cdp; },
+    async goto(url) {
+      urls.push(url);
+      throw new Error('net::ERR_NAME_NOT_RESOLVED');
+    }
+  };
+
+  await assert.rejects(navigateToAgenda(page), /ERR_NAME_NOT_RESOLVED/);
+  assert.equal(urls.length, 1);
+  assert.equal(commands.some(command => command.method === 'Security.setOverrideCertificateErrors' && !command.params.override), true);
+});
 
 test('parses course, teacher, date, time, room and campus from an EasyAcademy event', () => {
   const event = parsePopupText('DettagliNome insegnamentoANALISI MATEMATICA I (FG1:A-DIL)  Argomento lezioneANALISI MATEMATICA I (FG1:A-DIL)DocentiPASSARELLI DI NAPOLI ANTONIAData e Oralunedì 12 ottobre 202608:30 - 10:30AulaNome aula: CL-T-1Capacità: 180Sede: Via Claudio [Via Claudio, 21, 80125 Napoli NA]Google MapsPercorso didatticoINGEGNERIA INFORMATICA [DE3] Laurea - 1 - Corso generico A-DILNumero eventi collegati40 eventi');

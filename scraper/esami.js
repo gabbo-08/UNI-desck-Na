@@ -1,11 +1,12 @@
 const { enableFastMode, extractTables } = require('./utils');
+const { safeErrorMeta } = require('../lib/safe-log');
 
 async function scrapeEsamiSostenuti(context, esisUrl) {
   const page = await context.newPage();
   await enableFastMode(page);
   
   try {
-    await page.goto(esisUrl, { waitUntil: 'networkidle2', timeout: 15000 });
+    await page.goto(esisUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
     
     let clicked = false;
     for (const frame of page.frames()) {
@@ -44,7 +45,7 @@ async function scrapeEsamiSostenuti(context, esisUrl) {
     const tables = await extractTables(page);
     return tables[0] || { headers: [], records: [], rowCount: 0 };
   } catch (err) {
-    console.warn('[esami] Errore estrazione:', err.message);
+    console.warn('[esami] Errore estrazione:', safeErrorMeta(err));
     return { headers: [], records: [], rowCount: 0 };
   } finally {
     await page.close().catch(() => {});

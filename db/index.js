@@ -1,8 +1,9 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
+const { seal } = require('../lib/secret-box');
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 6;
 const DEFAULT_DB_PATH = path.resolve(__dirname, '../data/unicorno.sqlite');
 
 function ensureDataDir() {
@@ -12,15 +13,19 @@ function ensureDataDir() {
 
 function initSchema(database) {
   database.exec(`
-    -- Tabella Sessioni Utente (autenticazione opzionale)
-    CREATE TABLE IF NOT EXISTS UserSessions (
-      token TEXT PRIMARY KEY,
+    -- Le sessioni persistono solo l'hash del token e le credenziali cifrate.
+    CREATE TABLE IF NOT EXISTS Sessions (
+      token_hash TEXT PRIMARY KEY,
       profile_id TEXT NOT NULL,
-      expires_at DATETIME NOT NULL
+      credentials_ciphertext TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      absolute_expires_at TEXT NOT NULL,
+      idle_expires_at TEXT NOT NULL
     );
 
-    CREATE INDEX IF NOT EXISTS idx_user_sessions_expires
-      ON UserSessions (expires_at);
+    CREATE INDEX IF NOT EXISTS idx_sessions_expiry
+      ON Sessions (absolute_expires_at, idle_expires_at);
 
     -- Profilo studente (anagrafica e configurazione carriera)
     CREATE TABLE IF NOT EXISTS StudentProfile (
@@ -75,11 +80,98 @@ function initSchema(database) {
       FOREIGN KEY (profile_id) REFERENCES StudentProfile(id) ON DELETE CASCADE,
       FOREIGN KEY (plan_course_id) REFERENCES PlanCourses(id) ON DELETE CASCADE
     );
+
+    -- Docenti preferiti associati a un insegnamento dello studente.
+    CREATE TABLE IF NOT EXISTS ProfessorPreferences (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      profile_id TEXT NOT NULL,
+      course_key TEXT NOT NULL,
+      course_code TEXT,
+      course_name TEXT NOT NULL,
+      professor_id TEXT NOT NULL,
+      professor_name TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(profile_id, course_key, professor_id),
+      FOREIGN KEY (profile_id) REFERENCES StudentProfile(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_professor_preferences_profile
+      ON ProfessorPreferences (profile_id, course_key);
+
+    CREATE TABLE IF NOT EXISTS BookingReceipts (
+      id TEXT PRIMARY KEY,
+      profile_id TEXT NOT NULL,
+      annopri TEXT NOT NULL,
+      num_appello TEXT NOT NULL,
+      status TEXT NOT NULL,
+      message TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (profile_id) REFERENCES StudentProfile(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_booking_receipts_profile_target
+      ON BookingReceipts (profile_id, annopri, num_appello, created_at);
+
+    -- Snapshot senza credenziali del riepilogo Docenti, aggiornato dopo ogni
+    -- sincronizzazione riuscita. Permette una risposta immediata al login.
+    CREATE TABLE IF NOT EXISTS DocentiDataCache (
+      profile_id TEXT PRIMARY KEY,
+      data_json TEXT NOT NULL,
+      fetched_at TEXT NOT NULL,
+      FOREIGN KEY (profile_id) REFERENCES StudentProfile(id) ON DELETE CASCADE
+    );
+
+    -- Gli avvisi sono pubblici e condivisi: una copia per docente evita di
+    -- richiedere la stessa bacheca ad ogni accesso di ogni studente.
+    CREATE TABLE IF NOT EXISTS TeacherAnnouncementsCache (
+      professor_id TEXT PRIMARY KEY,
+      data_json TEXT NOT NULL,
+      fetched_at TEXT NOT NULL
+    );
   `);
+
+  // Elimina le vecchie sessioni JWT salvate in chiaro: non sono compatibili
+  // con il nuovo formato e potrebbero contenere credenziali nel payload.
+  database.exec('DROP TABLE IF EXISTS UserSessions');
 
   const profileColumns = database.prepare('PRAGMA table_info(StudentProfile)').all();
   if (!profileColumns.some(column => column.name === 'matricola')) {
     database.exec('ALTER TABLE StudentProfile ADD COLUMN matricola TEXT');
+  }
+}
+
+function sealLegacyJson(value, associatedData) {
+  if (!value || String(value).startsWith('enc:v1:')) return null;
+  try {
+    const parsed = JSON.parse(String(value));
+    return `enc:v1:${seal(JSON.stringify(parsed), associatedData)}`;
+  } catch {
+    return null;
+  }
+}
+
+/** Upgrade valid legacy personal JSON rows to encrypted-at-rest storage. */
+function migratePersonalJson(database) {
+  const profiles = database.prepare('SELECT id, carriera_json, tasse_json FROM StudentProfile').all();
+  const updateProfile = database.prepare('UPDATE StudentProfile SET carriera_json = ?, tasse_json = ? WHERE id = ?');
+  for (const row of profiles) {
+    const career = sealLegacyJson(row.carriera_json, `${row.id}:carriera`);
+    const taxes = sealLegacyJson(row.tasse_json, `${row.id}:tasse`);
+    if (career || taxes) updateProfile.run(career || row.carriera_json || null, taxes || row.tasse_json || null, row.id);
+  }
+
+  const docenti = database.prepare('SELECT profile_id, data_json FROM DocentiDataCache').all();
+  const updateDocenti = database.prepare('UPDATE DocentiDataCache SET data_json = ? WHERE profile_id = ?');
+  for (const row of docenti) {
+    const encrypted = sealLegacyJson(row.data_json, `docenti-cache:${row.profile_id}`);
+    if (encrypted) updateDocenti.run(encrypted, row.profile_id);
+  }
+
+  const announcements = database.prepare('SELECT professor_id, data_json FROM TeacherAnnouncementsCache').all();
+  const updateAnnouncements = database.prepare('UPDATE TeacherAnnouncementsCache SET data_json = ? WHERE professor_id = ?');
+  for (const row of announcements) {
+    const encrypted = sealLegacyJson(row.data_json, `teacher-cache:${row.professor_id}`);
+    if (encrypted) updateAnnouncements.run(encrypted, row.professor_id);
   }
 }
 
@@ -91,7 +183,11 @@ function createDatabase(filename = DEFAULT_DB_PATH) {
   const database = new Database(filename);
   database.pragma('journal_mode = WAL');
   database.pragma('foreign_keys = ON');
+  database.pragma('secure_delete = ON');
+  database.pragma('wal_autocheckpoint = 1000');
+  const previousSchemaVersion = Number(database.pragma('user_version', { simple: true }) || 0);
   initSchema(database);
+  if (previousSchemaVersion < SCHEMA_VERSION) migratePersonalJson(database);
   database.pragma(`user_version = ${SCHEMA_VERSION}`);
   return database;
 }

@@ -1,16 +1,32 @@
+# Dipendenze e build Node / Next.js
 node_modules/
 .env
 .env.local
 .env.*.local
 dist/
 build/
+out/
 coverage/
 .next/
+
+# Build, cache e pacchetti Android / Gradle
+.gradle/
+.cxx/
+local.properties
+*.apk
+*.aab
+
+# Cache strumenti AI e dump testuali
+.kombai/
+tutto_il_progetto.txt
+
+# Dati personali, database e dump: non devono mai finire nel repository
 db/app.db*
+db/*.db
 db/*.db-wal
 db/*.db-shm
-data/*.sqlite
-data/*.sqlite-wal
-data/*.sqlite-shm
+db/*.sqlite*
+data/
+logs/
+project-dump/
 *.log
-tutto_il_progetto.txt

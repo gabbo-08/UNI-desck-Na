@@ -1,6 +1,7 @@
 ﻿const { queueScrapingTask } = require('./pool');
 const { extractTables: extractTablesFromPage } = require('./utils');
 const { getPortalCookies, setPortalCookies, deletePortalCookies } = require('../utils/sessionStore');
+const { safeErrorMeta } = require('../lib/safe-log');
 
 const DOCENTI_ORIGIN = 'https://www.docenti.unina.it';
 const DOCENTI_API = `${DOCENTI_ORIGIN}/webdocenti-be`;
@@ -8,8 +9,42 @@ const DOCENTI_LOGIN_URL = `${DOCENTI_ORIGIN}/login`;
 const DOCENTI_SUMMARIES_URL = `${DOCENTI_ORIGIN}/personal-area/student/summaries`;
 
 const HTTP_TIMEOUT_MS = 8000;
+const MAX_TEACHER_PHOTO_BYTES = 5 * 1024 * 1024;
+const MAX_TEACHER_MATERIAL_BYTES = 15 * 1024 * 1024;
+const TEACHER_IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
 const MAX_ANNOUNCEMENT_TEACHERS = 100;
 const ANNOUNCEMENTS_PER_TEACHER = 20;
+const MAX_PAGINATION_PAGES = Math.min(100, Math.max(1, Number.parseInt(process.env.DOCENTI_MAX_PAGINATION_PAGES || '20', 10) || 20));
+
+function matchesImageSignature(contentType, buffer) {
+  if (!Buffer.isBuffer(buffer)) return false;
+  if (contentType === 'image/jpeg') return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+  if (contentType === 'image/png') return buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  if (contentType === 'image/gif') return /^GIF8[79]a$/.test(buffer.subarray(0, 6).toString('ascii'));
+  if (contentType === 'image/webp') return buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP';
+  return false;
+}
+
+async function readBoundedBody(response, maximumBytes) {
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    return buffer.length <= maximumBytes ? buffer : null;
+  }
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maximumBytes) {
+      await reader.cancel().catch(() => {});
+      return null;
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks, total);
+}
 
 function absoluteDocentiUrl(value) {
   if (!value) return null;
@@ -29,10 +64,6 @@ const PLACEHOLDER_PROFESSOR = 'Non specificato';
 /* ------------------------------------------------------------------ */
 /* Utilità                                                             */
 /* ------------------------------------------------------------------ */
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
 
 function normalizeLabel(value) {
   return String(value || '')
@@ -139,11 +170,15 @@ function mapSubscription(item) {
 }
 
 function isUsableSubscription(subscription) {
-  return Boolean(
-    subscription.courseCode ||
-    (subscription.courseName && subscription.courseName !== PLACEHOLDER_COURSE) ||
-    (subscription.professor && subscription.professor !== PLACEHOLDER_PROFESSOR)
-  );
+  const clean = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .toLocaleUpperCase('it').replace(/[^A-Z0-9]+/g, ' ').trim();
+  const courseName = clean(subscription?.courseName);
+  const professorName = clean(subscription?.professor);
+  const courseCode = clean(subscription?.courseCode);
+  const placeholder = /^(?:CORSO|INSEGNAMENTO|MATERIA|ESAME|DOCENTE|NON SPECIFICATO|NON INDICATO|N D|ND|[-]+)$/;
+  const hasCourseName = courseName.length >= 4 && !placeholder.test(courseName) && courseName !== professorName;
+  const hasCourseCode = courseCode.length >= 2 && !placeholder.test(courseCode);
+  return hasCourseName || hasCourseCode;
 }
 
 function mapTeacherDetail(teacher, teachings = [], materials = {}, exams = [], options = {}) {
@@ -313,7 +348,9 @@ async function fetchTeacherPhoto(teacherId, dependencies = {}) {
     const cookie = portalCookieHeader(dependencies.sessionKey);
     const response = await fetch(`${DOCENTI_API}/docenti/${encodeURIComponent(teacherId)}/foto`, {
       headers: {
-        Accept: 'image/*',
+        // The portal rejects the bare `image/*` value with HTTP 406; its page
+        // sends a browser image negotiation header and returns JPEG correctly.
+        Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
         Referer: `${DOCENTI_ORIGIN}/`,
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
         ...(cookie ? { Cookie: cookie } : {})
@@ -321,8 +358,12 @@ async function fetchTeacherPhoto(teacherId, dependencies = {}) {
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
     });
     if (!response.ok) return null;
-    const contentType = response.headers.get('content-type') || 'image/jpeg';
-    const buffer = Buffer.from(await response.arrayBuffer());
+    const contentType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    if (!TEACHER_IMAGE_TYPES.has(contentType)) return null;
+    const contentLength = Number(response.headers.get('content-length'));
+    if (Number.isFinite(contentLength) && contentLength > MAX_TEACHER_PHOTO_BYTES) return null;
+    const buffer = await readBoundedBody(response, MAX_TEACHER_PHOTO_BYTES);
+    if (!buffer || !matchesImageSignature(contentType, buffer)) return null;
     return { contentType, buffer };
   } catch {
     return null;
@@ -339,6 +380,59 @@ async function fetchTeacherFolder(teacherId, folderId, section, coursePrefix, de
   return responses.flatMap(value => toArray(value?.contenutoCartella ?? value)).filter(Boolean);
 }
 
+function materialById(items, fileId) {
+  for (const item of toArray(items)) {
+    const id = String(item?.id ?? item?.idFile ?? item?.idDirectory ?? '');
+    if (id === String(fileId)) return item;
+    const nested = materialById(item?.children ?? item?.files ?? item?.figli ?? item?.contenuto, fileId);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+function isPdfSignature(buffer) {
+  return Buffer.isBuffer(buffer) && buffer.subarray(0, 5).toString('ascii') === '%PDF-';
+}
+
+async function fetchTeacherMaterial(teacherId, folderId, fileId, section, coursePrefix, dependencies = {}) {
+  if (typeof dependencies.fetchMaterial === 'function') return dependencies.fetchMaterial({ teacherId, folderId, fileId, section, coursePrefix });
+  const items = await fetchTeacherFolder(teacherId, folderId, section, coursePrefix, dependencies);
+  const material = materialById(items, fileId);
+  if (!material || material?.tipo === 'D') return null;
+  const target = absoluteDocentiUrl(pick(material, ['url', 'downloadUrl', 'link'], null)) || materialFileUrl(fileId);
+  let url;
+  try {
+    url = new URL(target);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== 'https:' || url.origin !== DOCENTI_ORIGIN) return null;
+
+  const cookie = portalCookieHeader(dependencies.sessionKey);
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/pdf,image/jpeg,image/png,image/gif,image/webp;q=0.9,*/*;q=0.1',
+      Referer: `${DOCENTI_ORIGIN}/`,
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+      ...(cookie ? { Cookie: cookie } : {})
+    },
+    signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
+  });
+  if (!response.ok) return null;
+  const contentType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+  const allowed = contentType === 'application/pdf' || TEACHER_IMAGE_TYPES.has(contentType);
+  if (!allowed) return null;
+  const contentLength = Number(response.headers.get('content-length'));
+  if (Number.isFinite(contentLength) && contentLength > MAX_TEACHER_MATERIAL_BYTES) return null;
+  const buffer = await readBoundedBody(response, MAX_TEACHER_MATERIAL_BYTES);
+  if (!buffer) return null;
+  if (contentType === 'application/pdf' && !isPdfSignature(buffer)) return null;
+  if (TEACHER_IMAGE_TYPES.has(contentType) && !matchesImageSignature(contentType, buffer)) return null;
+  const name = String(pick(material, ['nome', 'name', 'nomeFile', 'filename'], `materiale-${fileId}`))
+    .replace(/[^A-Za-z0-9._ -]+/g, '_').slice(0, 120) || `materiale-${fileId}`;
+  return { contentType, buffer, filename: name };
+}
+
 function mapBookedExam(item) {
   return {
     courseName: courseNameOf(item) === PLACEHOLDER_COURSE ? 'Esame' : courseNameOf(item),
@@ -347,6 +441,8 @@ function mapBookedExam(item) {
     professor: professorName(item),
     examDate: formatDocenteDate(pick(item, ['dataEsame', 'dataAppello', 'data'])),
     bookingDate: formatDocenteDate(pick(item, ['dataPrenotazione', 'dataIscrizione'])),
+    inizioPrenotazione: formatDocenteDate(pick(item, ['dataInizioPrenotazione', 'inizioPrenotazione', 'startBooking'], '')) || null,
+    finePrenotazione: formatDocenteDate(pick(item, ['dataFinePrenotazione', 'finePrenotazione', 'endBooking'], '')) || null,
     session: String(pick(item, ['sessione'], '')),
     status: 'Prenotato',
     location: String(pick(item, ['aula', 'luogo'], ''))
@@ -418,43 +514,69 @@ function normalizeCollectedTest(test, subscription) {
 }
 
 async function collectTeacherTests(page, subscriptions, extractTables) {
-  const teachers = new Map(
-    subscriptions
-      .filter(item => item.professorId && item.professorId !== 'undefined')
-      .map(item => [String(item.professorId), item])
-  );
-  const collected = [];
-
-  for (const [teacherId, subscription] of teachers) {
-    const url = `${DOCENTI_ORIGIN}/teacher/${encodeURIComponent(teacherId)}/didactics/signin-groups`;
-    const api = startApiCollector(page);
-    try {
-      await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-      await sleep(1500);
-      await api.settle();
-
-      const tables = await extractTables(page).catch(() => []);
-      const fromTables = normalizeDocentiTables(tables);
-      const jsonTests = api.findAll(/\/(?:test|prove|prova|signin-groups)/i).flatMap(toArray);
-      const source = [
-        ...fromTables.tests,
-        ...jsonTests.map(mapDocentiTest)
-      ];
-
-      for (const rawTest of source.filter(isUsableDocentiTest)) {
-        const test = normalizeCollectedTest(rawTest, subscription);
-        collected.push({
-          ...test,
-        });
-      }
-    } catch (error) {
-      console.warn(`[Docenti] Test non disponibili per ${teacherId}: ${error.message || error}`);
-    } finally {
-      api.stop();
-    }
+  const teachers = new Map();
+  for (const subscription of subscriptions) {
+    const id = String(subscription.professorId || '');
+    if (!id || id === 'undefined') continue;
+    const items = teachers.get(id) || [];
+    items.push(subscription);
+    teachers.set(id, items);
   }
+  // I test sono supplementari al riepilogo. Limita il numero di pagine e
+  // lavorale in parallelo: una navigazione networkidle per ogni iscritto
+  // rendeva il login lento fino a due minuti.
+  const entries = [...teachers.entries()].slice(0, 9);
+  const results = new Array(entries.length);
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < entries.length) {
+      const index = nextIndex++;
+      const [teacherId, teacherSubscriptions] = entries[index];
+      let testPage = page;
+      let ownsPage = false;
+      let api = null;
+      try {
+        const context = page.browserContext?.();
+        if (context?.newPage) {
+          testPage = await context.newPage();
+          ownsPage = true;
+        }
+        api = startApiCollector(testPage);
+        const matchingResponse = testPage.waitForResponse?.(
+          response => response.ok() && /\/webdocenti-be\//i.test(response.url()) && /test|prove|signin|grupp/i.test(response.url()),
+          { timeout: 3500 }
+        ).catch(() => null);
+        const url = `${DOCENTI_ORIGIN}/teacher/${encodeURIComponent(teacherId)}/didactics/signin-groups`;
+        await testPage.goto(url, { waitUntil: 'domcontentloaded', timeout: 12000 });
+        if (matchingResponse) await matchingResponse;
+        await api.settle();
 
-  return dedupe(collected, test =>
+        const tables = await extractTables(testPage).catch(() => []);
+        const fromTables = normalizeDocentiTables(tables);
+        const jsonTests = api.findAll(/\/(?:test|prove|prova|signin-groups)/i).flatMap(toArray);
+        const source = [...fromTables.tests, ...jsonTests.map(mapDocentiTest)].filter(isUsableDocentiTest);
+        const normalized = value => normalizeLabel(value).replace(/[^a-z0-9]+/g, ' ').trim();
+        results[index] = source.flatMap(rawTest => {
+          const test = rawTest.courseName ? rawTest : null;
+          const matches = test
+            ? teacherSubscriptions.filter(subscription => normalized(subscription.courseName) === normalized(test.courseName))
+            : teacherSubscriptions.length === 1 ? teacherSubscriptions : [];
+          if (matches.length === 0) return [];
+          const subscription = matches[0];
+          return [normalizeCollectedTest(rawTest, subscription)];
+        });
+      } catch (error) {
+        console.warn(`[Docenti] Test non disponibili per ${teacherId}:`, safeErrorMeta(error));
+        results[index] = [];
+      } finally {
+        api?.stop();
+        if (ownsPage) await testPage.close().catch(() => {});
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(3, entries.length) }, worker));
+
+  return dedupe(results.flat(), test =>
     `${test.name}|${test.courseName}|${test.professor}|${test.date}|${test.group}`
   );
 }
@@ -501,14 +623,19 @@ async function findTeacher(fullName, dependencies = {}) {
 
   const fetchJson = dependencies.fetchJson || fetchDocentiJson;
   const tokens = normalizeLabel(query).split(/\s+/).filter(t => t.length > 2);
-  const attempts = [query, ...[...tokens].reverse()];
+  // Il portale ricerca in modo più affidabile sul cognome singolo se la query
+  // completa non produce risultati; evita richieste ripetute per ogni token.
+  const attempts = [...new Set([query, tokens[tokens.length - 1]].filter(Boolean))];
 
   let candidates = [];
   for (const attempt of [...new Set(attempts)]) {
     const data = await fetchJson(`/docenti?nome=${encodeURIComponent(attempt)}&p=0&s=10`);
     if (data == null) continue;
-    candidates = Array.isArray(data?.content) ? data.content : [];
-    break;
+    const found = Array.isArray(data?.content) ? data.content : [];
+    if (found.length > 0) {
+      candidates = found;
+      break;
+    }
   }
   if (candidates.length === 0) return null;
 
@@ -521,12 +648,50 @@ async function findTeacher(fullName, dependencies = {}) {
     .sort((a, b) => b.score - a.score);
 
   const best = scored[0];
-  if (!best || best.score === 0) return null;
+  // Con un nome completo non accettare una corrispondenza basata solo su un
+  // token comune: potrebbe collegare l'avviso alla persona sbagliata.
+  const minimumScore = tokens.length > 1 ? 2 : 1;
+  if (!best || best.score < minimumScore) return null;
 
-  const tied = scored.filter(s => s.score === best.score);
+  const tied = scored.filter(s => s.score === best.score && s.score >= minimumScore);
   if (tied.length > 1) return null;
 
   return best.candidate;
+}
+
+async function searchTeachers(query, dependencies = {}) {
+  const searchText = String(query || '').trim();
+  if (searchText.length < 3 || searchText.length > 100) return [];
+
+  const fetchJson = dependencies.fetchJson || (path => fetchDocentiJson(path, dependencies));
+  const tokens = normalizeLabel(searchText).split(/\s+/).filter(token => token.length >= 3);
+  const attempts = [...new Set([searchText, ...tokens.slice().reverse(), ...tokens])];
+  const candidates = new Map();
+
+  for (const attempt of attempts.slice(0, 6)) {
+    const data = await fetchJson(`/docenti?nome=${encodeURIComponent(attempt)}&p=0&s=30`);
+    for (const candidate of (Array.isArray(data?.content) ? data.content : [])) {
+      if (candidate?.id) candidates.set(String(candidate.id), candidate);
+    }
+  }
+
+  return [...candidates.values()]
+    .map(candidate => {
+      // Il portale Docenti mostra il cognome prima del nome nelle schede.
+      const name = `${candidate.cognome || ''} ${candidate.nome || ''}`.trim();
+      const normalizedName = normalizeLabel(name);
+      const matchedTokens = tokens.filter(token => normalizedName.includes(token));
+      return {
+        id: String(candidate.id),
+        name: name || 'Docente',
+        role: pick(candidate, ['ruolo', 'role', 'qualifica'], null),
+        score: matchedTokens.length
+      };
+    })
+    .filter(candidate => candidate.score > 0)
+    .sort((left, right) => right.score - left.score || left.name.localeCompare(right.name, 'it'))
+    .slice(0, 20)
+    .map(({ score, ...teacher }) => teacher);
 }
 
 function stripHtml(html) {
@@ -600,6 +765,37 @@ function timestampOf(value) {
   return Number.isNaN(t) ? 0 : t;
 }
 
+async function fetchAnnouncementGroup(teacher, fallbackName, dependencies = {}, options = {}) {
+  const fetchJson = dependencies.fetchJson || fetchDocentiJson;
+  const teacherId = String(teacher?.id || '');
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$/.test(teacherId)) return null;
+  const data = await fetchJson(
+    `/docenti/${encodeURIComponent(teacherId)}/avvisi?p=0&s=${ANNOUNCEMENTS_PER_TEACHER}`
+  );
+  const raw = toArray(data);
+  if (raw.length === 0 && !options.includeEmpty) return null;
+
+  const items = await Promise.all(raw.map(async rawItem => {
+    let mapped = mapAnnouncement(rawItem, teacherId);
+    if (!mapped.content && mapped.id) {
+      const detail = await fetchAnnouncementDetail(teacherId, mapped.id, { fetchJson });
+      if (detail) mapped = mapAnnouncement({ ...rawItem, ...detail }, teacherId);
+    }
+    return mapped;
+  }));
+  items.sort((a, b) => timestampOf(b.date) - timestampOf(a.date));
+
+  return {
+    professor: `${teacher.nome || ''} ${teacher.cognome || ''}`.trim() || fallbackName,
+    slug: teacherId,
+    boardUrl: teacherBoardUrl(teacherId),
+    ...(options.courseName ? { courseName: options.courseName } : {}),
+    ...(options.isFavorite ? { isFavorite: true } : {}),
+    ...(options.isFavorite && data == null ? { announcementError: true } : {}),
+    items
+  };
+}
+
 async function fetchAnnouncementsForProfessors(professors = [], dependencies = {}) {
   const fetchJson = dependencies.fetchJson || fetchDocentiJson;
   const names = [...new Set(
@@ -611,31 +807,37 @@ async function fetchAnnouncementsForProfessors(professors = [], dependencies = {
   const groups = await Promise.all(names.map(async professor => {
     const teacher = await findTeacher(professor, { fetchJson });
     if (!teacher?.id) return null;
-
-    const data = await fetchJson(
-      `/docenti/${encodeURIComponent(teacher.id)}/avvisi?p=0&s=${ANNOUNCEMENTS_PER_TEACHER}`
-    );
-    const raw = toArray(data);
-    if (raw.length === 0) return null;
-
-    const items = await Promise.all(raw.map(async rawItem => {
-      let mapped = mapAnnouncement(rawItem, teacher.id);
-      if (!mapped.content && mapped.id) {
-        const detail = await fetchAnnouncementDetail(teacher.id, mapped.id, { fetchJson });
-        if (detail) mapped = mapAnnouncement({ ...rawItem, ...detail }, teacher.id);
-      }
-      return mapped;
-    }));
-    items.sort((a, b) => timestampOf(b.date) - timestampOf(a.date));
-
-    return {
-      professor: `${teacher.nome || ''} ${teacher.cognome || ''}`.trim() || professor,
-      slug: String(teacher.id),
-      boardUrl: teacherBoardUrl(teacher.id),
-      items
-    };
+    return fetchAnnouncementGroup(teacher, professor, { ...dependencies, fetchJson });
   }));
 
+  return groups.filter(Boolean);
+}
+
+async function fetchAnnouncementsForTeacherIds(teachers = [], dependencies = {}) {
+  const unique = new Map();
+  for (const teacher of teachers) {
+    const id = String(teacher?.id || '').trim();
+    if (!id || unique.has(id)) continue;
+    unique.set(id, teacher);
+  }
+  const groups = await Promise.all([...unique.values()].slice(0, MAX_ANNOUNCEMENT_TEACHERS).map(async teacher => {
+    try {
+      return await fetchAnnouncementGroup(teacher, teacher.name, dependencies, {
+        includeEmpty: true,
+        isFavorite: true,
+        courseName: teacher.courseName
+      });
+    } catch {
+      return {
+        professor: teacher.name || 'Docente preferito',
+        slug: String(teacher.id || ''),
+        courseName: teacher.courseName,
+        isFavorite: true,
+        announcementError: true,
+        items: []
+      };
+    }
+  }));
   return groups.filter(Boolean);
 }
 
@@ -662,34 +864,53 @@ async function loginStudente(page, username, password, sessionKey = null) {
           console.log('[Docenti] Sessione cookie riutilizzata.');
           return;
         }
+        deletePortalCookies(sessionKey);
       } catch {
         deletePortalCookies(sessionKey);
       }
     }
   }
 
-  await page.goto(DOCENTI_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 30000 });
-  await sleep(1000);
+  await page.goto(DOCENTI_LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
-  // 1. Seleziona espressamente la scheda Studente
-  await page.evaluate(() => {
+  // 1. Seleziona la scheda Studente e aspetta lo stato attivo prima di usare il form.
+  await page.waitForFunction(() => Array.from(document.querySelectorAll('a, button, li, .nav-link, span, div'))
+    .some(element => (element.textContent || '').trim().toLowerCase() === 'studente'), { timeout: 15000 }).catch(() => {
+      const error = new Error('La scheda Studente del portale Docenti non è stata caricata.');
+      error.code = 'DOCENTI_LOGIN_FORM_UNAVAILABLE';
+      throw error;
+    });
+  const selectedStudentTab = await page.evaluate(() => {
     const elements = Array.from(document.querySelectorAll('a, button, li, .nav-link, span, div'));
-    const studentEl = elements.find(el => (el.textContent || '').trim().toLowerCase() === 'studente');
-    if (studentEl) {
-      (studentEl.closest('a, button, li') || studentEl).click();
-    }
+    const studentEl = elements.find(element => (element.textContent || '').trim().toLowerCase() === 'studente');
+    if (!studentEl) return false;
+    const tab = studentEl.closest('a, button, li') || studentEl;
+    if (!tab.closest('.active')) tab.click();
+    return true;
   });
-  await sleep(1000);
-
+  if (selectedStudentTab === false) {
+    const error = new Error('La scheda Studente del portale Docenti non è disponibile.');
+    error.code = 'DOCENTI_LOGIN_FORM_UNAVAILABLE';
+    throw error;
+  }
+  if (selectedStudentTab === true) await page.waitForFunction(() => {
+    const label = Array.from(document.querySelectorAll('a, button, li, .nav-link, span, div'))
+      .find(element => (element.textContent || '').trim().toLowerCase() === 'studente');
+    return Boolean(label?.closest('.active'));
+  }, { timeout: 5000 }).catch(() => {
+    const error = new Error('Non è stato possibile selezionare il profilo Studente nel portale Docenti.');
+    error.code = 'DOCENTI_LOGIN_FORM_UNAVAILABLE';
+    throw error;
+  });
   // 2. Digitazione credenziali e sblocco pulsante Angular
   await page.waitForSelector('input[placeholder="Username"], input[type="text"]', { timeout: 15000 });
   const uInput = await page.$('input[placeholder="Username"], input[type="text"]');
   const pInput = await page.$('input[placeholder="Password"], input[type="password"]');
 
   await uInput.click({ clickCount: 3 });
-  await uInput.type(username, { delay: 15 });
+  await uInput.type(username);
   await pInput.click({ clickCount: 3 });
-  await pInput.type(password, { delay: 15 });
+  await pInput.type(password);
 
   await page.evaluate(() => {
     const inputs = document.querySelectorAll('input');
@@ -698,8 +919,6 @@ async function loginStudente(page, username, password, sessionKey = null) {
       i.dispatchEvent(new Event('change', { bubbles: true }));
     });
   });
-  await sleep(500);
-
   // 3. Invio form
   const submitted = await page.evaluate(() => {
     const btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
@@ -716,21 +935,29 @@ async function loginStudente(page, username, password, sessionKey = null) {
   }
 
   // 4. Attesa redirect in area personale
-  await page.waitForFunction(
-    () => window.location.pathname.includes('/personal-area/'),
-    { timeout: 20000 }
-  ).catch(() => {});
+  await page.waitForFunction(() => {
+    const path = window.location.pathname;
+    const privateArea = /\/personal-area(?:\/|$)/.test(path);
+    const alerts = Array.from(document.querySelectorAll('[role="alert"], .alert-danger, .invalid-feedback, .error, [class*="error"]'))
+      .map(element => element.textContent || '').join(' ').trim();
+    return privateArea || alerts.length > 5;
+  }, { timeout: 30000 }).catch(() => {});
 
-  if (!page.url().includes('/personal-area/')) {
-    const error = new Error('Login non riuscito: verificare che l\'email inserita sia @studenti.unina.it.');
-    error.code = 'DOCENTI_PRIVATE_LOGIN_FAILED';
+  if (!/\/personal-area(?:\/|$)/.test(new URL(page.url()).pathname)) {
+    const portalError = await page.evaluate(() => Array.from(document.querySelectorAll(
+      '[role="alert"], .alert-danger, .invalid-feedback, .error, [class*="error"]'
+    )).map(element => (element.textContent || '').trim()).filter(Boolean).join(' ').slice(0, 300)).catch(() => '');
+    const rejectedCredentials = /credenzial|password|username|email|autenticazione|non valid|non corrett|errat/i.test(portalError);
+    const error = new Error(rejectedCredentials
+      ? 'Il portale Docenti ha rifiutato l’accesso. Verifica email @studenti.unina.it e password usate per quel portale.'
+      : 'Il portale Docenti non ha completato l’accesso. La pagina di login potrebbe essere cambiata o non aver risposto in tempo.');
+    error.code = rejectedCredentials ? 'DOCENTI_AUTH_REJECTED' : 'DOCENTI_LOGIN_FLOW_FAILED';
     throw error;
   }
 
   if (sessionKey) {
     setPortalCookies(sessionKey, await page.cookies(DOCENTI_ORIGIN));
   }
-  await sleep(1000);
 }
 
 function startApiCollector(page) {
@@ -789,7 +1016,7 @@ async function collectPaginatedEntries(page, entries) {
     const size = Number(url.searchParams.get('s') || 500);
     if (!Number.isFinite(start) || !Number.isFinite(size) || size <= 0) continue;
 
-    for (let pageIndex = start + 1; pageIndex < start + 100; pageIndex += 1) {
+    for (let pageIndex = start + 1; pageIndex < start + MAX_PAGINATION_PAGES; pageIndex += 1) {
       url.searchParams.set('p', String(pageIndex));
       const next = await page.evaluate(async requestUrl => {
         const response = await fetch(requestUrl, { credentials: 'include' });
@@ -832,7 +1059,7 @@ async function getDocentiData(userCredentials = {}, dependencies = {}) {
   if (!username || !password) {
     return emptyResult('DOCENTI_CREDENTIALS_REQUIRED');
   }
-  if (!String(username).includes('@') && !injectedScraper) {
+  if (!/^[^\s@]+@studenti\.unina\.it$/i.test(String(username)) && !injectedScraper) {
     return emptyResult('DOCENTI_EMAIL_REQUIRED');
   }
 
@@ -846,9 +1073,8 @@ async function getDocentiData(userCredentials = {}, dependencies = {}) {
       const api = startApiCollector(page);
 
       await page.goto(DOCENTI_SUMMARIES_URL, { waitUntil: 'networkidle2', timeout: 30000 })
-        .catch(err => console.warn('[Docenti] goto summaries:', err.message));
+        .catch(err => console.warn('[Docenti] goto summaries:', safeErrorMeta(err)));
 
-      await sleep(3000);
       await api.settle();
       api.stop();
 
@@ -867,7 +1093,12 @@ async function getDocentiData(userCredentials = {}, dependencies = {}) {
         s => `${s.courseCode}|${s.courseName}|${s.professor}`
       );
 
-      let bookedExams = toArray(prenotazioniJson).map(mapBookedExam);
+      let bookedExams = toArray(prenotazioniJson).map(mapBookedExam).filter(exam => {
+        const course = String(exam.courseName || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+          .toLocaleUpperCase('it').replace(/[^A-Z0-9]+/g, ' ').trim();
+        return course.length >= 4 && !/^(?:ESAME|INSEGNAMENTO|MATERIA|NON SPECIFICATO|NON INDICATO)$/.test(course) &&
+          Boolean(exam.examDate || exam.bookingDate || exam.courseCode);
+      });
       let groups = [];
       let tests = [];
 
@@ -942,7 +1173,7 @@ async function getDocentiData(userCredentials = {}, dependencies = {}) {
       };
     });
   } catch (err) {
-    console.warn('[Docenti] Errore scraping:', err.message || err);
+    console.warn('[Docenti] Errore scraping:', safeErrorMeta(err));
     return emptyResult(err.code || 'DOCENTI_PRIVATE_LOGIN_FAILED');
   }
 }
@@ -957,12 +1188,15 @@ function normalizeDocentiTables(tables) {
     const headers = (table.headers || []).map(h => String(h || '').trim());
     const records = table.records || [];
     const tableLabel = `${table.title || ''} ${headers.join(' ')}`;
+    const hasCourseColumn = headers.some(h => /insegnamento|materia|nome corso/i.test(h));
+    const hasSubscriptionColumn = headers.some(h => /docente|professore|titolare|anno accademico|codice.*insegnamento|codice corso|stato corso/i.test(h));
 
     const isTestTable = /test|prova/i.test(tableLabel);
     const isGroupTable = /grupp/i.test(tableLabel);
     const isExamTable = !isTestTable && !isGroupTable &&
       headers.some(h => /data appello|esame|aula|stato/i.test(h)) &&
       !headers.some(h => h.toLowerCase() === 'stato corso');
+    const isSubscriptionTable = !isTestTable && !isGroupTable && !isExamTable && hasCourseColumn && hasSubscriptionColumn;
 
     for (const record of records) {
       if (isTestTable && Object.keys(record).some(key => /test|prova/i.test(key))) {
@@ -973,27 +1207,34 @@ function normalizeDocentiTables(tables) {
         groups.push(mapDocentiGroup(record));
       }
       if (isExamTable) {
-        bookedExams.push({
-          examName: record.Esame || record.Insegnamento || record['Nome insegnamento'] || '',
-          examDate: record['Data Appello'] || record.Data || '',
-          room: record.Aula || '',
-          status: record.Stato || ''
+        const courseName = record.Esame || record.Insegnamento || record['Nome insegnamento'] || record.Materia || '';
+        const examDate = record['Data Appello'] || record.Data || '';
+        const location = record.Aula || record.Luogo || '';
+        const status = record.Stato || '';
+        const meaningful = isUsableSubscription({ courseName }) && Boolean(String(examDate || '').trim() || String(record['Data Prenotazione'] || '').trim());
+        if (meaningful) bookedExams.push({
+          courseName: courseName || 'Esame',
+          examDate,
+          location,
+          professor: record.Docente || record.Professore || '',
+          status
         });
-      } else if (!isTestTable && !isGroupTable) {
-        subscriptions.push({
+      } else if (isSubscriptionTable) {
+        const subscription = {
           courseCode: record.Codice || '',
-          courseName: record.Insegnamento || record['Corso di laurea'] || '',
+          courseName: record.Insegnamento || record['Nome insegnamento'] || record.Materia || '',
           professor: record.Docente || '',
           academicYear: record['Anno Accademico'] || record['Anno accademico'] || '',
           status: record['Stato corso'] || record.Stato || ''
-        });
+        };
+        if (isUsableSubscription(subscription)) subscriptions.push(subscription);
       }
     }
   }
 
   return {
     subscriptions: dedupe(subscriptions, s => `${s.courseCode}|${s.courseName}|${s.professor}`),
-    bookedExams: dedupe(bookedExams, e => `${e.examName}|${e.examDate}|${e.room}|${e.status}`),
+    bookedExams: dedupe(bookedExams, e => `${e.courseName}|${e.examDate}|${e.location}|${e.status}`),
     groups: dedupe(groups, g => `${g.name}|${g.courseName}|${g.professor}`),
     tests: dedupe(tests, t => `${t.name}|${t.courseName}|${t.date}|${t.group}`)
   };
@@ -1002,14 +1243,19 @@ function normalizeDocentiTables(tables) {
 module.exports = {
   getDocentiData,
   fetchAnnouncementsForProfessors,
+  fetchAnnouncementsForTeacherIds,
   findTeacher,
+  searchTeachers,
   mapAnnouncement,
   mapDocentiGroup,
   mapDocentiTest,
   mapTeacherDetail,
   fetchTeacherDetail,
   fetchTeacherPhoto,
+  matchesImageSignature,
+  readBoundedBody,
   fetchTeacherFolder,
+  fetchTeacherMaterial,
   normalizeDocentiTables,
   mapSubscription,
   isUsableSubscription,

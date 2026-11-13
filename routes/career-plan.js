@@ -5,6 +5,7 @@ const { getStudentProfile, getSelectedElectiveIds } = require('../db/repository'
 const { getCareerSnapshot } = require('../services/career-snapshots');
 const { resolveStudyPlan } = require('../services/study-plan-service');
 const { matchStudyPlan } = require('../lib/matching');
+const { toProfileDto } = require('../lib/dto');
 
 const router = express.Router();
 
@@ -37,7 +38,7 @@ router.get(['/plan', '/', '/piano-di-studi'], (req, res) => {
       selectedElectiveIds: getSelectedElectiveIds(db, req.user.sub)
     });
 
-    return res.json({ profile, plan: resolved.plan, source: resolved.source, ...result });
+    return res.json({ profile: toProfileDto(profile), plan: resolved.plan, source: resolved.source, ...result });
   } catch (error) {
     console.error('[Career Plan Error]:', error.message);
     return res.status(500).json({ error: 'Errore interno nel recupero del piano di studi.' });

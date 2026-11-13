@@ -1,5 +1,5 @@
 const crypto = require('node:crypto');
-const { JWT_SECRET } = require('../lib/config');
+const { deriveKey } = require('../lib/secret-box');
 
 const DEFAULT_TTL_MS = 15 * 60 * 1000;
 // Include the anagrafica parser version so old snapshots without the full
@@ -19,8 +19,8 @@ function ttlMs() {
  */
 function cacheKey(profileId, password) {
   const fingerprint = crypto
-    .createHmac('sha256', JWT_SECRET)
-    .update(String(password || ''))
+    .createHmac('sha256', deriveKey('career-cache'))
+    .update(`${profileId}\u0000${String(password || '')}`)
     .digest('hex');
   return `${CACHE_VERSION}:${profileId}:${fingerprint}`;
 }

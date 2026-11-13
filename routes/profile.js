@@ -10,6 +10,7 @@ const {
 } = require('../db/repository');
 
 const router = express.Router();
+const { toProfileDto } = require('../lib/dto');
 
 function isConfigured(profile) {
   return Boolean(
@@ -19,6 +20,9 @@ function isConfigured(profile) {
 }
 
 function parseProfileUpdate(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    return { error: 'Il profilo deve essere un oggetto JSON.' };
+  }
   const updates = {};
   const stringFields = ['courseId', 'courseName', 'channel', 'surnameInitial'];
   for (const field of stringFields) {
@@ -26,7 +30,8 @@ function parseProfileUpdate(body) {
     if (body[field] !== null && (typeof body[field] !== 'string' || body[field].length > 120)) {
       return { error: `${field} deve essere una stringa di massimo 120 caratteri o null.` };
     }
-    updates[field] = typeof body[field] === 'string' ? body[field].trim() || null : null;
+    const value = typeof body[field] === 'string' ? body[field].trim() || null : null;
+    updates[field] = field === 'courseId' || field === 'surnameInitial' ? value?.toUpperCase() || null : value;
   }
 
   for (const [field, min, max] of [['cohortYear', 1900, 2200], ['currentCourseYear', 1, 20]]) {
@@ -50,7 +55,7 @@ router.get('/', (req, res) => {
   const profile = getStudentProfile(db, req.user.sub);
   if (!profile) return res.status(404).json({ error: 'Profilo non trovato.' });
   return res.json({
-    profile,
+    profile: toProfileDto(profile),
     selectedElectiveIds: getSelectedElectiveIds(db, req.user.sub),
     onboardingRequired: !isConfigured(profile)
   });
@@ -76,7 +81,7 @@ router.put('/', (req, res, next) => {
     }
 
     return res.json({
-      profile,
+      profile: toProfileDto(profile),
       selectedElectiveIds: getSelectedElectiveIds(db, req.user.sub),
       onboardingRequired: !isConfigured(profile)
     });

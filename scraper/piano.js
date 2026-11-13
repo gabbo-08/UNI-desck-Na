@@ -2,6 +2,8 @@
 // Legge dalla pagina "Dati Carriera > Piano di Studi" (ESIS) intestazione e tabella degli insegnamenti.
 
 const PIANO_PATH = '/esis/caricaMenu.do?azione=pianiStudio';
+const TABLE_READY_TIMEOUT_MS = 1200;
+const { safeErrorMeta } = require('../lib/safe-log');
 
 /**
  * Estrae corso e coorte dall'intestazione del Piano di Studi ESIS.
@@ -22,13 +24,16 @@ async function openPianoPage(page, esisUrl) {
   const origin = new URL(esisUrl).origin;
   // ESIS può completare il rendering dopo il timeout: il contenuto resta leggibile.
   await page.goto(`${origin}${PIANO_PATH}`, { waitUntil: 'domcontentloaded', timeout: 30000 })
-    .catch(error => console.warn('[piano] Navigazione lenta:', error.message));
+    .catch(error => console.warn('[piano] Navigazione lenta:', safeErrorMeta(error)));
 
   await page.waitForFunction(
     () => /Insegnamenti del Piano|Piano di Studi/i.test(document.body ? document.body.innerText : ''),
     { timeout: 6000 }
   ).catch(() => {});
-  await new Promise(resolve => setTimeout(resolve, 1200));
+  await page.waitForFunction(() => Array.from(document.querySelectorAll('table')).some(table => {
+    const text = table.innerText || '';
+    return /\bCodice\b/i.test(text) && /\bCFU\b/i.test(text) && /Descrizione/i.test(text);
+  }), { timeout: TABLE_READY_TIMEOUT_MS }).catch(() => {});
 }
 
 /**
@@ -76,7 +81,7 @@ async function scrapePianoPage(page, esisUrl) {
     );
     return { header, table };
   } catch (error) {
-    console.warn('[piano] Piano non disponibile:', error.message);
+    console.warn('[piano] Piano non disponibile:', safeErrorMeta(error));
     return { header: { annoImmatricolazione: null, codiceCorso: null }, table: null };
   }
 }

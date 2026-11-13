@@ -1,6 +1,7 @@
 // scraper/timetable.js
 const fs = require('fs');
 const path = require('path');
+const { safeErrorMeta } = require('../lib/safe-log');
 
 // 1. Carica dinamicamente la mappa di Unina
 const uninaMapPath = path.join(__dirname, '../config/unina-map.json'); // Assicurati di mettere il JSON in una cartella 'config' o adatta il percorso
@@ -9,7 +10,7 @@ let uninaMap = { dipartimenti: {}, corsi: {} };
 try {
   uninaMap = JSON.parse(fs.readFileSync(uninaMapPath, 'utf-8'));
 } catch (error) {
-  console.warn("[timetable] Impossibile caricare unina-map.json. Verifica il percorso.", error.message);
+  console.warn("[timetable] Impossibile caricare unina-map.json. Verifica il percorso.", safeErrorMeta(error));
 }
 
 const EASYACADEMY_BASE_URL = 'https://easyacademy.unina.it/agendastudenti';
@@ -81,7 +82,7 @@ async function getTimetableData({ courseCode, studyYear, channel }) {
       ]
     };
   } catch (error) {
-    console.error("[timetable] Errore durante il recupero da EasyAcademy:", error);
+  console.error("[timetable] Errore durante il recupero da EasyAcademy:", safeErrorMeta(error));
     throw new Error('TIMETABLE_FETCH_FAILED');
   }
 }

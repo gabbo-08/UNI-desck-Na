@@ -5,6 +5,13 @@ const snapshots = require('../services/career-snapshots');
 const slowSync = require('../services/slow-sync');
 const { getDatiCarriera } = require('../scraper/segrepass');
 const { submitAppelloAction } = require('../scraper/prenotazioni');
+const { getSessionCredentials } = require('../services/server-sessions');
+const { safeErrorMeta } = require('../lib/safe-log');
+const crypto = require('node:crypto');
+const { saveBookingReceipt, getLatestBookingReceipt } = require('../db/repository');
+const bookingInFlight = new Map();
+const bookingDone = new Map();
+const BOOKING_RECEIPT_TTL_MS = 10 * 60 * 1000;
 
 /**
  * GET /api/career/slow-data
@@ -14,8 +21,9 @@ const { submitAppelloAction } = require('../scraper/prenotazioni');
  */
 router.get('/slow-data', (req, res) => {
   const profileId = req.user.sub;
-  const codiceFiscale = req.user.codiceFiscale || profileId;
-  const { password } = req.user;
+  const credentials = getSessionCredentials(req.authSession.tokenHash);
+  const codiceFiscale = credentials?.codiceFiscale || profileId;
+  const password = credentials?.password;
 
   // Dati già pronti: restituiscili subito.
   const snapshot = snapshots.getSlowSnapshot(profileId);
@@ -28,7 +36,7 @@ router.get('/slow-data', (req, res) => {
     });
   }
 
-  // Senza password (token vecchio) non si può avviare lo scraping.
+  // Le credenziali decifrate servono solo per avviare lo scraping protetto.
   if (!password) {
     return res.json({ status: 'error', error: 'CREDENTIALS_REQUIRED' });
   }
@@ -42,34 +50,24 @@ router.get('/slow-data', (req, res) => {
   return res.json({ status: 'loading' });
 });
 
-// Endpoint legacy: scraping rapido con credenziali nel body.
-router.post('/', async (req, res) => {
-  const { username, codiceFiscale, password } = req.body;
-  const user = codiceFiscale || username;
-
-  if (!user || !password) {
-    return res.status(400).json({ success: false, error: 'CREDENTIALS_REQUIRED' });
-  }
-
-  try {
-    // Phase 'fast': estrae anagrafica, libretto esami e PIN
-    const data = await getDatiCarriera(
-      { codiceFiscale: user, password },
-      { phase: 'fast' }
-    );
-    res.json({ success: true, data });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: error.code || 'CAREER_ERROR',
-      message: error.message
-    });
-  }
-});
-
 router.post('/book', async (req, res) => {
   const { annopri, numAppello } = req.body || {};
   const profileId = req.user.sub;
+  if (typeof annopri !== 'string' || typeof numAppello !== 'string' || annopri.length > 80 || numAppello.length > 80) {
+    return res.status(400).json({ success: false, code: 'INVALID_BOOKING_TARGET', error: 'Appello non valido.' });
+  }
+  const bookingKey = `${profileId}:${annopri}:${numAppello}`;
+  const persistedReceipt = getLatestBookingReceipt(profileId, annopri, numAppello);
+  if (persistedReceipt && persistedReceipt.status === 'submitted') {
+    return res.json({ success: true, message: 'Prenotazione già inviata.', receipt: persistedReceipt, alreadySubmitted: true });
+  }
+  const previous = bookingDone.get(bookingKey);
+  if (previous && previous > Date.now()) {
+    return res.json({ success: true, message: 'Prenotazione già inviata.' });
+  }
+  if (bookingInFlight.has(bookingKey)) {
+    return res.status(409).json({ success: false, code: 'BOOKING_IN_PROGRESS', error: 'Prenotazione già in corso.' });
+  }
   const snapshot = snapshots.getSlowSnapshot(profileId);
   const allowed = (snapshot?.prenotazioni || []).some(item =>
     String(item.annopri || '') === String(annopri || '') &&
@@ -84,9 +82,12 @@ router.post('/book', async (req, res) => {
     });
   }
 
+  bookingInFlight.set(bookingKey, true);
   try {
+    const credentials = getSessionCredentials(req.authSession.tokenHash);
+    if (!credentials?.password) return res.status(401).json({ error: 'Sessione non valida.', code: 'SESSION_EXPIRED' });
     await getDatiCarriera(
-      { codiceFiscale: req.user.codiceFiscale, password: req.user.password },
+      { codiceFiscale: credentials.codiceFiscale, password: credentials.password },
       {
         phase: 'fast',
         onEsisReady: ({ page, esisUrl }) => submitAppelloAction(
@@ -96,13 +97,26 @@ router.post('/book', async (req, res) => {
         )
       }
     );
-    return res.json({ success: true, message: 'Prenotazione effettuata.' });
+    bookingDone.set(bookingKey, Date.now() + BOOKING_RECEIPT_TTL_MS);
+    const receipt = saveBookingReceipt(profileId, {
+      id: crypto.randomUUID(),
+      annopri,
+      numAppello,
+      status: 'submitted',
+      message: 'Prenotazione effettuata.',
+      createdAt: new Date().toISOString()
+    });
+    return res.json({ success: true, message: 'Prenotazione effettuata.', receipt });
   } catch (error) {
     return res.status(error.status || 502).json({
       success: false,
       code: error.code || 'APPELLO_BOOKING_FAILED',
-      error: error.message || 'Prenotazione non riuscita.'
+      error: 'Prenotazione non riuscita.'
     });
+  } finally {
+    bookingInFlight.delete(bookingKey);
+    const now = Date.now();
+    for (const [key, expiresAt] of bookingDone) if (expiresAt <= now) bookingDone.delete(key);
   }
 });
 

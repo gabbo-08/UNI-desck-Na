@@ -53,3 +53,28 @@ export function safeExternalUrl(value: string | null | undefined): string | null
     return null;
   }
 }
+
+/**
+ * PagoPA/Unina links are data received from an upstream portal. Keep the
+ * payment action restricted to HTTPS and official domains so a malformed or
+ * tampered scraper result cannot turn the button into an open redirect.
+ */
+export function safePaymentUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:') return null;
+    const host = url.hostname.toLowerCase();
+    const configured = String(process.env.NEXT_PUBLIC_PAYMENT_HOSTS || '')
+      .split(',')
+      .map(item => item.trim().toLowerCase())
+      .filter(Boolean);
+    const official = host === 'unina.it' || host.endsWith('.unina.it') ||
+      host === 'pagopa.gov.it' || host.endsWith('.pagopa.gov.it');
+    const configuredMatch = configured.some(allowed => host === allowed || host.endsWith(`.${allowed}`));
+    if (!official && !configuredMatch) return null;
+    return url.href;
+  } catch {
+    return null;
+  }
+}
