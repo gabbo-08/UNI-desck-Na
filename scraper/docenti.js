@@ -1271,7 +1271,7 @@ async function getDocentiData(userCredentials = {}, dependencies = {}) {
           item => `${item.name}|${item.courseName}|${item.date}|${item.group}`
         );
       }
-      if (subscriptions.some(item => item.professorId)) {
+      if (process.env.DOCENTI_COLLECT_TESTS === 'true' && subscriptions.some(item => item.professorId)) {
         const teacherTests = await collectTeacherTests(page, subscriptions, extract);
         tests = dedupe(
           [...tests, ...teacherTests],
