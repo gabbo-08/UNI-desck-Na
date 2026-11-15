@@ -1,4 +1,4 @@
-const { queueScrapingTask } = require('./pool');
+﻿const { queueScrapingTask } = require('./pool');
 const { extractTables: extractTablesFromPage, enableFastMode, humanDelay } = require('./utils');
 const { getPortalCookies, setPortalCookies, deletePortalCookies } = require('../utils/sessionStore');
 const { safeErrorMeta } = require('../lib/safe-log');
@@ -975,11 +975,17 @@ async function loginStudente(page, username, password, sessionKey = null) {
     }
   }
 
-  await page.goto(DOCENTI_LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  const loginResponse = await page.goto(DOCENTI_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 35000 }).catch(() => null);
+  const loginHttpStatus = loginResponse?.status?.() ?? null;
 
   // 1. Seleziona la scheda Studente e aspetta lo stato attivo prima di usare il form.
   await page.waitForFunction(() => Array.from(document.querySelectorAll('a, button, li, .nav-link, span, div'))
-    .some(element => (element.textContent || '').trim().toLowerCase() === 'studente'), { timeout: 15000 }).catch(() => {
+    .some(element => (element.textContent || '').trim().toLowerCase() === 'studente'), { timeout: 30000 }).catch(async () => {
+      const diag = await page.evaluate(() => ({
+        title: document.title || '',
+        snippet: (document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 180)
+      })).catch(() => ({ title: '', snippet: '' }));
+      console.warn(`[Docenti] Login form assente (HTTP ${loginHttpStatus}, url=${page.url()}, title="${diag.title}"): ${diag.snippet}`);
       const error = new Error('La scheda Studente del portale Docenti non è stata caricata.');
       error.code = 'DOCENTI_LOGIN_FORM_UNAVAILABLE';
       throw error;
