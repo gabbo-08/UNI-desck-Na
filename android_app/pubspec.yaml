@@ -1,5 +1,5 @@
-name: segrepass_mobile
-description: "App Android Segrepass che si collega al server personale."
+name: unidesk_na_mobile
+description: "App Android indipendente UniDesk NA che si collega al server personale."
 # The following line prevents the package from being accidentally published to
 # pub.dev using `flutter pub publish`. This is preferred for private packages.
 publish_to: 'none' # Remove this line if you wish to publish to pub.dev
@@ -36,6 +36,8 @@ dependencies:
   cupertino_icons: ^1.0.8
   webview_flutter: ^4.13.1
   shared_preferences: ^2.5.3
+  firebase_core: ^5.1.0
+  firebase_messaging: ^17.0.1
 
 dev_dependencies:
   flutter_test:

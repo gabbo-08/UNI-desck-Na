@@ -1,10 +1,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <application
-        android:label="Segrepass Dashboard"
+        android:label="UniDesk NA"
         android:name="${applicationName}"
         android:usesCleartextTraffic="false"
         android:icon="@drawable/ic_segrepass">
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:resource="@string/default_notification_channel_id" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

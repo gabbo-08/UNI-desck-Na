@@ -55,6 +55,13 @@ export type IscrizioneDocente = {
   courseCode?: string | null;
 };
 
+export type RicevimentoDocente = {
+  giorno?: string | null;
+  orario?: string | null;
+  luogo?: string | null;
+  note?: string | null;
+};
+
 export type DettaglioDocente = {
   profilo: ProfiloDocente;
   materiali: {
@@ -62,6 +69,7 @@ export type DettaglioDocente = {
     ftp: MaterialeDocente[];
     riservato: MaterialeDocente[];
   };
+  ricevimento?: RicevimentoDocente[];
   appelli: AppelloDocente[];
   iscrizioni: IscrizioneDocente[];
 };
@@ -85,6 +93,7 @@ export type TassaItem = {
   importo?: number;
   amount?: number;
   scadenza?: string;
+  scadenzaISO?: string;
   dueDate?: string;
   paidAt?: string;
   dataPagamento?: string;
@@ -472,6 +481,10 @@ export function apiUrl(path: string): string {
   return `${API_BASE}${path}`;
 }
 
+export function teacherPhotoUrl(teacherId: string): string {
+  return apiUrl(`/api/docenti/teacher/${encodeURIComponent(teacherId)}/photo`);
+}
+
 function jsonHeaders(options: RequestInit = {}): Headers {
   const headers = new Headers(options.headers);
   if (options.body !== undefined && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
@@ -676,6 +689,45 @@ export async function fetchDocentiSummary(options: { refresh?: boolean } = {}): 
   return normalizeDocentiSummary(res);
 }
 
+export type DocentiStatus = {
+  enabled: boolean;
+  state: 'ready' | 'stale' | 'refreshing' | 'disconnected' | 'disabled';
+  refreshing?: boolean;
+  stale?: boolean;
+  fetchedAt?: string | null;
+  canReconnect?: boolean;
+};
+
+export async function fetchDocentiStatus(): Promise<DocentiStatus> {
+  return fetchWithAuth(apiUrl('/api/docenti/status')) as Promise<DocentiStatus>;
+}
+
+export async function reconnectDocenti(): Promise<{ connected: boolean; status: DocentiStatus }> {
+  return fetchWithAuth(apiUrl('/api/docenti/reconnect'), { method: 'POST', body: JSON.stringify({}) }) as Promise<{ connected: boolean; status: DocentiStatus }>;
+}
+
+export async function fetchPushVapidKey(): Promise<{ configured: boolean; publicKey?: string }> {
+  return fetchWithAuth(apiUrl('/api/notifications/vapid-public-key')) as Promise<{ configured: boolean; publicKey?: string }>;
+}
+
+export async function subscribePush(subscription: PushSubscriptionJSON): Promise<void> {
+  await fetchWithAuth(apiUrl('/api/notifications/subscribe'), {
+    method: 'POST',
+    body: JSON.stringify({ subscription })
+  });
+}
+
+export async function unsubscribePush(endpoint: string): Promise<void> {
+  await fetchWithAuth(apiUrl('/api/notifications/subscribe'), {
+    method: 'DELETE',
+    body: JSON.stringify({ endpoint })
+  });
+}
+
+export async function sendPushTest(): Promise<{ sent: number; subscriptions: number }> {
+  return fetchWithAuth(apiUrl('/api/notifications/test'), { method: 'POST', body: JSON.stringify({}) }) as Promise<{ sent: number; subscriptions: number }>;
+}
+
 export async function fetchFavoriteAnnouncements(): Promise<DocenteAnnouncementGroup[]> {
   const result = await fetchWithAuth(apiUrl('/api/docenti/favorite-announcements'));
   return Array.isArray(result) ? result : [];
@@ -694,6 +746,19 @@ export async function saveProfessorPreference(value: Omit<ProfessorPreference, '
 }
 export async function deleteProfessorPreference(id: number): Promise<void> {
   await fetchWithAuth(apiUrl(`/api/docenti/preferences/${id}`), { method: 'DELETE' });
+}
+
+export type SupportReportCategory = 'bug' | 'materiali' | 'docenti' | 'carriera' | 'privacy' | 'altro';
+
+export async function submitSupportReport(payload: {
+  category: SupportReportCategory;
+  description: string;
+  context?: { screen?: string; appVersion?: string; route?: string; code?: string };
+}): Promise<{ accepted: boolean; reportId: string }> {
+  return fetchWithAuth(apiUrl('/api/support/report'), {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  }) as Promise<{ accepted: boolean; reportId: string }>;
 }
 
 export async function fetchTeacherDetail(

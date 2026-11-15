@@ -7,6 +7,7 @@ const {
   upsertStudentProfile,
   saveDocentiDataCache,
   getDocentiDataCache,
+  savePushSubscription,
   deleteStudentData,
   purgeExpiredPersonalData
 } = require('../db/repository');
@@ -40,11 +41,16 @@ test('la cancellazione profilo elimina sessioni, cache e preferenze collegate', 
     const profileId = 'delete-profile';
     upsertStudentProfile(database, { id: profileId });
     saveDocentiDataCache(profileId, { available: true, subscriptions: [{ courseName: 'Corso' }] }, database);
+    savePushSubscription(profileId, {
+      endpoint: 'https://push.example.test/lifecycle',
+      keys: { p256dh: 'p256dh-lifecycle', auth: 'auth-lifecycle' }
+    }, database);
     createServerSession(profileId, { password: 'test-only' }, { database });
     assert.equal(deleteStudentData(profileId, database), 1);
     assert.equal(database.prepare('SELECT 1 FROM StudentProfile WHERE id = ?').get(profileId), undefined);
     assert.equal(database.prepare('SELECT 1 FROM Sessions WHERE profile_id = ?').get(profileId), undefined);
     assert.equal(database.prepare('SELECT 1 FROM DocentiDataCache WHERE profile_id = ?').get(profileId), undefined);
+    assert.equal(database.prepare('SELECT 1 FROM PushSubscriptions WHERE profile_id = ?').get(profileId), undefined);
   } finally {
     database.close();
   }

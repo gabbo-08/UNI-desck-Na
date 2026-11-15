@@ -47,7 +47,8 @@ export function sanitizeAnnouncementHtml(value: string): string {
 export function safeExternalUrl(value: string | null | undefined): string | null {
   if (!value) return null;
   try {
-    const url = new URL(value, window.location.origin);
+    const baseOrigin = typeof window !== 'undefined' ? window.location.origin : 'https://unidesk.invalid';
+    const url = new URL(value, baseOrigin);
     return ['http:', 'https:', 'mailto:'].includes(url.protocol) ? url.href : null;
   } catch {
     return null;

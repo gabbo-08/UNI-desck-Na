@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { seal } = require('../lib/secret-box');
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 8;
 const DEFAULT_DB_PATH = path.resolve(__dirname, '../data/unicorno.sqlite');
 
 function ensureDataDir() {
@@ -128,6 +128,36 @@ function initSchema(database) {
       data_json TEXT NOT NULL,
       fetched_at TEXT NOT NULL
     );
+
+    -- Segnalazioni tecniche cifrate: non memorizzano password o token.
+    CREATE TABLE IF NOT EXISTS SupportReports (
+      id TEXT PRIMARY KEY,
+      profile_id TEXT NOT NULL,
+      category TEXT NOT NULL,
+      description_ciphertext TEXT NOT NULL,
+      context_json TEXT,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (profile_id) REFERENCES StudentProfile(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_support_reports_created
+      ON SupportReports (created_at);
+
+    -- Web Push: subscription cifrate e legate al profilo, mai restituite al client.
+    CREATE TABLE IF NOT EXISTS PushSubscriptions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      profile_id TEXT NOT NULL,
+      endpoint_hash TEXT NOT NULL UNIQUE,
+      subscription_ciphertext TEXT NOT NULL,
+      user_agent TEXT,
+      created_at TEXT NOT NULL,
+      last_seen_at TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      FOREIGN KEY (profile_id) REFERENCES StudentProfile(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_push_subscriptions_profile
+      ON PushSubscriptions (profile_id, enabled);
   `);
 
   // Elimina le vecchie sessioni JWT salvate in chiaro: non sono compatibili

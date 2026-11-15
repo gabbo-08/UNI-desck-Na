@@ -24,6 +24,35 @@ test('parseDate converte date italiane e mantiene ISO', () => {
   assert.equal(parseDate(null), null);
 });
 
+test('findPaymentTables riconosce le varianti dell’intestazione della scadenza', () => {
+  const result = findPaymentTables([
+    {
+      source: 'debiti',
+      headers: ['Causale', 'Data di scadenza', 'Importo da pagare'],
+      records: [{
+        Causale: 'Contributo regionale',
+        'Data di scadenza': '30/11/2026',
+        'Importo da pagare': '130,00'
+      }]
+    },
+    {
+      source: 'debiti',
+      headers: ['Descrizione', 'Scadenza pagamento', 'Importo'],
+      records: [{
+        Descrizione: 'Seconda rata',
+        'Scadenza pagamento': '15/12/2026',
+        Importo: '200,00'
+      }]
+    }
+  ]);
+
+  assert.equal(result.pending.length, 2);
+  assert.deepEqual(result.pending.map(item => item.dueDate), ['2026-11-30', '2026-12-15']);
+  assert.equal(result.pending[0].description, 'Contributo regionale');
+  assert.equal(result.pending[0].amount, 130);
+  assert.equal(result.summary.nextDeadline, '2026-11-30');
+});
+
 test('findPaymentTables distingue pagamenti effettuati e debiti', () => {
   const result = findPaymentTables([
     {
@@ -128,4 +157,15 @@ test('buildTaxesSummary normalizza snapshot paid/pending e alias italiani', () =
   assert.equal(summary.pending.length, 1);
   assert.equal(summary.summary.totalPaid, 125.5);
   assert.equal(summary.summary.totalPending, 10);
+});
+
+test('buildTaxesSummary crea gli alias usati da Agenda e Scadenze', () => {
+  const result = buildTaxesSummary({
+    inDebito: [{ descrizione: 'Tassa', importo: '90,00', scadenzaISO: '2026-12-01' }]
+  });
+
+  assert.equal(result.pending[0].description, 'Tassa');
+  assert.equal(result.pending[0].amount, 90);
+  assert.equal(result.pending[0].dueDate, '2026-12-01');
+  assert.equal(result.summary.nextDeadline, '2026-12-01');
 });

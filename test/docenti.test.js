@@ -8,7 +8,9 @@ const {
   fetchAnnouncementsForProfessors,
   fetchTeacherDetail,
   fetchTeacherPhoto,
-  matchesImageSignature
+  matchesImageSignature,
+  dedupeMaterialTree,
+  ensureDocentiSessionResponse
 } = require('../scraper/docenti');
 const { mapSubscription, isUsableSubscription, mapDocentiTest } = require('../scraper/docenti');
 
@@ -103,6 +105,34 @@ test('scarta righe senza insegnamento e non interpreta tabelle anagrafiche come 
   const professorOnly = mapSubscription({ nomeDocente: 'Flavia', cognomeDocente: 'Giannetti' });
   assert.equal(isUsableSubscription(professorOnly), false);
   assert.equal(isUsableSubscription({ courseName: 'GIANNETTI FLAVIA', professor: 'GIANNETTI FLAVIA' }), false);
+});
+
+test('deduplica ricorsivamente cartelle e file ripetuti dal portale', () => {
+  const tree = dedupeMaterialTree([
+    { id: 'folder-1', nome: 'ESERCIZI', tipo: 'D', children: [
+      { id: 'file-1', nome: 'Lezione1.pdf', tipo: 'F', url: 'https://www.docenti.unina.it/file/1' },
+      { id: 'file-1', nome: 'Lezione1.pdf', tipo: 'F', url: 'https://www.docenti.unina.it/file/1' }
+    ] },
+    { id: 'folder-1', nome: 'ESERCIZI', tipo: 'D', children: [] }
+  ]);
+
+  assert.equal(tree.length, 1);
+  assert.equal(tree[0].children.length, 1);
+  assert.equal(tree[0].children[0].nome, 'Lezione1.pdf');
+});
+
+test('unisce i sottoalberi quando la stessa cartella arriva da pagine diverse', () => {
+  const tree = dedupeMaterialTree([
+    { materialId: 'folder-1', nome: 'ESERCIZI', tipo: 'D', children: [
+      { materialId: 'file-1', nome: 'Lezione1.pdf', tipo: 'F' }
+    ] },
+    { materialId: 'folder-1', nome: 'ESERCIZI', tipo: 'D', children: [
+      { materialId: 'file-2', nome: 'Lezione2.pdf', tipo: 'F' }
+    ] }
+  ]);
+
+  assert.equal(tree.length, 1);
+  assert.deepEqual(tree[0].children.map(item => item.nome), ['Lezione1.pdf', 'Lezione2.pdf']);
 });
 
 test('separa test e gruppi dalla tabella personale Docenti', () => {
@@ -251,13 +281,16 @@ test('fetchAnnouncementsForProfessors scarta risposte senza contenuto valido', a
           return { id: 'teacher-1', nome: 'LUCA', cognome: 'ROSSI', email: 'luca.rossi@unina.it' };
         }
         if (path.endsWith('/insegnamenti')) {
-          return { content: [{ nomeInse: 'Analisi I', codInse: 'A1' }] };
+          return { content: [{ nomeInse: 'Analisi I', codInse: 'A1' }, { nomeInse: 'Analisi I', codInse: 'A1' }] };
         }
         if (path.includes('/materiale-didattico/')) {
           return [{ id: 1, nome: 'Materiale', tipo: 'D' }];
         }
         if (path.includes('/insegnamenti-appelli')) {
           return { content: [{ id: 8, nomeInse: 'Analisi I', dataAppello: '2027-01-10' }] };
+        }
+        if (path.includes('/orari-ricevimento')) {
+          return { content: [{ giorno: 'Mercoledì', oraInizio: '10:00', oraFine: '12:00', sede: 'Studio 12' }] };
         }
         return null;
       }
@@ -268,6 +301,9 @@ test('fetchAnnouncementsForProfessors scarta risposte senza contenuto valido', a
     assert.equal(detail.materiali.pubblico[0].tipo, 'cartella');
     assert.equal(detail.appelli[0].dataEsame, '2027-01-10');
     assert.equal(detail.iscrizioni[0].insegnamento, 'Analisi I');
+    assert.equal(detail.iscrizioni.length, 1);
+    assert.equal(detail.ricevimento[0].luogo, 'Studio 12');
+    assert.equal(detail.ricevimento[0].orario, '10:00 - 12:00');
   });
 
   assert.deepEqual(groups, []);
@@ -321,4 +357,11 @@ test('segnala l\'assenza di dati quando la pagina non contiene tabelle utili', a
   assert.equal(result.available, false);
   assert.equal(result.reason, 'DOCENTI_DATA_NOT_FOUND');
   assert.deepEqual(result.subscriptions, []);
+});
+
+test('classifica un redirect SSO come sessione Docenti scaduta', () => {
+  assert.throws(
+    () => ensureDocentiSessionResponse({ status: 200, url: 'https://idp.unina.it/login' }),
+    error => error?.code === 'DOCENTI_SESSION_EXPIRED' && error?.status === 401
+  );
 });

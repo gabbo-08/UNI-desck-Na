@@ -30,3 +30,7 @@ data/
 logs/
 project-dump/
 *.log
+# Firebase/FCM project configuration is generated locally and must be reviewed
+# before sharing or publishing.
+android_app/android/app/google-services.json
+android_app/lib/firebase_options.dart

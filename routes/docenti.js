@@ -1,6 +1,6 @@
 // routes/docenti.js
 const express = require('express');
-const { getDocentiData, fetchAnnouncementsForProfessors, fetchAnnouncementsForTeacherIds, fetchTeacherDetail, fetchTeacherPhoto, fetchTeacherFolder, fetchTeacherMaterial, matchesImageSignature, searchTeachers } = require('../scraper/docenti');
+const { getDocentiData, fetchAnnouncementsForProfessors, fetchAnnouncementsForTeacherIds, fetchTeacherDetail, fetchTeacherPhoto, fetchTeacherFolder, fetchTeacherMaterial, matchesImageSignature, dedupeMaterialTree, searchTeachers } = require('../scraper/docenti');
 const authModule = require('../middleware/auth');
 const authMiddleware = authModule.authMiddleware || authModule;
 const { db } = require('../db');
@@ -22,15 +22,96 @@ const teacherDetailCache = new Map(); // chiave -> { value, promise, storedAt, r
 const TEACHER_DETAIL_TTL_MS = 15 * 60 * 1000;
 const TEACHER_ANNOUNCEMENT_TTL_MS = 10 * 60 * 1000;
 const teacherAnnouncementLoads = new Map();
+const reconnectLoads = new Map();
 const restrictedMaterialsEnabled = () => String(process.env.ALLOW_RESTRICTED_DOCENTI_MATERIALS || '').toLowerCase() === 'true';
 const DOCENTI_FAILURE_MESSAGES = {
   DOCENTI_CREDENTIALS_REQUIRED: 'Le credenziali Docenti non sono disponibili. Esci e accedi di nuovo.',
   DOCENTI_EMAIL_REQUIRED: 'Per accedere al portale Docenti serve l’email istituzionale @studenti.unina.it. Esci e accedi di nuovo inserendo quell’indirizzo.',
   DOCENTI_AUTH_REJECTED: 'Il portale Docenti ha rifiutato l’accesso. Verifica email istituzionale e password, poi accedi di nuovo.',
+  DOCENTI_SESSION_EXPIRED: 'La sessione Docenti è scaduta. Ricollega il portale per continuare.',
   DOCENTI_LOGIN_FLOW_FAILED: 'Il portale Docenti non ha completato l’accesso. Riprova tra poco; se continua, il portale potrebbe essere cambiato.',
   DOCENTI_LOGIN_FORM_UNAVAILABLE: 'Il modulo di accesso Studente del portale Docenti non è disponibile al momento.',
   DOCENTI_PRIVATE_LOGIN_FAILED: 'Accesso al portale Docenti non riuscito. Verifica email istituzionale e password.'
 };
+
+function docentiErrorResponse(res, error, fallback = 'Errore Docenti.') {
+  const code = error?.code || 'DOCENTI_ERROR';
+  const status = code === 'DOCENTI_SESSION_EXPIRED' ? 401 : (error?.status || 502);
+  const message = code === 'DOCENTI_SESSION_EXPIRED'
+    ? 'La sessione Docenti è scaduta. Ricollega il portale per continuare.'
+    : (DOCENTI_FAILURE_MESSAGES[code] || fallback);
+  return res.status(status).json({ success: false, error: message, code });
+}
+
+async function refreshDocentiSession(req, dependencies = {}) {
+  const { userEmail, password } = resolveCredentials(req);
+  if (!userEmail || !password) return false;
+  const loader = dependencies.getDocentiData || getDocentiData;
+  try {
+    const result = await loader(
+      { username: userEmail, password, profileKey: String(req.user.sub) },
+      { ...dependencies, enableDocentiSync: true }
+    );
+    // Il login può riuscire anche quando il riepilogo è vuoto: in quel caso
+    // i cookie sono comunque stati rinnovati e la richiesta del file può
+    // essere ripetuta. Gli errori di autenticazione invece fermano il retry.
+    return Boolean(result) && (
+      result.available !== false ||
+      result.reason === 'DOCENTI_DATA_NOT_FOUND'
+    );
+  } catch (error) {
+    console.warn('[docenti] ricollegamento sessione non riuscito:', safeErrorMeta(error));
+    return false;
+  }
+}
+
+async function withDocentiSessionRetry(req, dependencies, operation) {
+  try {
+    return await operation();
+  } catch (error) {
+    if (error?.code !== 'DOCENTI_SESSION_EXPIRED') throw error;
+    if (!await refreshDocentiSession(req, dependencies)) throw error;
+    return operation();
+  }
+}
+
+function docentiStatusForRequest(req, dependencies = {}) {
+  const { userEmail, password } = resolveCredentials(req);
+  const persisted = getDocentiDataCache(req.user.sub);
+  const loading = isDocentiLoading(req.user.sub) || isDocentiCacheLoading(req.user.sub, { username: userEmail, password });
+  const stale = Boolean(persisted && Date.now() - persisted.fetchedAt >= DOCENTI_CACHE_TTL_MS);
+  return {
+    enabled: docentiSyncEnabledForRequest(req, dependencies),
+    state: loading ? 'refreshing' : persisted ? (stale ? 'stale' : 'ready') : 'disconnected',
+    refreshing: loading,
+    stale,
+    fetchedAt: persisted?.fetchedAt ? new Date(persisted.fetchedAt).toISOString() : null,
+    canReconnect: Boolean(userEmail && password)
+  };
+}
+
+function reconnectDocentiForRequest(req, dependencies = {}) {
+  const profileId = String(req.user.sub);
+  const existing = reconnectLoads.get(profileId);
+  if (existing) return existing;
+  const { userEmail, password } = resolveCredentials(req);
+  if (!userEmail || !password) {
+    const error = new Error('Credenziali Docenti non disponibili nella sessione.');
+    error.code = 'DOCENTI_CREDENTIALS_REQUIRED';
+    error.status = 400;
+    return Promise.reject(error);
+  }
+  clearDocentiCache(profileId);
+  invalidateDocentiSnapshot(profileId);
+  const loader = dependencies.getDocentiData || getDocentiData;
+  const task = Promise.resolve()
+    .then(() => loader({ username: userEmail, password, profileKey: profileId }, { ...dependencies, enableDocentiSync: true }))
+    .finally(() => {
+      if (reconnectLoads.get(profileId) === task) reconnectLoads.delete(profileId);
+    });
+  reconnectLoads.set(profileId, task);
+  return task;
+}
 
 function resolveCredentials(req) {
   const credentials = getSessionCredentials(req.authSession?.tokenHash) || {};
@@ -104,8 +185,15 @@ function refreshTeacherDetail(cacheKey, identifier, coursePrefix, dependencies) 
   const promise = loadTeacherDetail(identifier, { ...dependencies, coursePrefix })
     .then(detail => {
       if (!detail) return null;
-      if (!restrictedMaterialsEnabled() && detail.materiali) {
-        detail.materiali = { ...detail.materiali, riservato: [] };
+      if (detail.materiali) {
+        detail.materiali = Object.fromEntries(
+          ['pubblico', 'ftp', 'riservato'].map(section => [
+            section,
+            restrictedMaterialsEnabled() || section !== 'riservato'
+              ? dedupeMaterialTree(detail.materiali[section])
+              : []
+          ])
+        );
       }
       if (detail.profilo?.id) {
         // fetchTeacherDetail already downloads and validates the photo. Keep
@@ -241,7 +329,8 @@ function createDocentiRouter(dependencies = {}) {
 
       if (isHardFailure(data)) {
         const status = data.reason === 'DOCENTI_EMAIL_REQUIRED' ? 400
-          : data.reason === 'DOCENTI_AUTH_REJECTED' ? 424 : 502;
+          : data.reason === 'DOCENTI_AUTH_REJECTED' ? 424
+            : data.reason === 'DOCENTI_SESSION_EXPIRED' ? 401 : 502;
         res.status(status).json({
           success: false,
           error: DOCENTI_FAILURE_MESSAGES[data.reason] || `Acquisizione Docenti non riuscita (${data.reason}).`,
@@ -257,9 +346,8 @@ function createDocentiRouter(dependencies = {}) {
 
       return data;
     } catch (error) {
-      const status = error.status || 502;
       console.warn('[docenti] richiesta non riuscita:', safeErrorMeta(error));
-      res.status(status).json({ success: false, error: 'Errore Docenti.', code: error.code || 'DOCENTI_ERROR' });
+      docentiErrorResponse(res, error);
       return null;
     }
   }
@@ -363,6 +451,30 @@ function createDocentiRouter(dependencies = {}) {
     return deleteProfessorPreference(req.user.sub, Number(req.params.id)) ? res.status(204).end() : res.status(404).end();
   });
 
+  router.get('/status', requireAuth, (req, res) => {
+    if (!docentiSyncEnabledForRequest(req, dependencies)) {
+      return res.status(403).json({ enabled: false, state: 'disabled', code: 'DOCENTI_SYNC_DISABLED' });
+    }
+    return res.json(docentiStatusForRequest(req, dependencies));
+  });
+
+  router.post('/reconnect', requireAuth, async (req, res) => {
+    if (!docentiSyncEnabledForRequest(req, dependencies)) {
+      return res.status(403).json({ error: 'Integrazione Docenti disabilitata.', code: 'DOCENTI_SYNC_DISABLED' });
+    }
+    try {
+      const data = await reconnectDocentiForRequest(req, dependencies);
+      if (data?.available === false && data.reason && data.reason !== 'DOCENTI_DATA_NOT_FOUND') {
+        return res.status(data.reason === 'DOCENTI_AUTH_REJECTED' ? 424 : 502)
+          .json({ error: DOCENTI_FAILURE_MESSAGES[data.reason] || 'Ricollegamento Docenti non riuscito.', code: data.reason });
+      }
+      return res.json({ connected: true, status: docentiStatusForRequest(req, dependencies) });
+    } catch (error) {
+      console.warn('[docenti] ricollegamento richiesto non riuscito:', safeErrorMeta(error));
+      return docentiErrorResponse(res, error, 'Ricollegamento Docenti non riuscito.');
+    }
+  });
+
   router.get('/teacher/:id', requireAuth, async (req, res) => {
     if (!docentiSyncEnabledForRequest(req, dependencies)) return res.status(403).json({ error: 'Integrazione Docenti disabilitata.', code: 'DOCENTI_SYNC_DISABLED' });
     if (!validExternalId(req.params.id, 80)) return res.status(400).json({ error: 'Identificativo docente non valido.' });
@@ -372,8 +484,9 @@ function createDocentiRouter(dependencies = {}) {
     }
     const cacheKey = `${String(req.user.sub)}|detail-v6|${String(req.params.id)}|${coursePrefix.toLowerCase()}`;
     const cached = teacherDetailCache.get(cacheKey);
-    if (cached?.value && Date.now() - cached.storedAt < TEACHER_DETAIL_TTL_MS) {
-      if (!cached.refreshing) {
+    if (cached?.value) {
+      const isStale = Date.now() - cached.storedAt >= TEACHER_DETAIL_TTL_MS;
+      if (isStale && !cached.refreshing) {
         cached.refreshing = true;
         void refreshTeacherDetail(cacheKey, identifierForTeacher(req), coursePrefix, { ...dependencies, sessionKey: req.user.sub })
           .finally(() => {
@@ -381,32 +494,48 @@ function createDocentiRouter(dependencies = {}) {
             if (current) current.refreshing = false;
           });
       }
+      // Stale-while-revalidate: a previous valid profile is useful while the
+      // portal is slow or temporarily unavailable. The refresh runs once in
+      // the background and never blocks the click on the teacher name.
       return res.json(cached.value);
     }
     try {
-      const detail = await refreshTeacherDetail(cacheKey, identifierForTeacher(req), coursePrefix, { ...dependencies, sessionKey: req.user.sub });
+      const detail = await withDocentiSessionRetry(
+        req,
+        dependencies,
+        () => refreshTeacherDetail(cacheKey, identifierForTeacher(req), coursePrefix, { ...dependencies, sessionKey: req.user.sub })
+      );
       if (!detail) return res.status(404).json({ error: 'Docente non trovato.' });
       return res.json(detail);
     } catch (error) {
       console.warn('[docenti] dettaglio non disponibile:', safeErrorMeta(error));
-      return res.status(502).json({ error: 'Dettaglio docente non disponibile.' });
+      return docentiErrorResponse(res, error, 'Dettaglio docente non disponibile.');
     }
   });
 
   router.get('/teacher/:id/photo', requireAuth, async (req, res) => {
     if (!docentiSyncEnabledForRequest(req, dependencies)) return res.status(403).json({ error: 'Integrazione Docenti disabilitata.', code: 'DOCENTI_SYNC_DISABLED' });
     if (!validExternalId(req.params.id, 80)) return res.status(400).json({ error: 'Identificativo docente non valido.' });
-    const photo = await fetchTeacherPhoto(req.params.id, { ...dependencies, sessionKey: req.user.sub });
-    if (!photo) return res.status(404).end();
-    const contentType = String(photo.contentType || '').split(';')[0].toLowerCase();
-    if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(contentType) ||
-      !Buffer.isBuffer(photo.buffer) || photo.buffer.length > 5 * 1024 * 1024 ||
-      !matchesImageSignature(contentType, photo.buffer)) {
-      return res.status(502).json({ error: 'Immagine docente non valida.' });
+    try {
+      const photo = await withDocentiSessionRetry(
+        req,
+        dependencies,
+        () => fetchTeacherPhoto(req.params.id, { ...dependencies, sessionKey: req.user.sub })
+      );
+      if (!photo) return res.status(404).end();
+      const contentType = String(photo.contentType || '').split(';')[0].toLowerCase();
+      if (!['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(contentType) ||
+        !Buffer.isBuffer(photo.buffer) || photo.buffer.length > 5 * 1024 * 1024 ||
+        !matchesImageSignature(contentType, photo.buffer)) {
+        return res.status(502).json({ error: 'Immagine docente non valida.' });
+      }
+      res.set('Content-Type', contentType);
+      res.set('Cache-Control', 'private, no-store');
+      return res.send(photo.buffer);
+    } catch (error) {
+      console.warn('[docenti] foto non disponibile:', safeErrorMeta(error));
+      return docentiErrorResponse(res, error, 'Immagine docente non disponibile.');
     }
-    res.set('Content-Type', contentType);
-    res.set('Cache-Control', 'private, no-store');
-    return res.send(photo.buffer);
   });
 
   router.get('/teacher/:id/folder/:folderId', requireAuth, async (req, res) => {
@@ -421,17 +550,21 @@ function createDocentiRouter(dependencies = {}) {
       if (section === 'arearis' && !restrictedMaterialsEnabled()) {
         return res.status(403).json({ error: 'Materiali riservati disabilitati.', code: 'RESTRICTED_MATERIALS_DISABLED' });
       }
-      const items = await fetchTeacherFolder(
-        req.params.id,
-        req.params.folderId,
-        section,
-        typeof req.query.course === 'string' ? req.query.course : '',
-        { ...dependencies, sessionKey: req.user.sub }
+      const items = await withDocentiSessionRetry(
+        req,
+        dependencies,
+        () => fetchTeacherFolder(
+          req.params.id,
+          req.params.folderId,
+          section,
+          typeof req.query.course === 'string' ? req.query.course : '',
+          { ...dependencies, sessionKey: req.user.sub }
+        )
       );
       return res.json({ items });
     } catch (error) {
       console.warn('[docenti] cartella non disponibile:', safeErrorMeta(error));
-      return res.status(502).json({ error: 'Contenuto cartella non disponibile.' });
+      return docentiErrorResponse(res, error, 'Contenuto cartella non disponibile.');
     }
   });
 
@@ -449,13 +582,17 @@ function createDocentiRouter(dependencies = {}) {
       }
       const course = typeof req.query.course === 'string' ? req.query.course.trim() : '';
       if (course.length > 200 || !/^[A-Za-z0-9_, -]*$/.test(course)) return res.status(400).json({ error: 'Filtro corso non valido.' });
-      const material = await fetchTeacherMaterial(
-        req.params.id,
-        req.params.folderId,
-        req.params.fileId,
-        section,
-        course,
-        { ...dependencies, sessionKey: req.user.sub }
+      const material = await withDocentiSessionRetry(
+        req,
+        dependencies,
+        () => fetchTeacherMaterial(
+          req.params.id,
+          req.params.folderId,
+          req.params.fileId,
+          section,
+          course,
+          { ...dependencies, sessionKey: req.user.sub }
+        )
       );
       if (!material) return res.status(404).json({ error: 'Materiale non disponibile.' });
       const safeName = String(material.filename || `materiale-${req.params.fileId}`).replace(/[^A-Za-z0-9._ -]+/g, '_').slice(0, 120);
@@ -468,7 +605,7 @@ function createDocentiRouter(dependencies = {}) {
       return res.send(material.buffer);
     } catch (error) {
       console.warn('[docenti] materiale non disponibile:', safeErrorMeta(error));
-      return res.status(502).json({ error: 'Materiale non disponibile.' });
+      return docentiErrorResponse(res, error, 'Materiale non disponibile.');
     }
   });
 

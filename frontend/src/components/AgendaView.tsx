@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { ArrowDownToLine, CalendarDays, ChevronLeft, ChevronRight, Clock3, MapPin } from 'lucide-react';
-import type { Metriche, Prenotazione, TassaSnapshot, TimetableEvent } from '@/lib/api';
+import type { Prenotazione, TassaSnapshot, TimetableEvent } from '@/lib/api';
 
 type AgendaKind = 'lesson' | 'exam' | 'test' | 'deadline' | 'tax';
 type AgendaEvent = {
@@ -85,14 +85,14 @@ function stableUid(value: string) {
     hash ^= value.charCodeAt(index);
     hash = Math.imul(hash, 16777619);
   }
-  return `${(hash >>> 0).toString(16)}@segrepass`;
+  return `${(hash >>> 0).toString(16)}@unidesk-na`;
 }
 
 function buildCalendarFile(events: AgendaEvent[]) {
   const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, 'Z');
   const lines = [
-    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Segrepass//Agenda Studente//IT', 'CALSCALE:GREGORIAN',
-    'METHOD:PUBLISH', 'X-WR-CALNAME:Agenda Segrepass', 'X-WR-TIMEZONE:Europe/Rome',
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//UniDesk NA//Agenda Studente//IT', 'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH', 'X-WR-CALNAME:Agenda UniDesk NA', 'X-WR-TIMEZONE:Europe/Rome',
     'BEGIN:VTIMEZONE', 'TZID:Europe/Rome', 'X-LIC-LOCATION:Europe/Rome',
     'BEGIN:DAYLIGHT', 'TZOFFSETFROM:+0100', 'TZOFFSETTO:+0200', 'TZNAME:CEST',
     'DTSTART:19700329T020000', 'RRULE:FREQ=YEARLY;BYMONTH=3;BYDAY=-1SU', 'END:DAYLIGHT',
@@ -165,7 +165,7 @@ function makeEvents(lessons: TimetableEvent[], exams: Prenotazione[], taxes?: Ta
   const pending = taxes?.pending || taxes?.inDebito || [];
   const datedTaxEvents = new Set<string>();
   pending.forEach((tax, index) => {
-    const date = toEventDate(tax.dueDate || tax.scadenza);
+    const date = toEventDate(tax.dueDate || tax.scadenzaISO || tax.scadenza);
     if (!date) return;
     datedTaxEvents.add(date);
     events.push({
@@ -218,7 +218,7 @@ export default function AgendaView({ lessons, exams, taxes, timetableLoading, ti
     const href = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = href;
-    link.download = 'agenda-segrepass.ics';
+    link.download = 'agenda-unidesk-na.ics';
     link.click();
     URL.revokeObjectURL(href);
   };

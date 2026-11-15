@@ -1,5 +1,5 @@
-﻿const { queueScrapingTask } = require('./pool');
-const { extractTables: extractTablesFromPage } = require('./utils');
+const { queueScrapingTask } = require('./pool');
+const { extractTables: extractTablesFromPage, enableFastMode, humanDelay } = require('./utils');
 const { getPortalCookies, setPortalCookies, deletePortalCookies } = require('../utils/sessionStore');
 const { safeErrorMeta } = require('../lib/safe-log');
 
@@ -7,6 +7,7 @@ const DOCENTI_ORIGIN = 'https://www.docenti.unina.it';
 const DOCENTI_API = `${DOCENTI_ORIGIN}/webdocenti-be`;
 const DOCENTI_LOGIN_URL = `${DOCENTI_ORIGIN}/login`;
 const DOCENTI_SUMMARIES_URL = `${DOCENTI_ORIGIN}/personal-area/student/summaries`;
+const DOCENTI_BROWSER_USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
 const HTTP_TIMEOUT_MS = 8000;
 const MAX_TEACHER_PHOTO_BYTES = 5 * 1024 * 1024;
@@ -144,6 +145,49 @@ function dedupe(list, keyFn) {
   });
 }
 
+function materialIdentity(item, parentPath = '') {
+  const id = String(item?.materialId ?? item?.idMateriale ?? item?.uuid ?? item?.id ?? item?.idDirectory ?? item?.idFile ?? '').trim();
+  if (id) return `id:${id}`;
+  const url = absoluteDocentiUrl(item?.url || item?.downloadUrl || item?.link || '');
+  if (url) return `url:${url}`;
+  const path = String(item?.percorso || item?.path || item?.folderPath || parentPath || '').trim();
+  const name = String(item?.nome || item?.name || item?.nomeFile || item?.filename || '').trim();
+  const type = String(item?.tipo || '').trim();
+  return `fallback:${path}|${name}|${type}`;
+}
+
+/**
+ * Removes repeated folders/files without changing the order supplied by the
+ * portal. Some Web Docenti responses repeat the same tree on every page; the
+ * identity prefers the portal id, then the download URL, then a scoped path.
+ */
+function dedupeMaterialTree(items, parentPath = '') {
+  const byKey = new Map();
+  for (const item of toArray(items)) {
+    if (!item || typeof item !== 'object') continue;
+    const key = materialIdentity(item, parentPath);
+    const name = String(item.nome || item.name || item.nomeFile || item.filename || '').trim();
+    const nextPath = parentPath ? `${parentPath}/${name}` : name;
+    const children = item.children ?? item.files ?? item.figli ?? item.contenuto;
+    const normalized = {
+      ...item,
+      children: dedupeMaterialTree(children, nextPath)
+    };
+    const previous = byKey.get(key);
+    if (!previous) {
+      byKey.set(key, normalized);
+      continue;
+    }
+    // La stessa cartella può essere restituita più volte con figli diversi:
+    // unisci i sottoalberi prima di deduplicarli, senza perdere materiale.
+    previous.children = dedupeMaterialTree([
+      ...toArray(previous.children),
+      ...toArray(normalized.children)
+    ], nextPath);
+  }
+  return [...byKey.values()];
+}
+
 /* ------------------------------------------------------------------ */
 /* Mapping payload API                                                 */
 /* ------------------------------------------------------------------ */
@@ -181,7 +225,7 @@ function isUsableSubscription(subscription) {
   return hasCourseName || hasCourseCode;
 }
 
-function mapTeacherDetail(teacher, teachings = [], materials = {}, exams = [], options = {}) {
+function mapTeacherDetail(teacher, teachings = [], materials = {}, exams = [], receiveTimes = [], options = {}) {
   const coursePrefix = options.coursePrefix || null;
   const normalizedCourses = String(coursePrefix || '').split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
   const matchesCourse = item => {
@@ -198,9 +242,11 @@ function mapTeacherDetail(teacher, teachings = [], materials = {}, exams = [], o
   teachings = teachings.filter(matchesCourse);
   exams = exams.filter(matchesCourse);
   const mapMaterial = item => ({
-    id: String(item?.id ?? item?.idDirectory ?? item?.idFile ?? item?.nome ?? ''),
+    id: String(item?.materialId ?? item?.idMateriale ?? item?.uuid ?? item?.id ?? item?.idDirectory ?? item?.idFile ?? item?.nome ?? ''),
     nome: String(pick(item, ['nome', 'name', 'nomeFile', 'filename'], 'Materiale')),
-    tipo: item?.tipo === 'D' || item?.idDirectory || item?.children ? 'cartella' : 'file',
+    tipo: item?.tipo === 'D' || item?.idDirectory ||
+      [item?.children, item?.files, item?.figli, item?.contenuto].some(value => Array.isArray(value) && value.length > 0)
+      ? 'cartella' : 'file',
     url: absoluteDocentiUrl(pick(item, ['url', 'downloadUrl', 'link'], null))
       || (item?.tipo === 'F' ? materialFileUrl(item?.id ?? item?.idFile) : null),
     percorso: absoluteDocentiUrl(pick(item, ['percorso', 'path', 'folderPath'], null)),
@@ -219,7 +265,7 @@ function mapTeacherDetail(teacher, teachings = [], materials = {}, exams = [], o
         nestedIds.add(child.id);
       }
     }
-    return mapped.filter(item => !nestedIds.has(item.id));
+    return dedupeMaterialTree(mapped.filter(item => !nestedIds.has(item.id)));
   };
   const mapExam = item => ({
     id: String(item?.id ?? item?.idAppello ?? `${item?.codInse || ''}-${item?.dataAppello || ''}`),
@@ -230,10 +276,62 @@ function mapTeacherDetail(teacher, teachings = [], materials = {}, exams = [], o
     prenotato: Boolean(item?.prenotato ?? item?.booked ?? false),
     courseCode: String(pick(item, ['courseCode', 'course_id', 'codCorso', 'codInse'], '')) || null
   });
+  const receiveTimeItems = toArray(receiveTimes);
+  const rawOfficeHours = receiveTimeItems.length > 0 ? receiveTimes : pick(teacher, [
+    'ricevimento', 'ricevimenti', 'orariRicevimento', 'orarioRicevimento',
+    'officeHours', 'office_hours', 'disponibilita'
+  ], null);
+  const mapOfficeHour = item => {
+    if (typeof item === 'string') return { giorno: null, orario: item.trim(), luogo: null, note: null };
+    const value = item && typeof item === 'object' ? item : {};
+    return {
+      giorno: String(pick(value, ['giorno', 'day', 'giornata', 'weekday'], '') || '').trim() || null,
+      orario: (() => {
+        const start = String(pick(value, ['oraInizio', 'orarioInizio', 'startTime'], '') || '').trim();
+        const end = String(pick(value, ['oraFine', 'orarioFine', 'endTime'], '') || '').trim();
+        const range = start && end ? `${start} - ${end}` : start || end || String(pick(value, ['orario', 'ora', 'ore', 'time', 'fasciaOraria'], '') || '').trim();
+        return range || null;
+      })(),
+      luogo: String(pick(value, ['luogo', 'aula', 'stanza', 'ufficio', 'sede', 'location'], '') || '').trim() || null,
+      note: String(pick(value, ['note', 'descrizione', 'description'], '') || '')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;/gi, "'")
+        .replace(/&amp;/gi, '&')
+        .replace(/<[^>]*>/g, ' ')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/\s+/g, ' ')
+        .trim() || null
+    };
+  };
+  const officeHourItems = toArray(rawOfficeHours);
+  const normalizedOfficeHours = officeHourItems.length > 0
+    ? officeHourItems
+    : rawOfficeHours && typeof rawOfficeHours === 'object' ? [rawOfficeHours] : [];
+  const ricevimento = normalizedOfficeHours.map(mapOfficeHour)
+    .filter(item => item.giorno || item.orario || item.luogo || item.note);
   const photoValue = pick(teacher, ['fotoUrl', 'foto', 'photoUrl', 'avatarUrl', 'immagine', 'fotoDocente', 'immagineProfilo'], null);
   const photo = typeof photoValue === 'object'
     ? absoluteDocentiUrl(pick(photoValue, ['url', 'href', 'src'], null))
     : absoluteDocentiUrl(photoValue);
+  const mappedSubscriptions = toArray(teachings).map(item => ({
+    insegnamento: String(pick(item, ['nomeInse', 'nomeInsegnamento', 'courseName'], 'Insegnamento')),
+    courseCode: String(pick(item, ['codInse', 'codiceInsegnamento'], '')) || null,
+    iscritto: Boolean(item?.iscritto ?? item?.isSubscribed ?? false)
+  }));
+  const subscriptionsByCourse = new Map();
+  for (const item of mappedSubscriptions) {
+    const normalizedName = normalizeLabel(item.insegnamento);
+    const normalizedCode = String(item.courseCode || '').trim().toUpperCase();
+    const key = normalizedName && normalizedName !== 'INSEGNAMENTO'
+      ? `name:${normalizedName}`
+      : `code:${normalizedCode || normalizedName}`;
+    const previous = subscriptionsByCourse.get(key);
+    subscriptionsByCourse.set(key, previous
+      ? { ...previous, courseCode: previous.courseCode || item.courseCode, iscritto: previous.iscritto || item.iscritto }
+      : item);
+  }
   return {
     profilo: {
       id: String(pick(teacher, ['id', 'idDocente', 'id_docente', 'professorId'], '')),
@@ -252,12 +350,9 @@ function mapTeacherDetail(teacher, teachings = [], materials = {}, exams = [], o
       ftp: mapMaterials(toArray(materials.ftp).filter(matchesCourse)),
       riservato: mapMaterials(toArray(materials.riservato).filter(matchesCourse))
     },
+    ricevimento,
     appelli: toArray(exams).map(mapExam),
-    iscrizioni: toArray(teachings).map(item => ({
-      insegnamento: String(pick(item, ['nomeInse', 'nomeInsegnamento', 'courseName'], 'Insegnamento')),
-      courseCode: String(pick(item, ['codInse', 'codiceInsegnamento'], '')) || null,
-      iscritto: Boolean(item?.iscritto ?? item?.isSubscribed ?? false)
-    }))
+    iscrizioni: [...subscriptionsByCourse.values()]
   };
 }
 
@@ -269,52 +364,24 @@ async function fetchTeacherDetail(professor, dependencies = {}) {
   if (!teacher?.id) return null;
 
   const id = encodeURIComponent(teacher.id);
-  const [detail, teachings, pubblico, ftp, riservato, exams, photo] = await Promise.all([
+  const [detail, teachings, pubblico, ftp, riservato, exams, receiveTimes, photo] = await Promise.all([
     fetchJson(`/docenti/${id}`),
     fetchJson(`/docenti/${id}/insegnamenti`),
     fetchJson(`/docenti/${id}/materiale-didattico/areapubb`),
     fetchJson(`/docenti/${id}/materiale-didattico/aree-ftp?p=0&s=500`),
     fetchJson(`/docenti/${id}/materiale-didattico/arearis?p=0&s=500`),
     fetchJson(`/docenti/${id}/insegnamenti-appelli?p=0&s=99`),
+    fetchJson(`/docenti/${id}/orari-ricevimento?p=0&s=10`).catch(() => null),
     fetchTeacherPhoto(teacher.id, dependencies)
   ]);
 
-  const courseCodes = String(dependencies.coursePrefix || '')
-    .split(',')
-    .map(value => value.trim())
-    .filter(Boolean);
-  const loadFolderContents = async (items, section, depth = 0) => {
-    if (depth >= 4) return items;
-    const result = [];
-    for (const item of toArray(items)) {
-      const itemId = item?.id ?? item?.idDirectory;
-      if (item?.tipo !== 'D' || !itemId) {
-        result.push(item);
-        continue;
-      }
-      const itemCode = pick(item, ['codInse', 'codiceInsegnamento'], '');
-      const codes = itemCode ? [itemCode] : courseCodes;
-      const responses = await Promise.all((codes.length > 0 ? codes : ['']).map(code => fetchJson(
-        `/docenti/${id}/materiale-didattico/${section}/${encodeURIComponent(itemId)}?codIns=${encodeURIComponent(code)}`
-      )));
-      const children = [...new Map(
-        responses
-          .flatMap(contents => toArray(contents?.contenutoCartella ?? contents))
-          .map(child => [String(child?.id ?? child?.idFile ?? child?.nome ?? JSON.stringify(child)), child])
-      ).values()];
-      result.push({
-        ...item,
-        children: await loadFolderContents(children, section, depth + 1)
-      });
-    }
-
-    return result;
-  };
-  const [publicContents, ftpContents, privateContents] = await Promise.all([
-    loadFolderContents(pubblico, 'areapubb'),
-    loadFolderContents(ftp, 'aree-ftp'),
-    loadFolderContents(riservato, 'arearis')
-  ]);
+  // Restituisci il primo livello subito. I contenuti delle cartelle vengono
+  // richiesti dall'endpoint folder solo quando l'utente le apre: evita di
+  // attraversare ricorsivamente fino a quattro livelli durante il click sul
+  // docente e riduce il traffico verso il portale.
+  const publicContents = dedupeMaterialTree(pubblico, 'pubblico');
+  const ftpContents = dedupeMaterialTree(ftp, 'ftp');
+  const privateContents = dedupeMaterialTree(riservato, 'riservato');
 
   const mergedTeacher = {
     ...teacher,
@@ -337,6 +404,7 @@ async function fetchTeacherDetail(professor, dependencies = {}) {
     toArray(teachings),
     { pubblico: publicContents || [], ftp: ftpContents || [], riservato: privateContents || [] },
     toArray(exams),
+    toArray(receiveTimes),
     { coursePrefix: dependencies.coursePrefix }
   );
 }
@@ -357,6 +425,7 @@ async function fetchTeacherPhoto(teacherId, dependencies = {}) {
       },
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
     });
+    ensureDocentiSessionResponse(response, { hasSession: Boolean(cookie) });
     if (!response.ok) return null;
     const contentType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
     if (!TEACHER_IMAGE_TYPES.has(contentType)) return null;
@@ -365,7 +434,11 @@ async function fetchTeacherPhoto(teacherId, dependencies = {}) {
     const buffer = await readBoundedBody(response, MAX_TEACHER_PHOTO_BYTES);
     if (!buffer || !matchesImageSignature(contentType, buffer)) return null;
     return { contentType, buffer };
-  } catch {
+  } catch (error) {
+    if (error?.code === 'DOCENTI_SESSION_EXPIRED') {
+      if (dependencies.sessionKey) deletePortalCookies(dependencies.sessionKey);
+      throw error;
+    }
     return null;
   }
 
@@ -377,12 +450,15 @@ async function fetchTeacherFolder(teacherId, folderId, section, coursePrefix, de
   const responses = await Promise.all((codes.length ? codes : ['']).map(code =>
     fetchJson(`/docenti/${encodeURIComponent(teacherId)}/materiale-didattico/${encodeURIComponent(section)}/${encodeURIComponent(folderId)}?codIns=${encodeURIComponent(code)}`)
   ));
-  return responses.flatMap(value => toArray(value?.contenutoCartella ?? value)).filter(Boolean);
+  return dedupeMaterialTree(
+    responses.flatMap(value => toArray(value?.contenutoCartella ?? value)).filter(Boolean),
+    String(folderId)
+  );
 }
 
 function materialById(items, fileId) {
   for (const item of toArray(items)) {
-    const id = String(item?.id ?? item?.idFile ?? item?.idDirectory ?? '');
+    const id = String(item?.materialId ?? item?.idMateriale ?? item?.uuid ?? item?.id ?? item?.idFile ?? item?.idDirectory ?? '');
     if (id === String(fileId)) return item;
     const nested = materialById(item?.children ?? item?.files ?? item?.figli ?? item?.contenuto, fileId);
     if (nested) return nested;
@@ -418,6 +494,14 @@ async function fetchTeacherMaterial(teacherId, folderId, fileId, section, course
     },
     signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
   });
+  try {
+    ensureDocentiSessionResponse(response, { hasSession: Boolean(cookie) });
+  } catch (error) {
+    if (error?.code === 'DOCENTI_SESSION_EXPIRED' && dependencies.sessionKey) {
+      deletePortalCookies(dependencies.sessionKey);
+    }
+    throw error;
+  }
   if (!response.ok) return null;
   const contentType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
   const allowed = contentType === 'application/pdf' || TEACHER_IMAGE_TYPES.has(contentType);
@@ -594,6 +678,21 @@ function portalCookieHeader(sessionKey) {
   return cookies?.length ? cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ') : '';
 }
 
+function docentiSessionExpiredError() {
+  const error = new Error('La sessione del portale Docenti è scaduta.');
+  error.code = 'DOCENTI_SESSION_EXPIRED';
+  error.status = 401;
+  return error;
+}
+
+function ensureDocentiSessionResponse(response, { hasSession = true } = {}) {
+  const finalUrl = String(response?.url || '');
+  if ((hasSession && [401, 403].includes(Number(response?.status))) || /(?:\/login|\/sso|idp\.)/i.test(finalUrl)) {
+    throw docentiSessionExpiredError();
+  }
+  return response;
+}
+
 async function fetchDocentiJson(path, dependencies = {}) {
   try {
     const cookie = portalCookieHeader(dependencies.sessionKey);
@@ -608,11 +707,16 @@ async function fetchDocentiJson(path, dependencies = {}) {
       },
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
     });
+    ensureDocentiSessionResponse(response, { hasSession: Boolean(cookie) });
     if (!response.ok) return null;
     const contentType = response.headers.get('content-type') || '';
     if (!contentType.includes('json')) return null;
     return await response.json();
   } catch (error) {
+    if (error?.code === 'DOCENTI_SESSION_EXPIRED') {
+      if (dependencies.sessionKey) deletePortalCookies(dependencies.sessionKey);
+      throw error;
+    }
     return null;
   }
 }
@@ -1016,6 +1120,13 @@ async function collectPaginatedEntries(page, entries) {
     const size = Number(url.searchParams.get('s') || 500);
     if (!Number.isFinite(start) || !Number.isFinite(size) || size <= 0) continue;
 
+    const seen = new Set(toArray(entry.json).map(item => {
+      if (item && typeof item === 'object') {
+        return String(item.id ?? item.idIscrizione ?? item.idAppello ?? JSON.stringify(item));
+      }
+      return String(item);
+    }));
+
     for (let pageIndex = start + 1; pageIndex < start + MAX_PAGINATION_PAGES; pageIndex += 1) {
       url.searchParams.set('p', String(pageIndex));
       const next = await page.evaluate(async requestUrl => {
@@ -1025,8 +1136,18 @@ async function collectPaginatedEntries(page, entries) {
       }, url.toString()).catch(() => null);
       const values = toArray(next);
       if (values.length === 0) break;
+      const newValues = values.filter(item => {
+        const key = item && typeof item === 'object'
+          ? String(item.id ?? item.idIscrizione ?? item.idAppello ?? JSON.stringify(item))
+          : String(item);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      if (newValues.length === 0) break;
       all.push({ url: url.toString(), json: next });
       if (values.length < size) break;
+      await humanDelay();
     }
   }
   return all;
@@ -1066,6 +1187,16 @@ async function getDocentiData(userCredentials = {}, dependencies = {}) {
   try {
     return await runScrapingTask({ username, password, profileKey: userCredentials.profileKey }, async (page, data) => {
       console.log('[Docenti] Accesso al portale docenti...');
+
+      // Riduce il traffico inutile (immagini/font/CSS) senza alterare la
+      // fingerprint del browser o tentare di eludere controlli anti-bot.
+      if (typeof page.setUserAgent === 'function') {
+        await page.setUserAgent(DOCENTI_BROWSER_USER_AGENT);
+      }
+      if (typeof page.setExtraHTTPHeaders === 'function') {
+        await page.setExtraHTTPHeaders({ 'Accept-Language': 'it-IT,it;q=0.9' });
+      }
+      await enableFastMode(page);
 
       await loginStudente(page, data.username, data.password, data.profileKey || null);
       console.log('[Docenti] Login eseguito. Navigazione a RIEPILOGO ISCRIZIONI...');
@@ -1250,6 +1381,7 @@ module.exports = {
   mapDocentiGroup,
   mapDocentiTest,
   mapTeacherDetail,
+  dedupeMaterialTree,
   fetchTeacherDetail,
   fetchTeacherPhoto,
   matchesImageSignature,
@@ -1263,5 +1395,7 @@ module.exports = {
   stripHtml,
   DOCENTI_LOGIN_URL,
   DOCENTI_SUMMARIES_URL,
-  DOCENTI_API
+  DOCENTI_API,
+  docentiSessionExpiredError,
+  ensureDocentiSessionResponse
 };

@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
@@ -19,16 +21,57 @@ bool _isPrivateHost(String host) {
       (first == 172 && second >= 16 && second <= 31);
 }
 
-void main() {
-  runApp(const SegrepassApp());
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  try {
+    await Firebase.initializeApp();
+  } catch (_) {
+    // Firebase is optional until the project is configured with FlutterFire.
+  }
 }
 
-class SegrepassApp extends StatelessWidget {
-  const SegrepassApp({super.key});
+class NativePushNotifications {
+  static Future<void> initialize() async {
+    try {
+      FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+      final messaging = FirebaseMessaging.instance;
+      final settings = await messaging.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+        provisional: false,
+      );
+      if (settings.authorizationStatus == AuthorizationStatus.denied) return;
+      await messaging.getToken();
+      FirebaseMessaging.onMessage.listen((message) {
+        debugPrint('[UniDesk Push] Notifica ricevuta in primo piano: ${message.messageId ?? 'senza-id'}');
+      });
+      FirebaseMessaging.onMessageOpenedApp.listen((message) {
+        debugPrint('[UniDesk Push] Notifica aperta: ${message.messageId ?? 'senza-id'}');
+      });
+    } catch (error) {
+      debugPrint('[UniDesk Push] Configurazione non disponibile: $error');
+    }
+  }
+}
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  try {
+    await Firebase.initializeApp();
+    await NativePushNotifications.initialize();
+  } catch (error) {
+    debugPrint('[UniDesk Firebase] Configurazione assente o incompleta: $error');
+  }
+  runApp(const UniDeskApp());
+}
+
+class UniDeskApp extends StatelessWidget {
+  const UniDeskApp({super.key});
 
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'Segrepass Dashboard',
+    title: 'UniDesk NA',
     debugShowCheckedModeBanner: false,
     theme: ThemeData(
       colorScheme: ColorScheme.fromSeed(
@@ -180,7 +223,7 @@ class _AppHomeState extends State<AppHome> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Segrepass'),
+          title: const Text('UniDesk NA'),
           actions: [
             if (controller != null && !_showSettings)
               IconButton(
@@ -241,7 +284,12 @@ class _AppHomeState extends State<AppHome> {
       ),
       const SizedBox(height: 8),
       const Text(
-        'Inserisci l’indirizzo del server Segrepass. L’app si riaprirà direttamente su questo indirizzo ai prossimi avvii.',
+        'Inserisci l’indirizzo del server UniDesk NA. L’app si riaprirà direttamente su questo indirizzo ai prossimi avvii.',
+      ),
+      const SizedBox(height: 8),
+      const Text(
+        'UniDesk NA è un client indipendente e non ufficiale; non è affiliato né approvato dall’Università degli Studi di Napoli Federico II.',
+        style: TextStyle(color: Colors.black54, fontSize: 12),
       ),
       const SizedBox(height: 20),
       TextField(
@@ -250,7 +298,7 @@ class _AppHomeState extends State<AppHome> {
         autocorrect: false,
         decoration: const InputDecoration(
           labelText: 'Indirizzo del server',
-          hintText: 'https://segrepass.example.it',
+          hintText: 'https://unidesk-na.example.it',
           border: OutlineInputBorder(),
           prefixIcon: Icon(Icons.link),
         ),
@@ -260,7 +308,7 @@ class _AppHomeState extends State<AppHome> {
       FilledButton.icon(
         onPressed: _saveAndOpen,
         icon: const Icon(Icons.open_in_browser),
-        label: const Text('Salva e apri Segrepass'),
+        label: const Text('Salva e apri UniDesk NA'),
       ),
       const SizedBox(height: 20),
       const Text(

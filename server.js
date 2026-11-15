@@ -22,10 +22,15 @@ const { csrfProtection, normalizeOrigin } = require('./lib/csrf');
 
 const { db } = require('./db');
 const { startSessionCleanup } = require('./services/server-sessions');
-const { initCluster, closeCluster } = require('./scraper/pool');
+const { initCluster, closeCluster, isClusterReady } = require('./scraper/pool');
 const { assertRuntimeConfig } = require('./lib/runtime-config');
 const { purgeExpiredPersonalData } = require('./db/repository');
 const { safeErrorMeta } = require('./lib/safe-log');
+const { observabilityMiddleware, snapshotMetrics } = require('./lib/observability');
+const { metricsAuthorized } = require('./lib/metrics-access');
+const supportRoutes = require('./routes/support');
+const { createSupportAdminRouter } = require('./routes/support-admin');
+const notificationRoutes = require('./routes/notifications');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -33,6 +38,7 @@ const HOST = process.env.HOST || '0.0.0.0';
 
 const { parseTrustProxy } = require('./lib/proxy-config');
 app.set('trust proxy', parseTrustProxy(process.env.TRUST_PROXY));
+app.use(observabilityMiddleware);
 
 // 🛡️ Sicurezza Intestazioni HTTP
 app.use(helmet());
@@ -54,10 +60,34 @@ app.use('/api', (_req, res, next) => {
 app.use(csrfProtection);
 
 // 🩺 Health Check (Senza Rate Limit)
-app.get('/health', (_, res) => res.json({ status: 'ok', ts: new Date().toISOString() }));
+app.get('/health', (req, res) => res.json({ status: 'ok', ts: new Date().toISOString(), requestId: req.requestId }));
+app.get('/ready', (req, res) => {
+  const databaseReady = Boolean(db && db.open !== false);
+  const scraperReady = isClusterReady();
+  const ready = databaseReady && scraperReady;
+  return res.status(ready ? 200 : 503).json({
+    status: ready ? 'ready' : 'starting',
+    checks: { database: databaseReady, scraper: scraperReady },
+    requestId: req.requestId
+  });
+});
+app.get('/readiness', (req, res) => {
+  const databaseReady = Boolean(db && db.open !== false);
+  const scraperReady = isClusterReady();
+  const ready = databaseReady && scraperReady;
+  return res.status(ready ? 200 : 503).json({
+    status: ready ? 'ready' : 'starting',
+    checks: { database: databaseReady, scraper: scraperReady },
+    requestId: req.requestId
+  });
+});
 
 // ⏱️ Rate Limiting Generale (Corretto il calcolo del tempo)
 app.use(rateLimit({ windowMs: 60 * 1000, max: 100, message: { error: 'Troppe richieste.' } }));
+app.get('/metrics', (req, res) => {
+  if (!metricsAuthorized(req)) return res.status(404).json({ error: 'Risorsa non disponibile.' });
+  return res.json(snapshotMetrics());
+});
 
 // 🔒 Rate Limiting Severo per i Login
 const loginIpLimiter = rateLimit({
@@ -109,6 +139,9 @@ app.use('/api/timetable', authMiddleware, timetableRoutes);
 /* 🔀 ROTTE IBRIDE (Avvisi Pubblici + Area Riservata Protetta)        */
 /* ------------------------------------------------------------------ */
 app.use('/api/docenti', docentiRoutes);
+app.use('/api/support', authMiddleware, supportRoutes);
+app.use('/api/support-admin', createSupportAdminRouter());
+app.use('/api/notifications', authMiddleware, notificationRoutes);
 
 /* ------------------------------------------------------------------ */
 /* ❌ HANDLER ERRORE 404 & GLOBALE 500                                */

@@ -1,0 +1,185 @@
+﻿UNIDESK NA - PROCEDURA CASA
+============================
+
+Questo file contiene la procedura pratica per salvare il progetto su GitHub e pubblicare una demo gratuita. E' pensato per riprendere il lavoro da un altro PC senza portare password, database o log personali.
+
+STATO DEL PROGETTO VERIFICATO
+-----------------------------
+- Backend: npm run check completato.
+- Test backend: 206 superati.
+- Frontend: build Next.js completata.
+- Frontend lint: nessun errore e nessun warning.
+- E2E visuale: 5 test superati; Playwright configura automaticamente le origini locali necessarie.
+- API locale: /health e /ready rispondono 200.
+- Sorgente orario lezioni: services/easyacademy-provider.js.
+- Sorgente orari ricevimento: endpoint Docenti /docenti/{id}/orari-ricevimento?p=0&s=10.
+
+1. PREPARARE IL PROGETTO DA CASA
+---------------------------------
+
+Installa Git for Windows:
+https://git-scm.com/download/win
+
+Oppure GitHub Desktop:
+https://github.com/apps/desktop
+
+Chiudi e riapri il terminale dopo l'installazione:
+
+    git --version
+
+2. CLONARE IL REPOSITORY
+------------------------
+
+Repository:
+https://github.com/gabbo-08/segrepass-api.git
+
+    cd C:\Users\servi\Documents
+    git clone https://github.com/gabbo-08/segrepass-api.git
+    cd segrepass-api
+
+Se trasferisci il progetto da un altro PC, copia il suo contenuto dentro il clone. Il file package.json deve trovarsi direttamente in:
+
+    C:\Users\servi\Documents\segrepass-api\package.json
+
+Non creare per errore una cartella doppia segrepass-api\segrepass-api.
+
+Non copiare queste cartelle o file:
+
+    .git
+    node_modules
+    frontend\node_modules
+    .env
+    frontend\.env.local
+    data
+    logs
+    .next
+    test-results
+
+3. CONTROLLARE E SALVARE TUTTO SU GITHUB
+----------------------------------------
+
+    git pull --rebase origin main
+    git status --short
+    git diff --stat
+    git add -A
+    git status --short
+    git diff --cached --check
+    git diff --cached --name-status
+
+Prima del commit non devono comparire .env, data, logs, file SQLite, token o password. Se compaiono:
+
+    git restore --staged -- .env frontend\.env.local data logs
+
+Salva e pubblica:
+
+    git commit -m "Aggiorna UniDesk NA"
+    git push -u origin main
+
+Aggiornamenti successivi:
+
+    git pull --rebase origin main
+    git add -A
+    git diff --cached --check
+    git commit -m "Descrizione breve della modifica"
+    git push origin main
+
+Non usare git push --force su main.
+
+4. PUBBLICAZIONE GRATUITA DI PROVA CON RENDER
+----------------------------------------------
+
+Render offre Web Service gratuiti utili per demo e test:
+https://render.com/docs/free
+
+Il piano gratuito non e' adatto a dati persistenti: il filesystem e' temporaneo, il servizio si spegne dopo inattivita' e il primo avvio puo' richiedere circa un minuto. Il database SQLite in data/ puo' sparire dopo riavvio, redeploy o sospensione. Per una demo va bene; per uso reale serve un database persistente e un piano adeguato.
+
+4A. BACKEND API
+---------------
+
+Nel pannello Render:
+
+1. New -> Web Service.
+2. Collega GitHub e seleziona gabbo-08/segrepass-api.
+3. Branch: main.
+4. Runtime: Docker.
+5. Dockerfile: Dockerfile nella root.
+6. Piano: Free per una demo.
+
+Render fornisce PORT automaticamente. Il server deve restare su HOST=0.0.0.0.
+
+Variabili da impostare nel pannello Render, mai nel repository:
+
+    NODE_ENV=production
+    CRED_KEY=<64 caratteri esadecimali casuali>
+    COOKIE_SECURE=true
+    PUBLIC_ORIGIN=https://NOME-BACKEND.onrender.com
+    FRONTEND_URL=https://NOME-FRONTEND.onrender.com
+    TRUST_PROXY=1
+    DOCENTI_SYNC_ENABLED=false
+    DOCENTI_USERNAME=
+    DOCENTI_PASSWORD=
+    SUPPORT_ADMIN_TOKEN=<token opzionale per leggere le segnalazioni>
+    ALLOW_RESTRICTED_DOCENTI_MATERIALS=false
+
+Genera CRED_KEY localmente:
+
+    node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+
+Le credenziali Docenti non vanno configurate come segreto globale: il codice
+attuale usa l'accesso esplicito dello studente e conserva la sessione cifrata.
+Lasciare quindi i tre valori Docenti vuoti finché non esiste un flusso di
+servizio separato, autorizzato e verificato.
+
+4B. FRONTEND NEXT.JS
+--------------------
+
+Crea un secondo servizio Render collegato allo stesso repository:
+
+1. New -> Web Service.
+2. Root Directory: frontend.
+3. Runtime: Node.
+4. Build Command: npm ci && npm run build.
+5. Start Command: npm start.
+6. Piano: Free per una demo.
+
+Imposta prima del build:
+
+    NEXT_PUBLIC_BACKEND_URL=https://NOME-BACKEND.onrender.com
+
+Il valore deve essere HTTPS in produzione. Dopo il primo deploy, aggiorna FRONTEND_URL nel backend con l'URL reale del frontend e fai un redeploy.
+
+4C. VERIFICA DEL DEPLOY
+-----------------------
+
+    https://NOME-BACKEND.onrender.com/health
+    https://NOME-BACKEND.onrender.com/ready
+    https://NOME-FRONTEND.onrender.com
+
+Controlla nei log Render: PORT assegnata, database, Chromium/Puppeteer, CORS, CSRF e sincronizzazione Docenti.
+
+5. BUG E LIMITI DA TENERE PRESENTI
+----------------------------------
+
+- Il portale Docenti puo' cambiare endpoint, campi o sessione senza avviso.
+- Gli orari di ricevimento vengono mostrati solo se il portale li pubblica.
+- Segui in app salva una preferenza locale; non modifica l'iscrizione ufficiale del portale Docenti.
+- EasyAcademy e Docenti possono essere lenti, scadere o rispondere con errori.
+- Il piano gratuito Render perde il filesystem locale; non usarlo come archivio definitivo di profili o sessioni.
+- Puppeteer/Chromium richiede memoria e CPU: un free tier puo' andare in timeout.
+- In produzione servono HTTPS, CRED_KEY forte, COOKIE_SECURE=true, PUBLIC_ORIGIN e FRONTEND_URL coerenti.
+- scraper/timetable.js contiene un vecchio stub; la route reale usa services/easyacademy-provider.js.
+- Il lint non mantiene warning; la build passa con `NEXT_PUBLIC_BACKEND_URL` HTTPS.
+- Le segnalazioni vengono salvate cifrate nel database `SupportReports`; non arrivano via email o notifica. Per leggerle in modo operativo configura `SUPPORT_ADMIN_TOKEN` e usa `GET /api/support-admin/reports`.
+
+6. CHECK PRIMA DI OGNI PUBBLICAZIONE
+------------------------------------
+
+    npm run check
+    cd frontend
+    npm run lint
+    npm run build
+    cd ..
+    $env:SMOKE_BASE_URL="http://127.0.0.1:3001"
+    npm run smoke:health
+
+Poi ripeti git status, git diff --cached --check e git diff --cached --name-status prima del push.

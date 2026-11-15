@@ -1,36 +1,32 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+﻿# UniDesk NA
 
-## Getting Started
+Client web indipendente e non ufficiale per studenti. L'applicazione raccoglie dati dal proprio account e li presenta in una dashboard locale; non rappresenta, non è affiliata e non è approvata dall'Università degli Studi di Napoli Federico II.
 
-First, run the development server:
+## Avvio locale
 
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Configura `NEXT_PUBLIC_BACKEND_URL` in `.env.local` se il backend non è esposto sulla stessa origine. Per una build di verifica:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run lint
+npm run build
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Il logo `public/logo_prova.jpg` viene usato senza alterazioni cromatiche. I contenuti visualizzati sono indicativi: per autenticazione, pagamenti, scadenze e comunicazioni fa sempre fede il portale ufficiale.
 
-## Learn More
+## Funzionalità aggiornate
 
-To learn more about Next.js, take a look at the following resources:
+- Ricerca globale di esami, appelli, corsi e docenti.
+- Scadenziario personale e pianificatore esami.
+- Simulatore carriera per voto e CFU.
+- Stato dei servizi, modalità privacy e materiali Docenti preferiti/recenti.
+- Layout adattivo per smartphone, tablet e desktop.
+- Pagine pubbliche `/privacy` e `/terms` e invio di segnalazioni cifrate al backend tramite `POST /api/support/report`. Le segnalazioni vengono registrate nel database del backend; il frontend non invia email e non offre una console amministrativa.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Sicurezza
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Il frontend non salva password, token o dati personali in `localStorage`. Le chiamate usano cookie `HttpOnly` gestiti dal backend; per deploy pubblici usa sempre HTTPS, configura `NEXT_PUBLIC_BACKEND_URL` su un'origine HTTPS e verifica il disclaimer indipendente prima della pubblicazione.

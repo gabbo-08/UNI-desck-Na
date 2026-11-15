@@ -104,11 +104,23 @@ function loadDocentiInBackground(profileId, dependencies = {}) {
     .catch(error => {
       if (!snapshots.isCurrentDocentiLoad(profileId, generation)) return;
       console.warn(`[docenti] Acquisizione per ${safeProfileRef(profileId)} non riuscita:`, safeErrorMeta(error));
-      snapshots.setDocentiSnapshot(profileId, {
-        available: false,
-        reason: error?.code || 'DOCENTI_SCRAPE_FAILED',
-        ...EMPTY_DOCENTI
-      });
+      // Un refresh fallito non deve cancellare dati Docenti già validi:
+      // manteniamo lo snapshot utilizzabile e lasciamo al client lo stato
+      // stale, così bootstrap/polling non scollegano l'integrazione.
+      const previous = snapshots.getDocentiSnapshot(profileId);
+      if (previous?.available) {
+        snapshots.setDocentiSnapshot(profileId, {
+          ...previous,
+          stale: true,
+          lastError: error?.code || 'DOCENTI_SCRAPE_FAILED'
+        });
+      } else {
+        snapshots.setDocentiSnapshot(profileId, {
+          available: false,
+          reason: error?.code || 'DOCENTI_SCRAPE_FAILED',
+          ...EMPTY_DOCENTI
+        });
+      }
     })
     .finally(() => snapshots.clearDocentiLoading(profileId, generation));
 }

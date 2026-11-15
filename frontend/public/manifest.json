@@ -1,6 +1,6 @@
 {
-  "name": "Segrepass Dashboard",
-  "short_name": "Segrepass",
+  "name": "UniDesk NA",
+  "short_name": "UniDesk NA",
   "start_url": "/",
   "display": "standalone",
   "scope": "/",
@@ -8,9 +8,9 @@
   "theme_color": "#0A1C35",
   "icons": [
     {
-      "src": "/icon.svg",
+      "src": "/logo_prova.jpg",
       "sizes": "192x192",
-      "type": "image/svg+xml",
+      "type": "image/jpeg",
       "purpose": "any maskable"
     }
   ]

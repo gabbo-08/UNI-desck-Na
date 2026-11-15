@@ -8,6 +8,7 @@ import {
   type CareerPlanCourse,
   type ProfiloRecord
 } from '@/lib/api';
+import { safeExternalUrl } from '@/lib/safe-content';
 
 type Props = { authenticated: boolean; profile: ProfiloRecord | null };
 
@@ -24,6 +25,7 @@ export default function StudyPlanView({ authenticated, profile }: Props) {
   const [error, setError] = useState('');
 
   const extProfile = profile ?? {};
+  const sourceUrl = safeExternalUrl(data?.plan?.source_url);
 
   const loadPlan = async () => {
     if (!authenticated) return;
@@ -184,14 +186,14 @@ export default function StudyPlanView({ authenticated, profile }: Props) {
             ))}
           </div>
 
-          {data.plan?.source_url && (
+          {sourceUrl && (
             <a
-              href={data.plan.source_url}
+              href={sourceUrl}
               target="_blank"
               rel="noreferrer"
               className="inline-flex items-center gap-2 text-xs text-zinc-500 hover:text-sky-200 transition-colors"
             >
-              Fonte: {data.plan.source_name || 'manifesto ufficiale'} <ExternalLink className="h-3 w-3" />
+              Fonte: {data.plan?.source_name || 'manifesto ufficiale'} <ExternalLink className="h-3 w-3" />
             </a>
           )}
         </>

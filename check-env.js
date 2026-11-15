@@ -1,10 +1,6 @@
 require('dotenv').config();
-
-function isStrongCredentialKey(value) {
-  return /^[0-9a-fA-F]{64}$/.test(value)
-    && new Set(value.toLowerCase()).size >= 8
-    && !/^([0-9a-fA-F])\1+$/.test(value);
-}
+const { isStrongCredentialKey } = require('./lib/security-config');
+const { isExplicitTrustProxy } = require('./lib/proxy-config');
 
 function parseOrigins(value) {
   return String(value || '').split(',').map(item => item.trim()).filter(Boolean);
@@ -26,6 +22,7 @@ function validateOrigins(origins, { production = false } = {}) {
 
 function runChecks(env = process.env) {
   const checks = [];
+  const warnings = [];
   const production = String(env.NODE_ENV || '').trim().toLowerCase() === 'production';
   const check = (name, ok, message) => checks.push({ name, ok, message });
 
@@ -47,19 +44,23 @@ function runChecks(env = process.env) {
       ? 'obbligatoria e deve contenere solo origini https valide'
       : 'deve contenere URL http(s) validi separati da virgole');
 
+  if (!production && origins.length === 0 && !/^(1|true|yes|on)$/i.test(String(env.ALLOW_DYNAMIC_ORIGIN || '').trim())) {
+    warnings.push('FRONTEND_URL non configurato: in sviluppo sono consentite solo le origini locali predefinite; le altre richieste browser verranno rifiutate da CORS/CSRF');
+  }
+
   const debugEnabled = /^(1|true|yes|on)$/i.test(String(env.DEBUG_SCRAPER || '').trim());
   check('DEBUG_SCRAPER', !production || !debugEnabled, 'deve essere disattivato in produzione');
 
   if (production) {
-    check('TRUST_PROXY', Boolean(String(env.TRUST_PROXY || '').trim()),
-      'obbligatorio in produzione: configura solo proxy fidati oppure usa TRUST_PROXY=0');
+    check('TRUST_PROXY', isExplicitTrustProxy(env.TRUST_PROXY),
+      'obbligatorio in produzione: usa 0, un numero di hop o IP/CIDR; non true/on/yes');
     check('PUBLIC_ORIGIN', Boolean(String(env.PUBLIC_ORIGIN || '').trim()),
       'obbligatoria in produzione per fissare host e origine pubblici');
     check('COOKIE_SECURE', String(env.COOKIE_SECURE || 'true').toLowerCase() === 'true',
       'deve essere true in produzione');
   }
 
-  return { checks, production, hasDocentiCredentials };
+  return { checks, warnings, production, hasDocentiCredentials };
 }
 
 function main(env = process.env) {
@@ -69,6 +70,7 @@ function main(env = process.env) {
   }
   console.log(`\nDocenti: ${result.hasDocentiCredentials ? 'credenziali presenti' : 'credenziali assenti (solo avvisi pubblici)'}`);
   console.log(`Ambiente: ${env.NODE_ENV || 'development'}`);
+  for (const warning of result.warnings) console.warn(`[WARN] ${warning}`);
   return result.checks.every(item => item.ok);
 }
 

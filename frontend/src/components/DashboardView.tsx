@@ -1,7 +1,9 @@
 
 'use client';
 
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import dynamic from 'next/dynamic';
+import Image from 'next/image';
 import {
   House,
   BookOpen,
@@ -29,6 +31,9 @@ import {
   CalendarCheck,
   UserCheck,
   X,
+  Eye,
+  EyeOff,
+  MoreHorizontal,
 } from 'lucide-react';
 import {
   fetchDocentiSummary,
@@ -58,18 +63,35 @@ import {
 } from '@/lib/api';
 import { safePaymentUrl } from '@/lib/safe-content';
 import ProfileSetupView from '@/components/ProfileSetupView';
-import StudyPlanView from '@/components/StudyPlanView';
-import TimetableView from '@/components/TimetableView';
 import AgendaView from '@/components/AgendaView';
-import DocentiView from '@/components/DocentiView';
 import ThemeSwitch from '@/components/ThemeSwitch';
 import PinReveal from '@/components/PinReveal';
+import SupportReportForm from '@/components/SupportReportForm';
+import GlobalSearchPanel from '@/components/GlobalSearchPanel';
+import DeadlineView from '@/components/DeadlineView';
+import NotificationCenter from '@/components/NotificationCenter';
+import OfficialServicesPanel, { type OfficialService } from '@/components/OfficialServicesPanel';
+import { getTimetableClock, getTimetableEventState, timetableEventSortKey } from '@/lib/timetable-time';
 
-type View = 'home' | 'agenda' | 'career' | 'prenotazioni' | 'taxes' | 'docenti' | 'timetable' | 'plan';
+const DeferredStudyPlanView = dynamic(() => import('@/components/StudyPlanView'), { ssr: false });
+const DeferredTimetableView = dynamic(() => import('@/components/TimetableView'), { ssr: false });
+const DeferredDocentiView = dynamic(() => import('@/components/DocentiView'), { ssr: false });
+
+type View = 'home' | 'agenda' | 'deadlines' | 'career' | 'prenotazioni' | 'taxes' | 'docenti' | 'timetable' | 'plan';
+
+const configuredOfficialServices: OfficialService[] = (() => {
+  try {
+    const parsed = JSON.parse(process.env.NEXT_PUBLIC_OFFICIAL_SERVICES || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+})();
 
 const NAV: { id: View; label: string; icon: typeof House }[] = [
   { id: 'home', label: 'Home', icon: House },
   { id: 'agenda', label: 'Agenda', icon: CalendarRange },
+  { id: 'deadlines', label: 'Scadenze', icon: Clock },
   { id: 'career', label: 'Carriera & Voti', icon: BookOpen },
   { id: 'prenotazioni', label: 'Prenotazioni', icon: CalendarCheck },
   { id: 'taxes', label: 'Tasse & Pagamenti', icon: CreditCard },
@@ -78,8 +100,10 @@ const NAV: { id: View; label: string; icon: typeof House }[] = [
   { id: 'plan', label: 'Piano di Studi', icon: ClipboardList },
 ];
 
+const MOBILE_NAV = NAV.filter(({ id }) => ['home', 'agenda', 'deadlines', 'career', 'prenotazioni', 'taxes'].includes(id));
+
 const CARD =
-  'rounded-2xl border border-[#3B7BC4]/30 bg-[#0A1B31]/75 shadow-[0_0_28px_-10px_rgba(70,150,230,0.55)] backdrop-blur-sm';
+  'dashboard-card rounded-2xl border border-[#3B7BC4]/30 bg-[#0A1B31]/75 shadow-[0_0_28px_-10px_rgba(70,150,230,0.55)] backdrop-blur-sm';
 const SECTION_TITLE = 'section-title mb-3 text-sm font-bold tracking-wide text-white flex items-center gap-2';
 const GHOST_BTN =
   'inline-flex min-h-10 items-center gap-2 rounded-lg border border-white/15 bg-white/5 px-3 text-sm text-slate-200 transition hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5AB0F0] disabled:opacity-50';
@@ -157,6 +181,40 @@ function dataLeggibile(value?: string | null): string {
   return formatDate(testo);
 }
 
+function normalizeCourseLabel(value?: string | null): string {
+  return String(value || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/\bIII\b/g, '3')
+    .replace(/\bII\b/g, '2')
+    .replace(/\bIV\b/g, '4')
+    .replace(/\bI\b/g, '1')
+    .replace(/[^A-Z0-9]+/g, ' ')
+    .trim();
+}
+
+function canonicalCourseLabel(value: string | undefined, candidates: string[]): string | undefined {
+  if (!value) return undefined;
+  const normalized = normalizeCourseLabel(value);
+  if (!normalized) return value;
+  const exact = candidates.find(candidate => normalizeCourseLabel(candidate) === normalized);
+  if (exact) return exact;
+
+  const sourceTokens = new Set(normalized.split(' ').filter(token => token.length > 2));
+  if (!sourceTokens.size) return value;
+  let best: { label: string; score: number } | null = null;
+  for (const candidate of candidates) {
+    const candidateTokens = new Set(normalizeCourseLabel(candidate).split(' ').filter(token => token.length > 2));
+    if (!candidateTokens.size) continue;
+    const overlap = [...sourceTokens].filter(token => candidateTokens.has(token)).length;
+    const score = overlap / Math.max(sourceTokens.size, candidateTokens.size);
+    const safeMatch = overlap >= 2 || (sourceTokens.size === 1 && candidateTokens.size === 1 && score === 1);
+    if (safeMatch && (!best || score > best.score)) best = { label: candidate, score };
+  }
+  return best?.label || value;
+}
+
 // Giorno dell'orario in forma lunga, es. "Mercoledì 4 novembre".
 function formatGiornoLungo(iso: string): string {
   const [y, m, g] = iso.split('-').map(Number);
@@ -181,16 +239,22 @@ export default function DashboardView() {
   const [onboardingRequired, setOnboardingRequired] = useState(false);
   const [editingProfile, setEditingProfile] = useState(false);
   const [activeView, setActiveView] = useState<View>('home');
+  const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
 
   const [searchExam, setSearchExam] = useState('');
   const [searchPrenotazione, setSearchPrenotazione] = useState('');
+  const [simulatorGrade, setSimulatorGrade] = useState('');
+  const [simulatorCfu, setSimulatorCfu] = useState('6');
   const [taxTab, setTaxTab] = useState<'pending' | 'paid'>('pending');
   const [slowNotice, setSlowNotice] = useState<'loading' | 'ready' | 'error' | null>(null);
   const [dismissedSlowNotice, setDismissedSlowNotice] = useState<'loading' | 'ready' | 'error' | null>(null);
   const [bookingReceipt, setBookingReceipt] = useState<{ id: string; message: string; at: string } | null>(null);
+  const [timetableReady, setTimetableReady] = useState(false);
+  // Stato solo in memoria: non persiste dati personali nel browser.
+  const [privacyMode, setPrivacyMode] = useState(false);
   const timetableLoadedRef = useRef(false);
 
-  const clearSession = () => {
+  const clearSession = useCallback(() => {
     setAuthenticated(false);
     setProfile(null);
     setData(null);
@@ -201,8 +265,9 @@ export default function DashboardView() {
     setEnableDocentiSync(false);
     setDocentiEnabled(false);
     setBookingReceipt(null);
+    setTimetableReady(false);
     timetableLoadedRef.current = false;
-  };
+  }, []);
 
   useEffect(() => {
     const onSessionExpired = () => {
@@ -211,9 +276,9 @@ export default function DashboardView() {
     };
     window.addEventListener('segrepass:session-expired', onSessionExpired);
     return () => window.removeEventListener('segrepass:session-expired', onSessionExpired);
-  }, []);
+  }, [clearSession]);
 
-  const caricaDati = async (refresh = false) => {
+  const caricaDati = useCallback(async (refresh = false) => {
     await Promise.resolve();
     setLoading(true);
     setError('');
@@ -230,7 +295,7 @@ export default function DashboardView() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [clearSession]);
 
   useEffect(() => {
     let active = true;
@@ -248,7 +313,7 @@ export default function DashboardView() {
         if (bootstrap.metriche) setData(bootstrap.metriche);
         // Mostra subito ciò che è già in cache; completa medie, CFU e PIN in
         // background senza bloccare il primo rendering della dashboard.
-        void caricaDati();
+        if (!bootstrap.metriche || !bootstrap.sync?.fromCache) void caricaDati();
       })
       .catch((sessionError: unknown) => {
         if (active) setError(sessionError instanceof Error ? sessionError.message : 'Impossibile verificare la sessione.');
@@ -258,7 +323,7 @@ export default function DashboardView() {
       });
 
     return () => { active = false; };
-  }, []);
+  }, [caricaDati]);
 
   useEffect(() => {
     setDismissedSlowNotice(null);
@@ -417,23 +482,30 @@ const handleLogin = async (e: React.FormEvent) => {
 
   const totalPaid = taxesObj?.summary?.totalPaid ?? paidTaxes.reduce((sum, item) => sum + (item.amount ?? item.importo ?? 0), 0);
   const totalPending = taxesObj?.summary?.totalPending ?? pendingTaxes.reduce((sum, item) => sum + (item.amount ?? item.importo ?? 0), 0);
-  const nextDeadline = taxesObj?.summary?.nextDeadline || pendingTaxes.map(t => t.dueDate || t.scadenza).filter(Boolean).sort()[0];
+  const nextDeadline = taxesObj?.summary?.nextDeadline || pendingTaxes.map(t => t.dueDate || t.scadenzaISO || t.scadenza).filter(Boolean).sort()[0];
 
   // Orario per la Home: caricato una volta; la cache del backend evita scraping ripetuti.
   const [timetableEvents, setTimetableEvents] = useState<TimetableEvent[]>([]);
   const [timetableLoading, setTimetableLoading] = useState(false);
   const [timetableError, setTimetableError] = useState('');
+  const [clockNow, setClockNow] = useState(() => new Date());
 
   useEffect(() => {
-    if (!authenticated || !['agenda', 'timetable'].includes(activeView) || timetableLoadedRef.current) return;
+    const timer = window.setInterval(() => setClockNow(new Date()), 30_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!authenticated || !['home', 'agenda', 'timetable'].includes(activeView) || timetableLoadedRef.current) return;
     let active = true;
     setTimetableLoading(true);
     setTimetableError('');
     fetchTimetable()
-      .then((res) => { if (active) { setTimetableEvents(res.timetable?.events ?? []); timetableLoadedRef.current = true; } })
+      .then((res) => { if (active) { setTimetableEvents(res.timetable?.events ?? []); timetableLoadedRef.current = true; setTimetableReady(true); } })
       .catch((err: unknown) => {
         if (!active) return;
         setTimetableEvents([]);
+        setTimetableReady(false);
         setTimetableError(err instanceof Error ? err.message : 'Orario non disponibile.');
       })
       .finally(() => { if (active) setTimetableLoading(false); });
@@ -443,36 +515,45 @@ const handleLogin = async (e: React.FormEvent) => {
   // Prossima lezione: il primo giorno con lezioni da oggi in avanti.
   // Per oggi conta solo ciò che non è ancora finito.
   const prossimoGiorno = useMemo(() => {
-    const ora = new Date();
-    const pad = (n: number) => String(n).padStart(2, '0');
-    const oggiIso = `${ora.getFullYear()}-${pad(ora.getMonth() + 1)}-${pad(ora.getDate())}`;
-    const oraAttuale = `${pad(ora.getHours())}:${pad(ora.getMinutes())}`;
+    const clock = getTimetableClock(clockNow);
+    const annotated = timetableEvents.map(event => ({
+      event,
+      state: getTimetableEventState(event, clockNow)
+    }));
+    const active = annotated
+      .filter(item => item.state === 'active' && item.event.date === clock.dateKey)
+      .sort((a, b) => timetableEventSortKey(a.event).localeCompare(timetableEventSortKey(b.event)))
+      .map(item => item.event);
+    const future = annotated
+      .filter(item => (item.state === 'upcoming' || item.state === 'unknown') && item.event.date && item.event.date >= clock.dateKey)
+      .map(item => item.event)
+      .sort((a, b) => timetableEventSortKey(a).localeCompare(timetableEventSortKey(b)));
 
-    const future = timetableEvents
-      .filter((e) => e.date && e.date >= oggiIso)
-      .filter((e) => e.date !== oggiIso || !e.endTime || e.endTime > oraAttuale)
-      .sort((a, b) => `${a.date} ${a.startTime ?? ''}`.localeCompare(`${b.date} ${b.startTime ?? ''}`));
-
+    if (active.length > 0) {
+      return { data: clock.dateKey, oggi: true, inCorso: true, lezioni: active };
+    }
     if (future.length === 0) return null;
     const data = future[0].date as string;
     return {
       data,
-      oggi: data === oggiIso,
+      oggi: data === clock.dateKey,
+      inCorso: false,
       lezioni: future.filter((e) => e.date === data)
     };
-  }, [timetableEvents]);
+  }, [timetableEvents, clockNow]);
 
   // Prenotazioni del portale Docenti: caricate al login e mostrate insieme agli appelli Segrepass.
   const [docentiBookings, setDocentiBookings] = useState<BookedExamDocenti[]>([]);
   const [docentiTests, setDocentiTests] = useState<TestDocenti[]>([]);
   const [docentiSubscriptions, setDocentiSubscriptions] = useState<SubscriptionDocenti[]>([]);
   const [professorPreferences, setProfessorPreferences] = useState<ProfessorPreference[]>([]);
+  const [teacherFromSearch, setTeacherFromSearch] = useState<SubscriptionDocenti | null>(null);
   const [bookingId, setBookingId] = useState<string | null>(null);
 
  const fetchingDocentiRef = useRef(false);
 
   useEffect(() => {
-    if (!authenticated || !docentiEnabled || !['docenti', 'prenotazioni'].includes(activeView)) return;
+    if (!authenticated || !docentiEnabled || !['home', 'docenti', 'prenotazioni'].includes(activeView)) return;
     if (fetchingDocentiRef.current) return; // Blocca le chiamate parallele
 
     let active = true;
@@ -499,7 +580,7 @@ const handleLogin = async (e: React.FormEvent) => {
   }, [authenticated, activeView, docentiEnabled]);
 
   useEffect(() => {
-    if (!authenticated || !docentiEnabled || !['docenti', 'prenotazioni'].includes(activeView)) return;
+    if (!authenticated || !docentiEnabled || !['home', 'docenti', 'prenotazioni'].includes(activeView)) return;
     void fetchProfessorPreferences().then(setProfessorPreferences).catch(() => setProfessorPreferences([]));
   }, [authenticated, activeView, docentiEnabled]);
 
@@ -543,11 +624,41 @@ const handleLogin = async (e: React.FormEvent) => {
     });
   }, [data, docentiBookings, docentiTests]);
 
+  const canonicalCourseNames = useMemo(() => [...new Set([
+    ...timetableEvents.map(event => event.courseName || ''),
+    ...(data?.pianoDiStudiRaw || []).map(course => course.courseName || course.course_name || '')
+  ].map(value => value.trim()).filter(Boolean))], [data?.pianoDiStudiRaw, timetableEvents]);
+  const displayMateria = (value?: string | null) => canonicalCourseLabel(value || undefined, canonicalCourseNames) || 'Esame';
+  const displayedPrenotazioni = useMemo(
+    () => listaPrenotazioni.map(item => ({
+      ...item,
+      materia: canonicalCourseLabel(item.materia || undefined, canonicalCourseNames) || item.materia
+    })),
+    [listaPrenotazioni, canonicalCourseNames]
+  );
+
   // Per la home: solo le prenotazioni ancora future.
   const prossimePrenotazioni = useMemo(
-    () => listaPrenotazioni.filter((p) => !isAppelloPassato(p)),
-    [listaPrenotazioni]
+    () => displayedPrenotazioni.filter((p) => !isAppelloPassato(p)),
+    [displayedPrenotazioni]
   );
+
+  const examPlanner = useMemo(() => {
+    const upcoming = prossimePrenotazioni
+      .map(item => ({ item, timestamp: dataItalianaTs(item.dataAppello) }))
+      .filter(entry => entry.timestamp > 0)
+      .sort((left, right) => left.timestamp - right.timestamp);
+    const bySlot = new Map<string, Prenotazione[]>();
+    for (const entry of upcoming) {
+      const day = new Date(entry.timestamp).toISOString().slice(0, 10);
+      const time = String(entry.item.ora || '').trim();
+      if (!time) continue;
+      const key = `${day}|${time}`;
+      bySlot.set(key, [...(bySlot.get(key) || []), entry.item]);
+    }
+    const conflicts = [...bySlot.values()].filter(items => items.length > 1);
+    return { upcoming: upcoming.slice(0, 5), conflicts };
+  }, [prossimePrenotazioni]);
 
   const mediaPond = data?.mediaPonderata ?? '--';
   const mediaArit = data?.mediaAritmetica ?? '--';
@@ -555,6 +666,15 @@ const handleLogin = async (e: React.FormEvent) => {
   const cfuConseguiti = data?.cfuAcquisiti ?? 0;
   const cfuTotali = data?.cfuTotali ?? 180;
   const percCFU = Math.min(100, Math.round((Number(cfuConseguiti) / cfuTotali) * 100)) || 0;
+  const simulatedCareer = useMemo(() => {
+    const grade = Number(simulatorGrade);
+    const cfu = Number(simulatorCfu);
+    const currentAverage = Number(mediaPond);
+    if (!Number.isFinite(grade) || grade < 18 || grade > 30 || !Number.isFinite(cfu) || cfu <= 0 || !Number.isFinite(currentAverage)) return null;
+    const totalCfu = Number(cfuConseguiti) || 0;
+    const average = totalCfu > 0 ? ((currentAverage * totalCfu) + (grade * cfu)) / (totalCfu + cfu) : grade;
+    return { average, base: average * (110 / 30) };
+  }, [cfuConseguiti, mediaPond, simulatorCfu, simulatorGrade]);
   const listaEsami = useMemo<Esame[]>(() => (Array.isArray(data?.esami) ? data.esami : []), [data]);
   const examCourseCodes = useMemo(
     () => [...new Set(listaEsami
@@ -581,14 +701,14 @@ const handleLogin = async (e: React.FormEvent) => {
   }, [listaEsami, searchExam]);
 
   const prenotazioniFiltrate = useMemo(() => {
-    if (!searchPrenotazione.trim()) return listaPrenotazioni;
+    if (!searchPrenotazione.trim()) return displayedPrenotazioni;
     const query = searchPrenotazione.toLowerCase();
-    return listaPrenotazioni.filter(p => {
+    return displayedPrenotazioni.filter(p => {
       const mat = (p.materia || '').toLowerCase();
       const doc = (p.docente || '').toLowerCase();
       return mat.includes(query) || doc.includes(query);
     });
-  }, [listaPrenotazioni, searchPrenotazione]);
+  }, [displayedPrenotazioni, searchPrenotazione]);
 
   // Gli appelli passati di Segrepass non sono prenotazioni personali: lo storico
   // deve provenire esclusivamente dalle prenotazioni lette dal portale Docenti.
@@ -607,7 +727,7 @@ const handleLogin = async (e: React.FormEvent) => {
     };
     const groups = new Map<string, { title: string; items: Prenotazione[] }>();
     for (const item of appelliDisponibili) {
-      const title = item.materia || 'Esame senza titolo';
+      const title = canonicalCourseLabel(item.materia || 'Esame senza titolo', canonicalCourseNames) || 'Esame senza titolo';
       const k = key(title);
       const group = groups.get(k) || { title, items: [] };
       group.items.push(item); groups.set(k, group);
@@ -619,7 +739,7 @@ const handleLogin = async (e: React.FormEvent) => {
       const primary = targetTeachers.length ? group.items.find(item => targetTeachers.some(name => teacherMatch(name, item.docente))) : undefined;
       return { ...group, primary, targetName: targetTeachers.join(', '), hasEnrollment: enrolled.length > 0, alternatives: group.items.filter(item => item !== primary) };
     });
-  }, [appelliDisponibili, docentiSubscriptions, professorPreferences]);
+  }, [appelliDisponibili, canonicalCourseNames, docentiSubscriptions, professorPreferences]);
   const storicoPrenotazioni = useMemo(
     () => prenotazioniFiltrate.filter(p => !appelliDisponibili.includes(p)),
     [prenotazioniFiltrate, appelliDisponibili]
@@ -686,11 +806,11 @@ const handleLogin = async (e: React.FormEvent) => {
       <main className={`${pageBg} flex items-center justify-center p-4`}>
         <form onSubmit={handleLogin} className={`${CARD} w-full max-w-sm space-y-4 p-6`}>
           <div className="space-y-1 text-center">
-            <div className="mx-auto mb-3 grid h-14 w-14 place-items-center rounded-full border-2 border-[#E6C887]/70 text-sm font-bold text-[#E6C887]">
-              SD
+            <div className="mx-auto mb-3 grid h-20 w-20 place-items-center overflow-hidden rounded-2xl border-2 border-[#E6C887]/70 bg-white/95 p-1">
+              <Image src="/logo_prova.jpg" alt="UniDesk NA" width={80} height={80} className="h-full w-full object-contain" priority />
             </div>
-            <h1 className="text-2xl font-bold tracking-tight text-[#E6C887]">Segrepass Dashboard</h1>
-            <p className="text-sm text-slate-400">Progetto indipendente: accedi solo con il tuo account.</p>
+            <h1 className="text-2xl font-bold tracking-tight text-[#E6C887]">UniDesk NA</h1>
+            <p className="text-sm text-slate-400">Client non ufficiale per studenti. Nessuna affiliazione con l&apos;ateneo.</p>
           </div>
           {error && <p role="alert" className="text-center text-xs font-medium text-red-400">{error}</p>}
           {loading && loginStep && (
@@ -721,7 +841,7 @@ const handleLogin = async (e: React.FormEvent) => {
             type="password"
             name="passwordSegrepass"
             autoComplete="current-password"
-            placeholder="Password Segrepass"
+              placeholder="Password del portale studenti"
             value={credentials.password}
             onChange={(e) => setCredentials((c) => ({ ...c, password: e.target.value }))}
             className="w-full rounded-xl border border-white/10 bg-white/5 py-2.5 px-3 text-xs text-white placeholder-slate-400 focus:border-[#5AB0F0] focus:outline-none"
@@ -756,9 +876,19 @@ const handleLogin = async (e: React.FormEvent) => {
   }
 
   const refresh = () => authenticated && caricaDati(true);
+  const serviceStatuses: Array<{ label: string; ready: boolean; status: string }> = [
+    { label: 'Carriera', ready: Boolean(data), status: data ? 'Disponibile' : 'In caricamento' },
+    {
+      label: 'Tasse e appelli',
+      ready: slowNotice !== 'error' && (slowNotice === 'ready' || Boolean(data?.tasse)),
+      status: slowNotice === 'error' ? 'Da aggiornare' : slowNotice === 'loading' ? 'In aggiornamento' : 'Disponibile'
+    },
+    { label: 'Portale Docenti', ready: docentiEnabled, status: docentiEnabled ? 'Opt-in attivo' : 'Non collegato' },
+    { label: 'Orario', ready: timetableReady, status: timetableError ? 'Non disponibile' : timetableLoading ? 'In caricamento' : timetableReady ? 'Disponibile' : 'Su richiesta' },
+  ];
 
   return (
-    <div className={pageBg}>
+    <div className={`${pageBg}${privacyMode ? ' privacy-mode' : ''}`} data-privacy-mode={privacyMode ? 'true' : 'false'}>
       {slowNotice && dismissedSlowNotice !== slowNotice && (
         <div
           role="status"
@@ -791,22 +921,30 @@ const handleLogin = async (e: React.FormEvent) => {
       )}
 
       {/* HEADER */}
-      <header className="flex items-center justify-between gap-3 border-b border-white/10 bg-[#0A3260]/60 px-4 py-3 backdrop-blur sm:px-8 sm:py-4">
+      <header className="flex flex-col gap-3 border-b border-white/10 bg-[#0A3260]/60 px-4 py-3 backdrop-blur sm:flex-row sm:items-center sm:justify-between sm:px-8 sm:py-4">
         <div className="flex min-w-0 items-center gap-3 sm:gap-4">
-          <div
-            aria-hidden="true"
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-full border-2 border-[#E6C887]/70 bg-[#E6C887]/10 text-xs font-bold text-[#E6C887] sm:h-14 sm:w-14 sm:text-sm"
-          >
-            SD
+          <div className="grid h-11 w-11 shrink-0 place-items-center overflow-hidden rounded-xl border-2 border-[#E6C887]/70 bg-white/95 p-0.5 sm:h-14 sm:w-14">
+            <Image src="/logo_prova.jpg" alt="UniDesk NA" width={56} height={56} className="h-full w-full object-contain" priority />
           </div>
           <div className="min-w-0">
-            <h1 className="truncate text-lg font-bold text-[#E6C887] sm:text-2xl">{nomeCompleto}</h1>
-            <p className="truncate text-xs text-slate-300">
+            <h1 className="privacy-sensitive truncate text-lg font-bold text-[#E6C887] sm:text-2xl">{nomeCompleto}</h1>
+            <p className="privacy-sensitive truncate text-xs text-slate-300">
               {corsoDiLaurea} {matricola ? `• Matr. ${matricola}` : ''}
             </p>
           </div>
         </div>
-        <div className="flex shrink-0 gap-2">
+        <div className="flex w-full flex-nowrap justify-start gap-2 overflow-x-auto pb-1 sm:w-auto sm:flex-wrap sm:justify-end sm:overflow-visible sm:pb-0">
+          <button
+            type="button"
+            onClick={() => setPrivacyMode(current => !current)}
+            aria-pressed={privacyMode}
+            aria-label={privacyMode ? 'Disattiva modalità privacy' : 'Attiva modalità privacy'}
+            title={privacyMode ? 'Disattiva modalità privacy' : 'Attiva modalità privacy'}
+            className={GHOST_BTN}
+          >
+            {privacyMode ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+            <span className="hidden sm:inline">Privacy</span>
+          </button>
           <PinReveal pin={data?.pin} />
           <ThemeSwitch />
           <button onClick={refresh} disabled={loading} aria-label="Aggiorna carriera" title="Aggiorna carriera" className={GHOST_BTN}>
@@ -856,7 +994,7 @@ const handleLogin = async (e: React.FormEvent) => {
         </nav>
 
         {/* CONTENUTO */}
-        <main className="min-w-0 flex-1 space-y-6 px-4 pb-28 pt-6 sm:px-8 md:pb-10">
+        <main className="min-w-0 flex-1 space-y-6 px-4 pb-[calc(7rem+env(safe-area-inset-bottom))] pt-6 sm:px-8 md:pb-10">
           {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
 
           {bookingReceipt && (
@@ -927,7 +1065,7 @@ const handleLogin = async (e: React.FormEvent) => {
                     <TrendingUp className="h-4 w-4 text-[#5AB0F0]" /> Metriche Carriera
                   </h2>
                   <div className={`${CARD} metric-card overflow-hidden`}>
-                    <div className="grid grid-cols-3 divide-x divide-white/10">
+                    <div className="grid grid-cols-1 divide-y divide-white/10 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
                       <div className="space-y-1 p-4">
                         <p className="metric-label flex items-center gap-1.5 text-xs text-slate-400">
                           <Award className="h-3.5 w-3.5 text-[#5AB0F0]" /> Media Ponderata
@@ -977,10 +1115,38 @@ const handleLogin = async (e: React.FormEvent) => {
                 </section>
               </div>
 
+              <section className={`${CARD} p-4`} aria-label="Stato servizi">
+                <div className="mb-3 flex items-center justify-between gap-2">
+                  <h2 className="text-sm font-semibold text-white">Stato servizi</h2>
+                  <span className="text-[11px] text-slate-500">Aggiornamento in tempo reale</span>
+                </div>
+                <div className="grid gap-2 sm:grid-cols-4">
+                  {serviceStatuses.map(({ label, ready, status }) => (
+                    <div key={String(label)} className="rounded-lg border border-white/10 bg-white/5 px-3 py-2">
+                      <div className="flex items-center gap-2 text-xs font-medium text-slate-200"><span className={`h-2 w-2 rounded-full ${ready ? 'bg-emerald-400' : 'bg-amber-300'}`} />{label}</div>
+                      <p className="mt-1 text-[11px] text-slate-400">{status}</p>
+                    </div>
+                  ))}
+                </div>
+              </section>
+
+              <GlobalSearchPanel
+                exams={listaEsami}
+                bookings={displayedPrenotazioni}
+                courses={(data?.pianoDiStudiRaw || []) as PlanCourse[]}
+                teachers={docentiSubscriptions}
+                onNavigate={view => setActiveView(view)}
+                onTeacherSelect={teacher => { setTeacherFromSearch(teacher); setActiveView('docenti'); }}
+              />
+
+              <NotificationCenter exams={displayedPrenotazioni} taxes={data?.tasse} />
+
+              <OfficialServicesPanel services={configuredOfficialServices} />
+
               <section>
                 <div className="flex items-center justify-between">
                   <h2 className={SECTION_TITLE}>
-                    <CalendarDays className="h-4 w-4 text-[#5AB0F0]" /> Prossima lezione
+                    <CalendarDays className="h-4 w-4 text-[#5AB0F0]" /> {prossimoGiorno?.inCorso ? 'Lezione in corso' : 'Prossima lezione'}
                   </h2>
                   <button onClick={() => setActiveView('timetable')} className="mb-3 text-xs font-semibold text-[#5AB0F0] hover:underline flex items-center gap-1">
                     Orario completo <ChevronRight className="h-3.5 w-3.5" />
@@ -993,9 +1159,9 @@ const handleLogin = async (e: React.FormEvent) => {
                 ) : !prossimoGiorno ? (
                   <div className={`${CARD} p-4 text-xs text-slate-400`}>Nessuna lezione in calendario.</div>
                 ) : (
-                  <div className={`${CARD} p-4 space-y-3 border-l-4 border-l-[#3B7BC4]`}>
+                  <div className={`${CARD} ${prossimoGiorno.inCorso ? 'lesson-active-card' : 'lesson-next-card'} p-4 space-y-3 border-l-4 border-l-[#3B7BC4]`}>
                     <p className="text-sm font-bold text-white">
-                      {prossimoGiorno.oggi ? `Oggi · ${formatGiornoLungo(prossimoGiorno.data)}` : formatGiornoLungo(prossimoGiorno.data)}
+                      {prossimoGiorno.inCorso ? `In corso · ${formatGiornoLungo(prossimoGiorno.data)}` : prossimoGiorno.oggi ? `Oggi · ${formatGiornoLungo(prossimoGiorno.data)}` : formatGiornoLungo(prossimoGiorno.data)}
                     </p>
                     <ul className="divide-y divide-white/10">
                       {prossimoGiorno.lezioni.map((e, idx) => (
@@ -1133,11 +1299,15 @@ const handleLogin = async (e: React.FormEvent) => {
           {activeView === 'agenda' && (
             <AgendaView
               lessons={timetableEvents}
-              exams={listaPrenotazioni}
+              exams={displayedPrenotazioni}
               taxes={data?.tasse}
               timetableLoading={timetableLoading}
               timetableError={timetableError}
             />
+          )}
+
+          {activeView === 'deadlines' && (
+            <DeadlineView exams={prenotazioniFiltrate} taxes={data?.tasse} />
           )}
 
           {activeView === 'prenotazioni' && (
@@ -1159,6 +1329,32 @@ const handleLogin = async (e: React.FormEvent) => {
                     className="w-full rounded-xl border border-white/10 bg-white/5 py-2 pl-9 pr-3 text-xs text-white placeholder-slate-400 focus:border-[#5AB0F0] focus:outline-none"
                   />
                 </div>
+              </div>
+
+              <div className={`${CARD} space-y-3 p-4`} aria-label="Pianificatore esami">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-semibold text-white">Pianificatore esami</h3>
+                    <p className="text-[11px] text-slate-400">Prossimi appelli ordinati per data e possibili sovrapposizioni di orario.</p>
+                  </div>
+                  <span className="rounded-full bg-sky-400/10 px-2 py-1 text-[10px] font-semibold text-sky-200">{examPlanner.upcoming.length} prossimi</span>
+                </div>
+                {examPlanner.conflicts.length > 0 && (
+                  <div role="status" className="rounded-lg border border-amber-300/30 bg-amber-400/10 px-3 py-2 text-xs text-amber-100">
+                    Possibili conflitti: {examPlanner.conflicts.map(group => group.map(item => displayMateria(item.materia)).join(' e ')).join('; ')}.
+                  </div>
+                )}
+                {examPlanner.upcoming.length > 0 ? (
+                  <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+                    {examPlanner.upcoming.map(({ item }) => (
+                      <div key={`${item.id || item.materia}-${item.dataAppello}-${item.ora || ''}`} className="rounded-lg border border-white/10 bg-white/5 px-3 py-2">
+                        <p className="truncate text-xs font-semibold text-slate-100">{displayMateria(item.materia)}</p>
+                        <p className="mt-1 text-[11px] text-slate-400">{dataLeggibile(item.dataAppello)}{item.ora ? ` · ${item.ora}` : ''}</p>
+                        {item.aula && <p className="truncate text-[11px] text-slate-500">{item.aula}</p>}
+                      </div>
+                    ))}
+                  </div>
+                ) : <p className="text-xs text-slate-500">Nessun appello futuro con data disponibile.</p>}
               </div>
 
               {prenotazioniFiltrate.length === 0 ? (
@@ -1197,7 +1393,7 @@ const handleLogin = async (e: React.FormEvent) => {
                       <h3 className="text-xs font-bold uppercase tracking-wider text-[#5AB0F0]">Test e prove Docenti</h3>
                       {testPrenotazioni.map((p, idx) => (
                         <div key={`test-${p.id ?? idx}`} className={`${CARD} space-y-1.5 p-3.5`}>
-                          <p className="text-sm font-semibold text-slate-100">{p.materia}</p>
+                          <p className="text-sm font-semibold text-slate-100">{displayMateria(p.materia)}</p>
                           <p className="text-xs text-slate-400">
                             {p.docente}{p.dataAppello ? ` · ${dataLeggibile(p.dataAppello)}` : ''}
                           </p>
@@ -1216,7 +1412,7 @@ const handleLogin = async (e: React.FormEvent) => {
                           className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 rounded-xl border border-white/5 bg-white/[0.03] p-3.5 opacity-60"
                         >
                           <div className="min-w-0 space-y-1">
-                            <p className="text-sm font-medium text-slate-400">{p.materia}</p>
+                            <p className="text-sm font-medium text-slate-400">{displayMateria(p.materia)}</p>
                             <p className="text-[11px] text-slate-500">
                               {p.docente && p.docente !== 'Non specificato' ? `Prof. ${p.docente} · ` : ''}
                               {dataLeggibile(p.dataAppello)}
@@ -1252,6 +1448,20 @@ const handleLogin = async (e: React.FormEvent) => {
                     className="w-full rounded-xl border border-white/10 bg-white/5 py-2 pl-9 pr-3 text-xs text-white placeholder-slate-400 focus:border-[#5AB0F0] focus:outline-none"
                   />
                 </div>
+              </div>
+
+              <div className={`${CARD} grid gap-3 p-4 sm:grid-cols-[1fr_auto_auto] sm:items-end`}>
+                <div>
+                  <h3 className="text-sm font-semibold text-slate-100">Simulatore voto</h3>
+                  <p className="mt-1 text-xs text-slate-400">Stima l’effetto di un nuovo esame sulla media e sulla base di laurea.</p>
+                </div>
+                <label className="text-xs text-slate-400">Voto
+                  <input aria-label="Voto da simulare" type="number" min="18" max="30" step="1" value={simulatorGrade} onChange={event => setSimulatorGrade(event.target.value)} className="mt-1 block w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white sm:w-24" />
+                </label>
+                <label className="text-xs text-slate-400">CFU
+                  <input aria-label="CFU da simulare" type="number" min="1" max="30" step="1" value={simulatorCfu} onChange={event => setSimulatorCfu(event.target.value)} className="mt-1 block w-full rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm text-white sm:w-24" />
+                </label>
+                {simulatedCareer && <p className="text-xs text-emerald-300 sm:col-span-3">Media stimata: <strong>{simulatedCareer.average.toFixed(2)}</strong> · Base stimata: <strong>{simulatedCareer.base.toFixed(2)}/110</strong></p>}
               </div>
 
               <div className="grid gap-2 sm:gap-3">
@@ -1329,9 +1539,9 @@ const handleLogin = async (e: React.FormEvent) => {
                 <div className="grid gap-3">
                   {pendingTaxes.length > 0 ? (
                     pendingTaxes.map((tax: TassaItem, idx: number) => {
-                      const desc = tax.description || tax.causale || 'Contributo universitario';
+                      const desc = tax.description || tax.causale || tax.descrizione || 'Contributo universitario';
                       const amount = tax.amount ?? tax.importo ?? 0;
-                      const dueDate = tax.dueDate || tax.scadenza;
+                      const dueDate = tax.dueDate || tax.scadenzaISO || tax.scadenza;
                       const isExpired = tax.status === 'scaduto';
                       const iuv = tax.iuv || tax.paymentCode;
                       const paymentLink = safePaymentUrl(tax.paymentLink);
@@ -1384,7 +1594,7 @@ const handleLogin = async (e: React.FormEvent) => {
                 <div className="grid gap-3">
                   {paidTaxes.length > 0 ? (
                     paidTaxes.map((tax: TassaItem, idx: number) => {
-                      const desc = tax.description || tax.causale || 'Versamento universitario';
+                      const desc = tax.description || tax.causale || tax.descrizione || 'Versamento universitario';
                       const amount = tax.amount ?? tax.importo ?? 0;
                       const paidAt = tax.paidAt || tax.dataPagamento;
                       const iuv = tax.iuv || tax.paymentCode;
@@ -1419,25 +1629,35 @@ const handleLogin = async (e: React.FormEvent) => {
           )}
 
           {activeView === 'docenti' && (
-            <DocentiView
+              <DeferredDocentiView
               authenticated={authenticated}
               coursePrefix={codiceCorso || null}
               courseCodes={teacherCourseCodes}
               studentId={matricola}
               availableCourses={(data?.pianoDiStudiRaw || []) as PlanCourse[]}
+              openProfessor={teacherFromSearch}
             />
           )}
-          {activeView === 'plan' && profile && <StudyPlanView authenticated={authenticated} profile={profile} />}
-          {activeView === 'timetable' && profile && <TimetableView authenticated={authenticated} profile={profile} />}
+          {activeView === 'plan' && profile && <DeferredStudyPlanView authenticated={authenticated} profile={profile} />}
+          {activeView === 'timetable' && profile && <DeferredTimetableView authenticated={authenticated} profile={profile} />}
         </main>
       </div>
+
+      <footer className="border-t border-white/10 px-4 py-5 text-center text-[11px] leading-relaxed text-slate-500 sm:px-8">
+        UniDesk NA è un client indipendente e non ufficiale per studenti. I dati mostrati sono una copia di servizio: per verifiche, pagamenti e scadenze fa fede sempre il portale ufficiale.
+        <span className="mt-2 block space-x-3">
+          <a href="/privacy" className="text-slate-400 underline-offset-2 hover:text-white hover:underline">Privacy</a>
+          <a href="/terms" className="text-slate-400 underline-offset-2 hover:text-white hover:underline">Termini d’uso</a>
+          <SupportReportForm />
+        </span>
+      </footer>
 
       {/* TAB BAR (mobile) */}
       <nav
         aria-label="Sezioni"
-        className="fixed inset-x-0 bottom-0 z-20 grid grid-cols-8 border-t border-white/10 bg-[#061426]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
+        className="mobile-bottom-nav fixed inset-x-0 bottom-0 z-20 grid grid-cols-7 border-t border-white/10 bg-[#061426]/95 pb-[env(safe-area-inset-bottom)] backdrop-blur md:hidden"
       >
-        {NAV.map(({ id, label, icon: Icon }) => {
+        {MOBILE_NAV.map(({ id, label, icon: Icon }) => {
           const selected = activeView === id;
           const short = label.split(' ')[0];
           return (
@@ -1445,7 +1665,7 @@ const handleLogin = async (e: React.FormEvent) => {
               key={id}
               onClick={() => setActiveView(id)}
               aria-current={selected ? 'page' : undefined}
-              className={`flex min-h-14 flex-col items-center justify-center gap-0.5 text-[9px] transition ${
+                className={`flex min-h-14 min-w-0 flex-col items-center justify-center gap-0.5 px-0.5 text-[9px] transition ${
                 selected ? 'text-[#5AB0F0]' : 'text-slate-400'
               }`}
             >
@@ -1454,7 +1674,41 @@ const handleLogin = async (e: React.FormEvent) => {
             </button>
           );
         })}
+        <button
+          type="button"
+          aria-expanded={mobileMoreOpen}
+          aria-label="Apri altre sezioni"
+          onClick={() => setMobileMoreOpen(current => !current)}
+          className={`flex min-h-14 min-w-0 flex-col items-center justify-center gap-0.5 px-0.5 text-[9px] transition ${mobileMoreOpen || ['docenti', 'timetable', 'plan'].includes(activeView) ? 'text-[#5AB0F0]' : 'text-slate-400'}`}
+        >
+          <MoreHorizontal className="h-4 w-4" />
+          <span className="truncate max-w-[48px]">Altro</span>
+        </button>
       </nav>
+
+      {mobileMoreOpen && (
+        <div className="mobile-more-overlay fixed inset-0 z-30 md:hidden" role="presentation" onClick={() => setMobileMoreOpen(false)}>
+          <div className="mobile-more-sheet absolute inset-x-3 bottom-[calc(4.5rem+env(safe-area-inset-bottom))] rounded-2xl border border-white/15 p-3 shadow-2xl" role="dialog" aria-label="Altre sezioni" onClick={event => event.stopPropagation()}>
+            <div className="mb-2 flex items-center justify-between px-2">
+              <p className="text-xs font-bold uppercase tracking-[0.16em] text-slate-300">Altre sezioni</p>
+              <button type="button" onClick={() => setMobileMoreOpen(false)} className="rounded-lg px-2 py-1 text-xs text-slate-400 hover:bg-white/10">Chiudi</button>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
+              {NAV.filter(({ id }) => ['docenti', 'timetable', 'plan'].includes(id)).map(({ id, label, icon: Icon }) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => { setActiveView(id); setMobileMoreOpen(false); }}
+                  className={`mobile-more-option ${activeView === id ? 'mobile-more-option-active' : ''}`}
+                >
+                  <Icon className="h-5 w-5" />
+                  <span>{label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1,6 +1,15 @@
 // utils.js
 const { safeErrorMeta } = require('../lib/safe-log');
+
+function humanDelay(minMs = 700, maxMs = 1600) {
+  if (String(process.env.NODE_ENV || '').toLowerCase() === 'test') return Promise.resolve();
+  const min = Math.max(0, Number(minMs) || 0);
+  const max = Math.max(min, Number(maxMs) || min);
+  const delay = min + Math.floor(Math.random() * (max - min + 1));
+  return new Promise(resolve => setTimeout(resolve, delay));
+}
 async function enableFastMode(page) {
+  if (!page || typeof page.setRequestInterception !== 'function') return;
   try {
     await page.setRequestInterception(true);
     page.on('request', (req) => {
@@ -59,4 +68,4 @@ async function typeFast(page, selector, value) {
   await page.type(selector, value, { delay: 10 }); // API nativa Puppeteer per maggiore stabilità
 }
 
-module.exports = { enableFastMode, extractTables, typeFast };
+module.exports = { enableFastMode, extractTables, typeFast, humanDelay };

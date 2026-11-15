@@ -103,11 +103,11 @@ export default function TimetableView({ authenticated, profile }: Props) {
           {events.length === 0 ? (
             <p className="py-8 text-center text-sm text-zinc-400">Nessuna lezione pubblicata per il tuo canale.</p>
           ) : (
-            <div className="divide-y divide-zinc-800">
+            <div className="space-y-3">
               {events.map((event, index) => (
                 <article
                   key={`${event.date}-${event.startTime}-${event.courseName}-${index}`}
-                  className="grid gap-2 py-4 sm:grid-cols-[10rem_1fr_auto] sm:items-center"
+                  className="timetable-event-row grid gap-3 rounded-xl border border-zinc-800 bg-zinc-900/40 px-4 py-4 transition hover:-translate-y-0.5 hover:border-sky-500/40 hover:bg-zinc-900/70 sm:grid-cols-[10rem_1fr_auto] sm:items-center"
                 >
                   <div className="text-sm text-sky-300">
                     <p className="font-medium">{formatLessonDate(event.date) || event.dateTime}</p>

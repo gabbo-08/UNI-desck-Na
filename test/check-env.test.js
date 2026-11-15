@@ -38,3 +38,52 @@ test('check-env consente sviluppo locale con HTTP ma non abilita debug in produz
   });
   assert.equal(production.checks.find(item => item.name === 'DEBUG_SCRAPER').ok, false);
 });
+
+test('check-env segnala FRONTEND_URL assente in sviluppo fail-closed', () => {
+  const result = runChecks({
+    NODE_ENV: 'development',
+    CRED_KEY: '0123456789abcdef'.repeat(4),
+    ALLOW_DYNAMIC_ORIGIN: 'false'
+  });
+  assert.ok(result.warnings.some(warning => warning.includes('FRONTEND_URL')));
+});
+
+test('check-env rifiuta TRUST_PROXY globale in produzione', () => {
+  const result = runChecks({
+    NODE_ENV: 'production',
+    CRED_KEY: '0123456789abcdef'.repeat(4),
+    FRONTEND_URL: 'https://app.example.test',
+    TRUST_PROXY: 'true',
+    PUBLIC_ORIGIN: 'https://app.example.test'
+  });
+  assert.equal(result.checks.find(item => item.name === 'TRUST_PROXY').ok, false);
+});
+
+test('check-env accetta solo proxy espliciti e reti valide', () => {
+  const valid = runChecks({
+    NODE_ENV: 'production',
+    CRED_KEY: '0123456789abcdef'.repeat(4),
+    FRONTEND_URL: 'https://app.example.test',
+    TRUST_PROXY: '10.0.0.0/8,127.0.0.1',
+    PUBLIC_ORIGIN: 'https://app.example.test'
+  });
+  assert.equal(valid.checks.find(item => item.name === 'TRUST_PROXY').ok, true);
+
+  const invalid = runChecks({
+    NODE_ENV: 'production',
+    CRED_KEY: '0123456789abcdef'.repeat(4),
+    FRONTEND_URL: 'https://app.example.test',
+    TRUST_PROXY: 'trusted-proxy.example',
+    PUBLIC_ORIGIN: 'https://app.example.test'
+  });
+  assert.equal(invalid.checks.find(item => item.name === 'TRUST_PROXY').ok, false);
+
+  const excessiveHopCount = runChecks({
+    NODE_ENV: 'production',
+    CRED_KEY: '0123456789abcdef'.repeat(4),
+    FRONTEND_URL: 'https://app.example.test',
+    TRUST_PROXY: '99',
+    PUBLIC_ORIGIN: 'https://app.example.test'
+  });
+  assert.equal(excessiveHopCount.checks.find(item => item.name === 'TRUST_PROXY').ok, false);
+});

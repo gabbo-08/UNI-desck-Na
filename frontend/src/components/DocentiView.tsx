@@ -1,9 +1,14 @@
 ﻿'use client';
 
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
-import { Megaphone, BookOpenCheck, Users, ClipboardCheck, ExternalLink, RefreshCw, User, Search, Calendar, X, Star, Trash2 } from 'lucide-react';
+import Image from 'next/image';
+import { Megaphone, BookOpenCheck, Users, ClipboardCheck, ExternalLink, RefreshCw, Search, Calendar, X, Star, Trash2 } from 'lucide-react';
 import {
+  ApiError,
   fetchDocentiSummary,
+  fetchDocentiStatus,
+  reconnectDocenti,
+  type DocentiStatus,
   type DocenteAnnouncementGroup,
   type DocenteAnnouncementItem,
   type SubscriptionDocenti,
@@ -17,6 +22,7 @@ import {
   saveProfessorPreference,
   deleteProfessorPreference,
   fetchFavoriteAnnouncements,
+  teacherPhotoUrl,
 } from '@/lib/api';
 import DocentePage from '@/components/DocentePage';
 import { safeExternalUrl, sanitizeAnnouncementHtml } from '@/lib/safe-content';
@@ -27,16 +33,21 @@ interface DocentiViewProps {
   courseCodes?: string[];
   studentId?: string | null;
   availableCourses?: PlanCourse[];
+  openProfessor?: SubscriptionDocenti | null;
 }
 
 type Tab = 'announcements' | 'subscriptions' | 'groups' | 'tests' | 'favorites';
 
 const CARD =
-  'rounded-2xl border border-[#3B7BC4]/30 bg-[#0A1B31]/75 shadow-[0_0_28px_-10px_rgba(70,150,230,0.55)] backdrop-blur-sm';
+  'docenti-card dashboard-card rounded-2xl border border-[#3B7BC4]/30 bg-[#0A1B31]/75 shadow-[0_0_28px_-10px_rgba(70,150,230,0.55)] backdrop-blur-sm';
 const EMPTY = `${CARD} p-8 text-center text-sm text-slate-400`;
 
 function readableError(err: unknown): string {
   const message = err instanceof Error ? err.message : '';
+  const code = err instanceof ApiError ? err.code : undefined;
+  if (code === 'DOCENTI_SESSION_EXPIRED' || /DOCENTI_SESSION_EXPIRED/i.test(message)) {
+    return 'Sessione del portale Docenti scaduta. Ricollega il portale Docenti per continuare; la sessione principale resta attiva.';
+  }
   if (message === 'SESSION_EXPIRED') return 'Sessione scaduta. Esci e accedi di nuovo.';
   if (/Integrazione Docenti disabilitata/i.test(message)) {
     return 'Portale Docenti non attivo. Esci e accedi di nuovo spuntando "Attiva anche il portale Docenti".';
@@ -77,7 +88,36 @@ function stripTags(html?: string | null) {
   return html.replace(/<[^>]*>/g, '').trim();
 }
 
-export default function DocentiView({ authenticated, coursePrefix, courseCodes, studentId, availableCourses = [] }: DocentiViewProps) {
+function teacherInitials(name?: string | null) {
+  const parts = String(name || 'Docente').trim().split(/\s+/).filter(Boolean);
+  return parts.slice(0, 2).map(part => part[0]?.toUpperCase() || '').join('') || 'D';
+}
+
+function TeacherAvatar({ professorId, name, large = false }: { professorId?: string | null; name?: string | null; large?: boolean }) {
+  const [failed, setFailed] = useState(false);
+  const src = professorId ? teacherPhotoUrl(professorId) : null;
+  if (!src || failed) {
+    return (
+      <span className={`teacher-list-avatar teacher-list-avatar-fallback ${large ? 'teacher-list-avatar-lg' : ''}`} aria-hidden="true">
+        {teacherInitials(name)}
+      </span>
+    );
+  }
+  return (
+    <Image
+      src={src}
+      alt={`Foto di ${name || 'docente'}`}
+      width={large ? 64 : 48}
+      height={large ? 64 : 48}
+      unoptimized
+      loading="lazy"
+      onError={() => setFailed(true)}
+      className={`teacher-list-avatar ${large ? 'teacher-list-avatar-lg' : ''}`}
+    />
+  );
+}
+
+export default function DocentiView({ authenticated, studentId, availableCourses = [], openProfessor = null }: DocentiViewProps) {
   const [activeTab, setActiveTab] = useState<Tab>('announcements');
   const [announcements, setAnnouncements] = useState<DocenteAnnouncementGroup[]>([]);
   const [favoriteAnnouncements, setFavoriteAnnouncements] = useState<DocenteAnnouncementGroup[]>([]);
@@ -87,6 +127,8 @@ export default function DocentiView({ authenticated, coursePrefix, courseCodes, 
   const [docentiRefreshing, setDocentiRefreshing] = useState(false);
   const [docentiFetchedAt, setDocentiFetchedAt] = useState<string | null>(null);
   const [docentiStale, setDocentiStale] = useState(false);
+  const [docentiStatus, setDocentiStatus] = useState<DocentiStatus | null>(null);
+  const [reconnectBusy, setReconnectBusy] = useState(false);
   const [groups, setGroups] = useState<GroupDocenti[]>([]);
   const [tests, setTests] = useState<TestDocenti[]>([]);
   const [selectedProfessor, setSelectedProfessor] = useState<SubscriptionDocenti | null>(null);
@@ -103,6 +145,10 @@ export default function DocentiView({ authenticated, coursePrefix, courseCodes, 
   const [favoriteBusy, setFavoriteBusy] = useState(false);
   const [favoriteActionError, setFavoriteActionError] = useState('');
   const mounted = useRef(true);
+
+  useEffect(() => {
+    if (openProfessor?.professorId) setSelectedProfessor(openProfessor);
+  }, [openProfessor]);
 
   useEffect(() => {
     mounted.current = true;
@@ -182,6 +228,25 @@ export default function DocentiView({ authenticated, coursePrefix, courseCodes, 
     if (!authenticated) return;
     void loadData();
   }, [authenticated, loadData]);
+
+  useEffect(() => {
+    if (!authenticated) return;
+    void fetchDocentiStatus().then(setDocentiStatus).catch(() => setDocentiStatus(null));
+  }, [authenticated]);
+
+  const handleReconnect = useCallback(async () => {
+    setReconnectBusy(true);
+    try {
+      const result = await reconnectDocenti();
+      setDocentiStatus(result.status);
+      await loadData(true);
+      await refreshFavoriteAnnouncements();
+    } catch (reason) {
+      setErrors(current => [...new Set([...current, readableError(reason)])]);
+    } finally {
+      setReconnectBusy(false);
+    }
+  }, [loadData, refreshFavoriteAnnouncements]);
 
   useEffect(() => {
     if (!authenticated) return;
@@ -282,7 +347,17 @@ export default function DocentiView({ authenticated, coursePrefix, courseCodes, 
         isFavorite: true,
         preferenceId: pref.id
       } satisfies SubscriptionDocenti));
-    return [...subscriptions, ...manual];
+    const unique = new Map<string, SubscriptionDocenti>();
+    for (const item of [...subscriptions, ...manual]) {
+      const teacherKey = item.professorId || normalize(item.professor);
+      const courseKey = normalize(item.courseName) || normalize(item.courseCode);
+      const key = `${teacherKey}|${courseKey}`;
+      const previous = unique.get(key);
+      unique.set(key, previous
+        ? { ...previous, ...item, isFavorite: Boolean(previous.isFavorite || item.isFavorite), preferenceId: item.preferenceId || previous.preferenceId }
+        : item);
+    }
+    return [...unique.values()];
   }, [preferences, subscriptions]);
 
   const removeFavorite = useCallback(async (preferenceId: number) => {
@@ -347,44 +422,70 @@ export default function DocentiView({ authenticated, coursePrefix, courseCodes, 
     { id: 'favorites', label: 'Cerca e preferiti', count: preferences.length, icon: Star },
   ];
 
+  const followTeacherCourse = useCallback(async (course: string, alreadySubscribed: boolean) => {
+    if (alreadySubscribed || !selectedProfessor?.professorId || !selectedProfessor.professor) return;
+    const exists = preferences.some(item => item.professorId === selectedProfessor.professorId && item.courseName.trim().toLocaleLowerCase('it') === course.trim().toLocaleLowerCase('it'));
+    if (exists) return;
+    const saved = await saveProfessorPreference({
+      courseCode: null,
+      courseName: course,
+      professorId: selectedProfessor.professorId,
+      professorName: selectedProfessor.professor
+    });
+    setPreferences(current => [...current.filter(item => item.id !== saved.id), saved]);
+  }, [preferences, selectedProfessor]);
+
   if (selectedProfessor) {
     return (
-      <section className="space-y-4">
+      <section className="docenti-modern space-y-6">
         <button type="button" onClick={() => setSelectedProfessor(null)} className="text-sm text-sky-300 hover:text-sky-200">
           ← Torna a Docenti
         </button>
         <DocentePage
           authenticated={authenticated}
           professorIdentifier={selectedProfessor.professorId || selectedProfessor.professor || ''}
-          coursePrefix={coursePrefix}
-          courseCodes={courseCodes}
+          coursePrefix={null}
+          courseCodes={[]}
           studentId={studentId}
+          onToggleSubscription={followTeacherCourse}
         />
       </section>
     );
   }
 
   return (
-    <section className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <section className="docenti-modern space-y-6">
+      <div className="docenti-page-header flex flex-col gap-5 rounded-[1.75rem] p-5 sm:p-7 lg:flex-row lg:items-end lg:justify-between">
         <div className="min-w-0">
-          <h2 className="text-xl font-bold tracking-tight text-white">Portale Docenti</h2>
-          <p className="text-xs text-slate-400">Avvisi, corsi seguiti ed esami prenotati da docenti.unina.it</p>
+          <div className="docenti-eyebrow"><Megaphone className="h-3.5 w-3.5" /> Area accademica</div>
+          <h2 className="mt-3 text-2xl font-bold tracking-tight text-white sm:text-3xl">Docenti e comunicazioni</h2>
+          <p className="mt-2 max-w-2xl text-sm text-slate-300">Avvisi, corsi seguiti, gruppi e prove d&apos;esame organizzati in un unico spazio.</p>
           {docentiRefreshing && <p className="mt-1 text-[11px] text-sky-300">Mostro i dati salvati mentre aggiorno il portale{docentiFetchedAt ? ` · ultimo aggiornamento ${formatDate(docentiFetchedAt)}` : ''}.</p>}
           {!docentiRefreshing && docentiStale && <p className="mt-1 text-[11px] text-amber-200">Mostro gli ultimi dati salvati{docentiFetchedAt ? ` del ${formatDate(docentiFetchedAt)}` : ''}; il portale non ha fornito un aggiornamento recente.</p>}
+          {docentiStatus && docentiStatus.state !== 'ready' && docentiStatus.state !== 'refreshing' && docentiStatus.canReconnect && (
+            <button type="button" onClick={() => void handleReconnect()} disabled={reconnectBusy} className="mt-2 rounded-lg border border-amber-300/40 bg-amber-300/10 px-3 py-1.5 text-[11px] font-semibold text-amber-100 disabled:opacity-50">
+              {reconnectBusy ? 'Ricollegamento…' : 'Ricollega portale Docenti'}
+            </button>
+          )}
         </div>
         <button
           onClick={() => { void loadData(true); void refreshFavoriteAnnouncements(); }}
           disabled={loading}
           aria-label="Ricarica dati docenti"
           title="Ricarica dati docenti"
-          className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-white/15 bg-white/5 text-slate-200 transition hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5AB0F0] disabled:opacity-50"
+          className="docenti-refresh grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-white/15 bg-white/10 text-slate-100 transition hover:bg-white/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5AB0F0] disabled:opacity-50"
         >
           <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
         </button>
       </div>
 
-      <div className="flex flex-col gap-3 rounded-2xl border border-amber-300/30 bg-amber-400/[0.07] p-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="docenti-metric-strip grid gap-3 sm:grid-cols-3">
+        <div className="docenti-metric-card"><span className="docenti-metric-icon"><Megaphone className="h-4 w-4" /></span><span><small>Avvisi disponibili</small><strong>{totalAnnouncementsCount}</strong></span></div>
+        <div className="docenti-metric-card"><span className="docenti-metric-icon"><BookOpenCheck className="h-4 w-4" /></span><span><small>Corsi seguiti</small><strong>{followedCourses.length}</strong></span></div>
+        <div className="docenti-metric-card"><span className="docenti-metric-icon"><Star className="h-4 w-4" /></span><span><small>Preferiti</small><strong>{preferences.length}</strong></span></div>
+      </div>
+
+      <div className="docenti-cta flex flex-col gap-4 rounded-2xl p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
         <div className="flex items-start gap-3">
           <Star className="mt-0.5 h-5 w-5 shrink-0 text-amber-300" />
           <div>
@@ -397,8 +498,9 @@ export default function DocentiView({ authenticated, coursePrefix, courseCodes, 
         </button>
       </div>
 
-      <div className="flex items-center justify-between gap-2 overflow-x-auto border-b border-white/10 pb-3">
-        <div className="flex gap-2">
+      <div className="docenti-tabs-shell">
+        <div className="docenti-tabbar flex items-center justify-between gap-2">
+          <div className="docenti-tab-list flex min-w-0 gap-2 overflow-x-auto">
           {tabs.map(({ id, label, count, icon: Icon }) => {
             const selected = activeTab === id;
             return (
@@ -406,7 +508,7 @@ export default function DocentiView({ authenticated, coursePrefix, courseCodes, 
                 key={id}
                 onClick={() => setActiveTab(id)}
                 aria-pressed={selected}
-                className={`flex min-h-10 shrink-0 items-center gap-2 rounded-lg px-3.5 text-xs font-semibold transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5AB0F0] ${
+                className={`docenti-tab flex min-h-10 shrink-0 items-center gap-2 rounded-lg px-3.5 text-xs font-semibold transition focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5AB0F0] ${
                   selected
                     ? 'bg-[#2F7FD0] text-white shadow-[0_0_16px_-4px_rgba(47,127,208,0.8)]'
                     : 'border border-white/10 bg-white/5 text-slate-300 hover:text-white'
@@ -417,10 +519,10 @@ export default function DocentiView({ authenticated, coursePrefix, courseCodes, 
               </button>
             );
           })}
-        </div>
+          </div>
 
-        {activeTab === 'announcements' && (
-          <div className="relative w-48 sm:w-64">
+          {activeTab === 'announcements' && (
+            <div className="docenti-search-field relative">
             <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
             <input
               type="text"
@@ -429,8 +531,9 @@ export default function DocentiView({ authenticated, coursePrefix, courseCodes, 
               onChange={e => setSearch(e.target.value)}
               className="w-full rounded-xl border border-white/10 bg-white/5 py-2 pl-9 pr-3 text-xs text-white placeholder-slate-400 focus:border-[#5AB0F0] focus:outline-none"
             />
-          </div>
-        )}
+            </div>
+          )}
+        </div>
       </div>
 
       {errors.some(message => !dismissedErrors.has(message)) && (
@@ -464,7 +567,7 @@ export default function DocentiView({ authenticated, coursePrefix, courseCodes, 
             sortedAnnouncements.map((doc, idx) => (
               <div key={doc.slug || doc.professor || idx} className={`${CARD} space-y-3 p-4`}>
                 <div className="flex items-center gap-2 border-b border-white/10 pb-2.5 text-sm font-semibold text-[#5AB0F0]">
-                  <User className="h-4 w-4 shrink-0" />
+                  <TeacherAvatar professorId={doc.slug} name={doc.professor} />
           <button type="button" onClick={() => {
             const followed = followedCourses.find(sub => sub.professorId === doc.slug) || followedCourses.find(sub => sub.professor === doc.professor);
             if (followed) setSelectedProfessor(followed);
@@ -482,7 +585,7 @@ export default function DocentiView({ authenticated, coursePrefix, courseCodes, 
                 ) : doc.items && doc.items.length > 0 ? (
                   <div className="space-y-2.5">
                     {doc.items.map((item: DocenteAnnouncementItem, itemIdx: number) => (
-                      <div key={itemIdx} className="space-y-1.5 rounded-xl border border-white/10 bg-[#050E1C]/70 p-3.5">
+                      <div key={itemIdx} className="docenti-announcement space-y-1.5 rounded-xl border border-white/10 bg-[#050E1C]/70 p-3.5">
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
                           <h4 className="text-sm font-medium text-slate-100">{stripTags(item.title)}</h4>
                           {item.date && (
@@ -527,8 +630,9 @@ export default function DocentiView({ authenticated, coursePrefix, courseCodes, 
             <div className={EMPTY}>{docentiRefreshing ? 'Sto caricando i corsi seguiti…' : 'Nessun corso iscritto o docente preferito. Puoi aggiungerne uno con il pulsante qui sopra.'}</div>
           ) : (
             followedCourses.map((sub, idx) => (
-              <div key={`${sub.professorId || sub.professor}-${sub.courseCode || sub.courseName}-${idx}`} className={`${CARD} flex items-center gap-3 p-3.5`}>
+              <div key={`${sub.professorId || sub.professor}-${sub.courseCode || sub.courseName}-${idx}`} className={`${CARD} docenti-list-row flex items-center gap-3 p-3.5`}>
                 <button type="button" onClick={() => setSelectedProfessor(sub)} className="flex min-w-0 flex-1 items-center justify-between gap-3 text-left">
+                  <TeacherAvatar professorId={sub.professorId} name={sub.professor} />
                   <div className="min-w-0 space-y-0.5">
                     <p className="truncate text-sm font-medium text-slate-100">{sub.courseName || 'Corso'}</p>
                     <p className="text-xs text-slate-400">Docente: <span className="font-medium text-slate-200">{sub.professor || 'Non specificato'}</span>{sub.section ? ` • Canale ${sub.section}` : ''}</p>
@@ -548,7 +652,7 @@ export default function DocentiView({ authenticated, coursePrefix, courseCodes, 
             <div className={EMPTY}>Nessun gruppo trovato sul portale Docenti.</div>
           ) : (
             groups.map((group, idx) => (
-              <div key={idx} className={`${CARD} space-y-1.5 p-3.5`}>
+              <div key={idx} className={`${CARD} docenti-list-row space-y-1.5 p-3.5`}>
                 <div className="flex items-center justify-between gap-2">
                   <p className="min-w-0 truncate text-sm font-medium text-slate-100">{group.name || 'Gruppo'}</p>
                   {group.status && <span className="shrink-0 text-[10px] text-slate-400">{group.status}</span>}
@@ -566,7 +670,7 @@ export default function DocentiView({ authenticated, coursePrefix, courseCodes, 
 
       {!loading && activeTab === 'favorites' && (
         <div className="space-y-4">
-          <div className={`${CARD} space-y-3 p-4`}>
+          <div className={`${CARD} docenti-preference-card space-y-3 p-4`}>
             <h3 className="flex items-center gap-2 text-sm font-semibold text-slate-100"><Star className="h-4 w-4 text-amber-300" />Segui un docente per un insegnamento</h3>
             <p className="text-xs text-slate-400">Se non puoi iscriverti al corso sul portale Docenti, aggiungi una preferenza: gli appelli Segrepass del docente saranno evidenziati appena pubblicati.</p>
             <div className="grid gap-3 sm:grid-cols-2">
@@ -584,7 +688,7 @@ export default function DocentiView({ authenticated, coursePrefix, courseCodes, 
                 {availableCourses.length === 0 && <p className="mt-1 text-[11px] text-slate-500">Piano di studi non disponibile: puoi inserire il nome del corso manualmente.</p>}
               </div>
               <div className="relative"><Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-400" /><input value={teacherQuery} onChange={e => { setTeacherQuery(e.target.value); setSelectedTeacher(null); }} placeholder="Cerca docente (nome o cognome)" className="w-full rounded-lg border border-white/10 bg-white/5 py-2 pl-9 pr-3 text-sm text-white placeholder-slate-500" />
-                {teacherResults.length > 0 && !selectedTeacher && <div className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-lg border border-white/10 bg-[#071426] shadow-xl">{teacherResults.map(teacher => <button type="button" key={teacher.id} onClick={() => { setSelectedTeacher(teacher); setTeacherQuery(teacher.name); setTeacherResults([]); }} className="block w-full px-3 py-2 text-left text-sm hover:bg-white/10"><span className="block">{teacher.name}</span>{teacher.role && <span className="text-xs text-slate-400">{teacher.role}</span>}</button>)}</div>}
+                {teacherResults.length > 0 && !selectedTeacher && <div className="teacher-search-results absolute z-20 mt-1 max-h-64 w-full overflow-auto rounded-xl border border-white/10 bg-[#071426] p-1 shadow-xl">{teacherResults.map(teacher => <div key={teacher.id} className="flex items-center gap-2 rounded-lg p-1 hover:bg-white/10"><button type="button" onClick={() => { setSelectedTeacher(teacher); setTeacherQuery(teacher.name); setTeacherResults([]); }} className="flex min-w-0 flex-1 items-center gap-2 px-2 py-2 text-left text-sm"><TeacherAvatar professorId={teacher.id} name={teacher.name} /><span className="min-w-0"><span className="block truncate">{teacher.name}</span>{teacher.role && <span className="block truncate text-xs text-slate-400">{teacher.role}</span>}</span></button><button type="button" onClick={() => setSelectedProfessor({ professorId: teacher.id, professor: teacher.name })} className="shrink-0 rounded-md bg-sky-500/20 px-2 py-1.5 text-[10px] font-semibold text-sky-200 hover:bg-sky-500/35">Apri scheda</button></div>)}</div>}
               </div>
               {teacherSearchLoading && <p className="text-xs text-slate-400">Ricerca nel portale Docenti…</p>}
               {!teacherSearchLoading && teacherQuery.trim().length >= 3 && !selectedTeacher && teacherResults.length === 0 && <p className="text-xs text-slate-400">Nessun risultato trovato. Prova con il cognome del docente.</p>}
@@ -615,7 +719,7 @@ export default function DocentiView({ authenticated, coursePrefix, courseCodes, 
             <div className={EMPTY}>Nessun test trovato sul portale Docenti.</div>
           ) : (
             tests.map((test, idx) => (
-              <div key={`${test.name || 'test'}-${test.courseName || 'course'}-${test.date || idx}`} className={`${CARD} space-y-1.5 p-3.5`}>
+              <div key={`${test.name || 'test'}-${test.courseName || 'course'}-${test.date || idx}`} className={`${CARD} docenti-list-row space-y-1.5 p-3.5`}>
                 <div className="flex items-center justify-between gap-2">
                   <p className="min-w-0 truncate text-sm font-medium text-slate-100">{test.name || 'Test'}</p>
                   {test.status && <span className="shrink-0 text-[10px] text-slate-400">{test.status}</span>}

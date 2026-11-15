@@ -56,4 +56,8 @@ async function closeCluster() {
   }
 }
 
-module.exports = { initCluster, queueScrapingTask, closeCluster };
+function isClusterReady() {
+  return Boolean(cluster);
+}
+
+module.exports = { initCluster, queueScrapingTask, closeCluster, isClusterReady };

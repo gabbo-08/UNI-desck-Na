@@ -1,6 +1,7 @@
 // db/repository.js
 const dbIndex = require('./index');
 const db = dbIndex.db || dbIndex;
+const crypto = require('node:crypto');
 const { seal, open } = require('../lib/secret-box');
 
 const PROFILE_RETENTION_MS = Math.max(1, Number(process.env.PERSONAL_DATA_RETENTION_DAYS || 30)) * 24 * 60 * 60 * 1000;
@@ -401,6 +402,94 @@ function saveTeacherAnnouncementsCache(professorId, data, database = db, fetched
   return true;
 }
 
+function saveSupportReport(report, database = db) {
+  if (!report?.id || !report?.profileId || !report?.category || !report?.description) return false;
+  const payload = sealJson({
+    description: String(report.description).slice(0, 2000),
+    context: report.context && typeof report.context === 'object' ? report.context : {}
+  }, `support-report:${report.id}`);
+  database.prepare(`
+    INSERT INTO SupportReports (id, profile_id, category, description_ciphertext, context_json, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(
+    String(report.id), String(report.profileId), String(report.category), payload,
+    JSON.stringify(report.context && typeof report.context === 'object' ? report.context : {}),
+    report.createdAt || new Date().toISOString()
+  );
+  return true;
+}
+
+function getSupportReports(options = {}, database = db) {
+  const targetDb = resolveDb(database);
+  const limit = Math.min(100, Math.max(1, Number.parseInt(options.limit, 10) || 50));
+  const rows = targetDb.prepare(`
+    SELECT id, profile_id, category, description_ciphertext, context_json, created_at
+    FROM SupportReports
+    ORDER BY created_at DESC
+    LIMIT ?
+  `).all(limit);
+
+  return rows.map(row => {
+    const payload = openJson(row.description_ciphertext, `support-report:${row.id}`);
+    let context = {};
+    try { context = JSON.parse(row.context_json || '{}'); } catch {}
+    return {
+      id: row.id,
+      profileId: row.profile_id,
+      category: row.category,
+      description: typeof payload?.description === 'string' ? payload.description : null,
+      context,
+      createdAt: row.created_at,
+      decryptable: Boolean(payload)
+    };
+  });
+}
+
+function pushEndpointHash(endpoint) {
+  return crypto.createHash('sha256').update(String(endpoint)).digest('hex');
+}
+
+function validPushSubscription(subscription) {
+  return subscription && typeof subscription === 'object' &&
+    typeof subscription.endpoint === 'string' && /^https:\/\//i.test(subscription.endpoint) &&
+    subscription.keys && typeof subscription.keys.p256dh === 'string' && typeof subscription.keys.auth === 'string';
+}
+
+function savePushSubscription(profileId, subscription, database = db, userAgent = '') {
+  if (!profileId || !validPushSubscription(subscription)) return false;
+  const endpoint = String(subscription.endpoint);
+  const endpointHash = pushEndpointHash(endpoint);
+  const now = new Date().toISOString();
+  database.prepare(`
+    INSERT INTO PushSubscriptions (profile_id, endpoint_hash, subscription_ciphertext, user_agent, created_at, last_seen_at, enabled)
+    VALUES (?, ?, ?, ?, ?, ?, 1)
+    ON CONFLICT(endpoint_hash) DO UPDATE SET
+      profile_id = excluded.profile_id,
+      subscription_ciphertext = excluded.subscription_ciphertext,
+      user_agent = excluded.user_agent,
+      last_seen_at = excluded.last_seen_at,
+      enabled = 1
+  `).run(
+    String(profileId), endpointHash,
+    sealJson({ endpoint, keys: { p256dh: subscription.keys.p256dh, auth: subscription.keys.auth } }, `push:${profileId}:${endpointHash}`),
+    String(userAgent || '').slice(0, 200) || null, now, now
+  );
+  return true;
+}
+
+function getPushSubscriptions(profileId, database = db) {
+  if (!profileId) return [];
+  return database.prepare('SELECT endpoint_hash, subscription_ciphertext FROM PushSubscriptions WHERE profile_id = ? AND enabled = 1').all(String(profileId))
+    .map(row => openJson(row.subscription_ciphertext, `push:${profileId}:${row.endpoint_hash}`))
+    .filter(validPushSubscription);
+}
+
+function deletePushSubscription(profileId, endpoint, database = db) {
+  if (!profileId || !endpoint) return 0;
+  return database.prepare('DELETE FROM PushSubscriptions WHERE profile_id = ? AND endpoint_hash = ?')
+    .run(String(profileId), pushEndpointHash(endpoint)).changes;
+}
+
 function saveBookingReceipt(profileId, receipt, database = db) {
   if (!profileId || !receipt?.id || !receipt?.annopri || !receipt?.numAppello) return null;
   database.prepare(`
@@ -446,6 +535,8 @@ function deleteStudentData(profileId, database = db) {
     database.prepare('DELETE FROM DocentiDataCache WHERE profile_id = ?').run(profileId);
     database.prepare('DELETE FROM ProfessorPreferences WHERE profile_id = ?').run(profileId);
     database.prepare('DELETE FROM BookingReceipts WHERE profile_id = ?').run(profileId);
+    database.prepare('DELETE FROM SupportReports WHERE profile_id = ?').run(profileId);
+    database.prepare('DELETE FROM PushSubscriptions WHERE profile_id = ?').run(profileId);
     return database.prepare('DELETE FROM StudentProfile WHERE id = ?').run(profileId).changes;
   })();
 }
@@ -459,6 +550,8 @@ function purgeExpiredPersonalData(database = db, now = Date.now()) {
       .run(new Date(now).toISOString(), new Date(now).toISOString()).changes;
     const docenti = database.prepare('DELETE FROM DocentiDataCache WHERE fetched_at < ?').run(docentiCutoff).changes;
     const teachers = database.prepare('DELETE FROM TeacherAnnouncementsCache WHERE fetched_at < ?').run(teacherCutoff).changes;
+    const reports = database.prepare('DELETE FROM SupportReports WHERE created_at < ?').run(profileCutoff).changes;
+    const pushSubscriptions = database.prepare('DELETE FROM PushSubscriptions WHERE last_seen_at < ?').run(profileCutoff).changes;
     const profiles = String(process.env.AUTO_PURGE_PERSONAL_DATA || '').toLowerCase() === 'true'
       ? database.prepare(`
           DELETE FROM StudentProfile
@@ -466,7 +559,7 @@ function purgeExpiredPersonalData(database = db, now = Date.now()) {
             AND id NOT IN (SELECT profile_id FROM Sessions)
         `).run(profileCutoff).changes
       : 0;
-    return { sessions, docenti, teachers, profiles };
+    return { sessions, docenti, teachers, reports, pushSubscriptions, profiles };
   })();
 }
 
@@ -489,6 +582,11 @@ module.exports = {
   saveDocentiDataCache,
   getTeacherAnnouncementsCache,
   saveTeacherAnnouncementsCache,
+  saveSupportReport,
+  getSupportReports,
+  savePushSubscription,
+  getPushSubscriptions,
+  deletePushSubscription,
   saveBookingReceipt,
   getBookingReceiptById,
   getLatestBookingReceipt,
