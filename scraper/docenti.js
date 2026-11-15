@@ -1,4 +1,4 @@
-﻿const { queueScrapingTask } = require('./pool');
+const { queueScrapingTask } = require('./pool');
 const { extractTables: extractTablesFromPage, enableFastMode, humanDelay } = require('./utils');
 const { getPortalCookies, setPortalCookies, deletePortalCookies } = require('../utils/sessionStore');
 const { safeErrorMeta } = require('../lib/safe-log');
@@ -980,7 +980,7 @@ async function loginStudente(page, username, password, sessionKey = null) {
 
   // 1. Seleziona la scheda Studente e aspetta lo stato attivo prima di usare il form.
   await page.waitForFunction(() => Array.from(document.querySelectorAll('a, button, li, .nav-link, span, div'))
-    .some(element => (element.textContent || '').trim().toLowerCase() === 'studente'), { timeout: 30000 }).catch(async () => {
+    .some(element => (element.textContent || '').trim().toLowerCase() === 'studente' || (element.textContent || '').trim().toLowerCase() === 'student'), { timeout: 30000 }).catch(async () => {
       const diag = await page.evaluate(() => ({
         title: document.title || '',
         snippet: (document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 180)
@@ -992,7 +992,7 @@ async function loginStudente(page, username, password, sessionKey = null) {
     });
   const selectedStudentTab = await page.evaluate(() => {
     const elements = Array.from(document.querySelectorAll('a, button, li, .nav-link, span, div'));
-    const studentEl = elements.find(element => (element.textContent || '').trim().toLowerCase() === 'studente');
+    const studentEl = elements.find(element => (element.textContent || '').trim().toLowerCase() === 'studente' || (element.textContent || '').trim().toLowerCase() === 'student');
     if (!studentEl) return false;
     const tab = studentEl.closest('a, button, li') || studentEl;
     if (!tab.closest('.active')) tab.click();
@@ -1005,7 +1005,7 @@ async function loginStudente(page, username, password, sessionKey = null) {
   }
   if (selectedStudentTab === true) await page.waitForFunction(() => {
     const label = Array.from(document.querySelectorAll('a, button, li, .nav-link, span, div'))
-      .find(element => (element.textContent || '').trim().toLowerCase() === 'studente');
+      .find(element => (element.textContent || '').trim().toLowerCase() === 'studente' || (element.textContent || '').trim().toLowerCase() === 'student');
     return Boolean(label?.closest('.active'));
   }, { timeout: 5000 }).catch(() => {
     const error = new Error('Non è stato possibile selezionare il profilo Studente nel portale Docenti.');
@@ -1032,7 +1032,7 @@ async function loginStudente(page, username, password, sessionKey = null) {
   // 3. Invio form
   const submitted = await page.evaluate(() => {
     const btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
-    const btn = btns.find(b => (b.textContent || b.value || '').trim().toLowerCase().startsWith('accedi'));
+    const btn = btns.find(b => (/^(accedi|sign in)$/i.test((b.textContent || b.value || '').trim())));
     if (btn) {
       btn.click();
       return true;
