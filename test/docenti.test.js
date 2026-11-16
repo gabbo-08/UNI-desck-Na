@@ -365,3 +365,11 @@ test('classifica un redirect SSO come sessione Docenti scaduta', () => {
     error => error?.code === 'DOCENTI_SESSION_EXPIRED' && error?.status === 401
   );
 });
+
+test('classifica un 401 come sessione scaduta anche senza cookie in memoria', async t => {
+  t.mock.method(global, 'fetch', async () => new Response(null, { status: 401 }));
+  await assert.rejects(
+    fetchTeacherPhoto('teacher-1', { sessionKey: 'profile-cold-start' }),
+    error => error?.code === 'DOCENTI_SESSION_EXPIRED' && error?.status === 401
+  );
+});

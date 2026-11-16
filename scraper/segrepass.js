@@ -10,6 +10,13 @@ const { enableFastMode } = require('./utils');
 
 const NODI_SEGREPASS = ['segrepass1', 'segrepass2', 'segrepass3'];
 const NODE_TIMEOUT_MS = 8000;
+// Il portale a volte invia il login via form/XHR senza una navigazione
+// completa. Non lasciare il primo accesso bloccato per 60 secondi in quel
+// caso: lo stato della pagina viene verificato subito dopo il click.
+const LOGIN_NAV_TIMEOUT_MS = Math.min(
+  60000,
+  Math.max(10000, Number.parseInt(process.env.SEGREPASS_LOGIN_NAV_TIMEOUT_MS || '20000', 10) || 20000)
+);
 // Il debug dello scraper è escluso in produzione: anche con DEBUG_SCRAPER=1,
 // NODE_ENV=production lo disattiva per non esporre dati personali nei log.
 const DEBUG = process.env.DEBUG_SCRAPER === '1' && process.env.NODE_ENV !== 'production';
@@ -180,12 +187,16 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
     await passInput.type(data.password);
 
     console.log(`[Segrepass] Invio credenziali in corso...`);
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 60000 }),
-      page.click('input[type="submit"], button[type="submit"], input[value="Login"], button.btn')
-    ]).catch(() => {
-      console.log('[Segrepass] Timeout navigazione standard raggiunto, verifico lo stato della pagina...');
-    });
+    const navigation = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: LOGIN_NAV_TIMEOUT_MS }).catch(() => null);
+    const loginStateChange = page.waitForFunction(() => {
+      const text = document.body?.innerText || '';
+      return !document.querySelector('input[type="password"]') ||
+        /segreteria\s+online|benvenut[oa]|credenziali\s+non\s+valide|verificare\s+i\s+dati/i.test(text);
+    }, { timeout: LOGIN_NAV_TIMEOUT_MS }).catch(() => null);
+    const clicked = await page.click('input[type="submit"], button[type="submit"], input[value="Login"], button.btn')
+      .then(() => true)
+      .catch(() => false);
+    if (clicked) await Promise.race([navigation, loginStateChange]);
 
     const currentUrl = page.url();
     debugLog(`[Segrepass] URL post-login: ${safePath(currentUrl)}`);

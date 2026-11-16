@@ -34,6 +34,11 @@ router.get('/', async (req, res) => {
     // Se i dati lenti (tasse, appelli) sono già pronti li uniamo subito.
     const slow = snapshots.getSlowSnapshot(profileId);
     const profile = require('../db/repository').getStudentProfile(req.user.sub);
+    let persistedPrenotazioni = [];
+    try {
+      const parsed = JSON.parse(profile?.prenotazioni_json || '[]');
+      if (Array.isArray(parsed)) persistedPrenotazioni = parsed;
+    } catch {}
     return res.json({
       ...value,
       anagrafica: {
@@ -41,7 +46,7 @@ router.get('/', async (req, res) => {
         matricola: value?.anagrafica?.matricola || profile?.matricola || null
       },
       tasse: slow?.taxes ?? value?.tasse ?? null,
-      prenotazioni: slow?.prenotazioni ?? value?.prenotazioni ?? []
+      prenotazioni: slow?.prenotazioni ?? value?.prenotazioni ?? persistedPrenotazioni
     });
   } catch (error) {
     console.error('[Metriche Error]', error.message);

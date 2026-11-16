@@ -34,3 +34,5 @@ project-dump/
 # before sharing or publishing.
 android_app/android/app/google-services.json
 android_app/lib/firebase_options.dart
+.vercel
+.env*

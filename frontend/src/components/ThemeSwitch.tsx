@@ -46,7 +46,7 @@ export default function ThemeSwitch() {
       onClick={() => apply(next)}
       aria-label={`Tema: ${labels[theme]} (${resolved})`}
       title={`Tema: ${labels[theme]} → ${resolved === 'dark' ? 'scuro' : 'chiaro'}`}
-      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-slate-200 transition hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5AB0F0] group"
+      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[var(--app-line)] bg-[var(--app-card)] text-[var(--app-text)] transition hover:bg-[var(--app-raised)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5AB0F0] group"
     >
       {icons[theme]}
       <span className="absolute -right-8 top-1/2 -translate-y-1/2 z-50 whitespace-nowrap text-[10px] font-medium text-slate-400 bg-zinc-900/90 px-2 py-1 rounded border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity">

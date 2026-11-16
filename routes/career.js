@@ -9,6 +9,7 @@ const { getSessionCredentials } = require('../services/server-sessions');
 const { safeErrorMeta } = require('../lib/safe-log');
 const crypto = require('node:crypto');
 const { saveBookingReceipt, getLatestBookingReceipt } = require('../db/repository');
+const { getStudentProfile } = require('../db/repository');
 const bookingInFlight = new Map();
 const bookingDone = new Map();
 const BOOKING_RECEIPT_TTL_MS = 10 * 60 * 1000;
@@ -33,6 +34,31 @@ router.get('/slow-data', (req, res) => {
       taxes: snapshot.taxes ?? null,
       prenotazioni: Array.isArray(snapshot.prenotazioni) ? snapshot.prenotazioni : [],
       updatedAt: snapshot.updatedAt ?? null
+    });
+  }
+
+  // Dopo un riavvio il risultato lento può essere ancora solo nel profilo
+  // cifrato. Restituiscilo subito mentre un eventuale refresh può proseguire.
+  const persistedProfile = getStudentProfile(profileId);
+  let persistedPrenotazioni = [];
+  try {
+    const parsed = JSON.parse(persistedProfile?.prenotazioni_json || '[]');
+    if (Array.isArray(parsed)) persistedPrenotazioni = parsed;
+  } catch {}
+  if (persistedPrenotazioni.length || persistedProfile?.tasse_json) {
+    let persistedTaxes = null;
+    try { persistedTaxes = JSON.parse(persistedProfile?.tasse_json || 'null'); } catch {}
+    if (password) {
+      // Restituisci subito il dato persistito e aggiorna in background senza
+      // lasciare la dashboard vuota dopo il riavvio del processo.
+      slowSync.ensureSlowSync(profileId, { codiceFiscale, password });
+    }
+    return res.json({
+      status: 'ready',
+      taxes: persistedTaxes,
+      prenotazioni: persistedPrenotazioni,
+      updatedAt: persistedProfile?.updated_at ? Date.parse(persistedProfile.updated_at) || null : null,
+      fromPersistence: true
     });
   }
 

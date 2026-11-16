@@ -468,7 +468,10 @@ export function clearClientCache(): void {
   }
 }
 
-if (typeof window !== 'undefined') clearClientCache();
+// Non cancellare la cache all'import del modulo: il caricamento della pagina
+// avviene a ogni riapertura della PWA e una pulizia automatica qui eliminava
+// proprio i dati che l'utente aveva scelto di conservare sul dispositivo.
+// La pulizia resta esplicita su logout/cancellazione account.
 
 /* ------------------------------------------------------------------ */
 /* Base                                                                */
@@ -707,7 +710,17 @@ export async function reconnectDocenti(): Promise<{ connected: boolean; status: 
 }
 
 export async function fetchPushVapidKey(): Promise<{ configured: boolean; publicKey?: string }> {
-  return fetchWithAuth(apiUrl('/api/notifications/vapid-public-key')) as Promise<{ configured: boolean; publicKey?: string }>;
+  try {
+    return await fetchWithAuth(apiUrl('/api/notifications/vapid-public-key')) as Promise<{ configured: boolean; publicKey?: string }>;
+  } catch (error) {
+    // Il backend usa 503 per segnalare esplicitamente che il canale push è
+    // disabilitato. Non trasformarlo in un generico errore di rete nella UI:
+    // i promemoria locali possono comunque funzionare.
+    if (error instanceof ApiError && error.code === 'PUSH_NOT_CONFIGURED') {
+      return { configured: false };
+    }
+    throw error;
+  }
 }
 
 export async function subscribePush(subscription: PushSubscriptionJSON): Promise<void> {

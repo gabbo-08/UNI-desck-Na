@@ -37,6 +37,8 @@ CRED_KEY=<64 caratteri esadecimali casuali>
 PORT=3001
 HOST=0.0.0.0
 COOKIE_SECURE=true
+# Se app e API hanno domini diversi (es. Vercel + Render), usa none.
+COOKIE_SAMESITE=none
 FRONTEND_URL=https://app.example.it
 PUBLIC_ORIGIN=https://api.example.it
 TRUST_PROXY=1
@@ -97,6 +99,26 @@ METRICS_TOKEN=<token casuale per l'endpoint /metrics>
 4. Pubblicare il frontend e collegare il dominio `app.example.it`.
 5. Aggiornare `FRONTEND_URL` del backend con il dominio definitivo del frontend.
 6. Eseguire un nuovo deploy del backend dopo la modifica dell'origine.
+
+### Vercel per il solo frontend
+
+Il progetto Vercel collegato a questo repository usa la directory `frontend`.
+Vercel pubblica quindi Next.js, ma non rende persistente il backend Express e
+il file SQLite della root. La configurazione preferita usa il rewrite
+server-side di Next.js: imposta `BACKEND_URL=https://api.example.it` nelle
+variabili di build Vercel e lascia `NEXT_PUBLIC_BACKEND_URL` vuota. Il browser
+chiamerà `/api` sullo stesso dominio Vercel e il cookie non sarà trattato come
+cookie di terze parti. Se usi invece un URL API pubblico nel frontend, imposta
+`NEXT_PUBLIC_BACKEND_URL=https://api.example.it` e `COOKIE_SAMESITE=none` nel
+backend. Usa un backend sempre attivo con database persistente (Render con
+Persistent Disk, PostgreSQL/Turso gestito o una VPS). Non usare
+`http://127.0.0.1:3001` o un'istanza serverless effimera: il cookie di accesso
+può restare nel browser mentre sessioni, dati lenti e cache Docenti vengono
+persi al cold start.
+
+Nel backend configura anche `PUSH_VAPID_SUBJECT`, `PUSH_VAPID_PUBLIC_KEY` e
+`PUSH_VAPID_PRIVATE_KEY`; senza queste tre variabili l'app mostra i promemoria
+locali ma le notifiche push restano disattivate.
 
 ## 4. Opzione VPS con Docker
 

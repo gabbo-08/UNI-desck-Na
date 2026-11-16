@@ -45,9 +45,13 @@ function parsePersonalJson(value) {
 router.get('/bootstrap', authMiddleware, (req, res) => {
   const profile = getStudentProfile(db, req.user.sub);
   if (!profile) return res.status(404).json({ error: 'Profilo non trovato.' });
-  const career = snapshots.getCareerSnapshot(req.user.sub) || parsePersonalJson(profile.carriera_json) || [];
+  const persistedCareer = parsePersonalJson(profile.carriera_json) || [];
+  const persistedTaxes = parsePersonalJson(profile.tasse_json);
+  const persistedPrenotazioni = parsePersonalJson(profile.prenotazioni_json) || [];
+  const career = snapshots.getCareerSnapshot(req.user.sub) || persistedCareer;
   const slow = snapshots.getSlowSnapshot(req.user.sub);
-  const taxes = slow?.taxes ?? parsePersonalJson(profile.tasse_json);
+  const taxes = slow?.taxes ?? persistedTaxes;
+  const prenotazioni = slow?.prenotazioni ?? persistedPrenotazioni;
   const docentiCache = getDocentiDataCache(req.user.sub);
   // L'opt-in Docenti è memorizzato cifrato nella sessione server-side.  Dopo
   // un reload il frontend deve poter ripristinare lo stato della sezione,
@@ -69,7 +73,7 @@ router.get('/bootstrap', authMiddleware, (req, res) => {
       },
       esami: Array.isArray(career) ? career : [],
       tasse: taxes,
-      prenotazioni: Array.isArray(slow?.prenotazioni) ? slow.prenotazioni : []
+      prenotazioni: Array.isArray(prenotazioni) ? prenotazioni : []
     },
     sync: {
       slow: getSlowStatus(req.user.sub),
@@ -79,7 +83,10 @@ router.get('/bootstrap', authMiddleware, (req, res) => {
         fetchedAt: docentiCache?.fetchedAt || null,
         stale: Boolean(docentiCache && Date.now() - docentiCache.fetchedAt > 5 * 60 * 1000)
       },
-      fromCache: Boolean(snapshots.getCareerSnapshot(req.user.sub) || docentiCache)
+      // Anche i dati cifrati nel profilo sono una cache valida: dopo un
+      // riavvio non forzare uno scraping che potrebbe sostituire il riepilogo
+      // disponibile con un errore temporaneo del portale.
+      fromCache: Boolean(snapshots.getCareerSnapshot(req.user.sub) || docentiCache || persistedCareer.length || persistedTaxes || persistedPrenotazioni.length)
     }
   });
 });
@@ -93,6 +100,7 @@ router.get('/export', authMiddleware, (req, res) => {
     profile: toSessionDto(profile).profile,
     career: parsePersonalJson(profile.carriera_json) || [],
     taxes: parsePersonalJson(profile.tasse_json),
+    prenotazioni: parsePersonalJson(profile.prenotazioni_json) || [],
     preferences: getProfessorPreferences(req.user.sub),
     bookingReceipts: getBookingReceipts(req.user.sub),
     docenti: docentiCache?.data || null

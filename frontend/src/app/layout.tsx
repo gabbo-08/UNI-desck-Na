@@ -20,6 +20,20 @@ export const viewport: Viewport = {
   maximumScale: 1,
 };
 
+const themeBootstrap = `
+  (function () {
+    try {
+      var saved = window.localStorage.getItem('segrepass-theme');
+      var dark = saved === 'dark' || (saved !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      var root = document.documentElement;
+      root.classList.toggle('dark', dark);
+      root.classList.toggle('light', !dark);
+      root.dataset.theme = dark ? 'dark' : 'light';
+      root.style.colorScheme = dark ? 'dark' : 'light';
+    } catch (_) {}
+  })();
+`;
+
 export default function RootLayout({
   children,
 }: {
@@ -28,6 +42,7 @@ export default function RootLayout({
   return (
     <html lang="it" suppressHydrationWarning className="light" data-theme="light">
       <head>
+        <script dangerouslySetInnerHTML={{ __html: themeBootstrap }} />
         <link rel="icon" href="/logo_prova.jpg" type="image/jpeg" />
         <link rel="apple-touch-icon" href="/logo_prova.jpg" />
       </head>

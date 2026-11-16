@@ -299,7 +299,6 @@ export default function DashboardView() {
 
   useEffect(() => {
     let active = true;
-
     fetchBootstrap()
       .then(async bootstrap => {
         if (!active || !bootstrap) return;
@@ -498,18 +497,25 @@ const handleLogin = async (e: React.FormEvent) => {
   useEffect(() => {
     if (!authenticated || !['home', 'agenda', 'timetable'].includes(activeView) || timetableLoadedRef.current) return;
     let active = true;
-    setTimetableLoading(true);
-    setTimetableError('');
-    fetchTimetable()
-      .then((res) => { if (active) { setTimetableEvents(res.timetable?.events ?? []); timetableLoadedRef.current = true; setTimetableReady(true); } })
-      .catch((err: unknown) => {
-        if (!active) return;
-        setTimetableEvents([]);
-        setTimetableReady(false);
-        setTimetableError(err instanceof Error ? err.message : 'Orario non disponibile.');
-      })
-      .finally(() => { if (active) setTimetableLoading(false); });
-    return () => { active = false; };
+    // La Home deve comparire subito: l'orario è utile appena dopo il primo
+    // rendering, ma non deve competere con il recupero iniziale di carriera,
+    // tasse e Docenti.
+    const delay = activeView === 'home' ? 1200 : 0;
+    const timer = window.setTimeout(() => {
+      if (!active) return;
+      setTimetableLoading(true);
+      setTimetableError('');
+      fetchTimetable()
+        .then((res) => { if (active) { setTimetableEvents(res.timetable?.events ?? []); timetableLoadedRef.current = true; setTimetableReady(true); } })
+        .catch((err: unknown) => {
+          if (!active) return;
+          setTimetableEvents([]);
+          setTimetableReady(false);
+          setTimetableError(err instanceof Error ? err.message : 'Orario non disponibile.');
+        })
+        .finally(() => { if (active) setTimetableLoading(false); });
+    }, delay);
+    return () => { active = false; window.clearTimeout(timer); };
   }, [authenticated, activeView]);
 
   // Prossima lezione: il primo giorno con lezioni da oggi in avanti.
@@ -542,7 +548,8 @@ const handleLogin = async (e: React.FormEvent) => {
     };
   }, [timetableEvents, clockNow]);
 
-  // Prenotazioni del portale Docenti: caricate al login e mostrate insieme agli appelli Segrepass.
+  // Prenotazioni del portale Docenti: caricate subito dopo il primo rendering
+  // e mostrate insieme agli appelli Segrepass.
   const [docentiBookings, setDocentiBookings] = useState<BookedExamDocenti[]>([]);
   const [docentiTests, setDocentiTests] = useState<TestDocenti[]>([]);
   const [docentiSubscriptions, setDocentiSubscriptions] = useState<SubscriptionDocenti[]>([]);
@@ -557,31 +564,39 @@ const handleLogin = async (e: React.FormEvent) => {
     if (fetchingDocentiRef.current) return; // Blocca le chiamate parallele
 
     let active = true;
-    fetchingDocentiRef.current = true; // Segnala che la chiamata è in corso
+    const delay = activeView === 'home' ? 1200 : 0;
+    const timer = window.setTimeout(() => {
+      if (!active || fetchingDocentiRef.current) return;
+      fetchingDocentiRef.current = true;
 
-    fetchDocentiSummary()
-      .then(({ bookedExams: bookings, tests, subscriptions }) => {
-        if (active) {
-          setDocentiBookings(bookings);
-          setDocentiTests(tests);
-          setDocentiSubscriptions(subscriptions);
-        }
-      })
-      .catch(() => {
-        if (active) {
-          setDocentiBookings([]);
-          setDocentiTests([]);
-          setDocentiSubscriptions([]);
-        }
-      })
-      .finally(() => { fetchingDocentiRef.current = false; });
+      fetchDocentiSummary()
+        .then(({ bookedExams: bookings, tests, subscriptions }) => {
+          if (active) {
+            setDocentiBookings(bookings);
+            setDocentiTests(tests);
+            setDocentiSubscriptions(subscriptions);
+          }
+        })
+        .catch(() => {
+          if (active) {
+            setDocentiBookings([]);
+            setDocentiTests([]);
+            setDocentiSubscriptions([]);
+          }
+        })
+        .finally(() => { fetchingDocentiRef.current = false; });
+    }, delay);
 
-    return () => { active = false; };
+    return () => { active = false; window.clearTimeout(timer); };
   }, [authenticated, activeView, docentiEnabled]);
 
   useEffect(() => {
     if (!authenticated || !docentiEnabled || !['home', 'docenti', 'prenotazioni'].includes(activeView)) return;
-    void fetchProfessorPreferences().then(setProfessorPreferences).catch(() => setProfessorPreferences([]));
+    const delay = activeView === 'home' ? 1200 : 0;
+    const timer = window.setTimeout(() => {
+      void fetchProfessorPreferences().then(setProfessorPreferences).catch(() => setProfessorPreferences([]));
+    }, delay);
+    return () => window.clearTimeout(timer);
   }, [authenticated, activeView, docentiEnabled]);
 
   const listaPrenotazioni = useMemo<Prenotazione[]>(() => {
@@ -795,7 +810,7 @@ const handleLogin = async (e: React.FormEvent) => {
 
   if (checkingSession) {
     return (
-      <main className={`${pageBg} flex items-center justify-center p-4`}>
+      <main className={`${pageBg} login-shell flex items-center justify-center p-4`}>
         <p className="text-sm text-slate-400">Verifica della sessione…</p>
       </main>
     );
@@ -803,8 +818,11 @@ const handleLogin = async (e: React.FormEvent) => {
 
   if (!authenticated) {
     return (
-      <main className={`${pageBg} flex items-center justify-center p-4`}>
-        <form onSubmit={handleLogin} className={`${CARD} w-full max-w-sm space-y-4 p-6`}>
+      <main className={`${pageBg} login-shell flex items-center justify-center p-4`}>
+        <div className="absolute right-4 top-4 z-10">
+          <ThemeSwitch />
+        </div>
+        <form onSubmit={handleLogin} className="login-card w-full max-w-sm space-y-4 p-6">
           <div className="space-y-1 text-center">
             <div className="mx-auto mb-3 grid h-20 w-20 place-items-center overflow-hidden rounded-2xl border-2 border-[#E6C887]/70 bg-white/95 p-1">
               <Image src="/logo_prova.jpg" alt="UniDesk NA" width={80} height={80} className="h-full w-full object-contain" priority />
@@ -824,9 +842,9 @@ const handleLogin = async (e: React.FormEvent) => {
             placeholder="Email @studenti.unina.it"
             value={credentials.email ?? credentials.codiceFiscale}
             onChange={(e) => setCredentials((c) => ({ ...c, email: e.target.value, codiceFiscale: e.target.value }))}
-            className="w-full rounded-xl border border-white/10 bg-white/5 py-2.5 px-3 text-xs text-white placeholder-slate-400 focus:border-[#5AB0F0] focus:outline-none"
+            className="login-input w-full rounded-xl border py-2.5 px-3 text-xs focus:border-[#5AB0F0] focus:outline-none"
           />
-          <label className="flex items-start gap-2 text-xs text-slate-400">
+          <label className="login-label flex items-start gap-2 text-xs">
             <input
               type="checkbox"
               checked={enableDocentiSync}
@@ -844,7 +862,7 @@ const handleLogin = async (e: React.FormEvent) => {
               placeholder="Password del portale studenti"
             value={credentials.password}
             onChange={(e) => setCredentials((c) => ({ ...c, password: e.target.value }))}
-            className="w-full rounded-xl border border-white/10 bg-white/5 py-2.5 px-3 text-xs text-white placeholder-slate-400 focus:border-[#5AB0F0] focus:outline-none"
+            className="login-input w-full rounded-xl border py-2.5 px-3 text-xs focus:border-[#5AB0F0] focus:outline-none"
           />
           <p className="text-center text-xs text-slate-500">Le credenziali restano cifrate sul server; Docenti richiede opt-in esplicito.</p>
           <button

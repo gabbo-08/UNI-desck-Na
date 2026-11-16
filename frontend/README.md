@@ -29,4 +29,13 @@ Il logo `public/logo_prova.jpg` viene usato senza alterazioni cromatiche. I cont
 
 ## Sicurezza
 
-Il frontend non salva password, token o dati personali in `localStorage`. Le chiamate usano cookie `HttpOnly` gestiti dal backend; per deploy pubblici usa sempre HTTPS, configura `NEXT_PUBLIC_BACKEND_URL` su un'origine HTTPS e verifica il disclaimer indipendente prima della pubblicazione.
+Il frontend non salva password, token o dati personali in `localStorage`. Le chiamate usano cookie `HttpOnly` gestiti dal backend; per deploy pubblici usa sempre HTTPS e configura il rewrite Vercel o `NEXT_PUBLIC_BACKEND_URL` come descritto sopra.
+
+## Deploy Vercel
+
+Per mantenere il cookie di accesso sullo stesso sito, configura in Vercel
+`BACKEND_URL` come variabile di build con l'URL HTTPS del backend e lascia
+`NEXT_PUBLIC_BACKEND_URL` vuota. Il rewrite di `next.config.ts` inoltra le
+richieste `/api` al backend. Se esponi direttamente l'URL API nel browser,
+configura `COOKIE_SAMESITE=none` e `COOKIE_SECURE=true` nel backend.
+

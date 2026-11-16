@@ -97,7 +97,8 @@ function getStudentProfile(arg1, arg2) {
   const row = db.prepare('SELECT * FROM StudentProfile WHERE id = ?').get(profileId) || null;
   if (!row) return null;
   const withCareer = decryptProfileJson(row, 'carriera_json', `${profileId}:carriera`);
-  return decryptProfileJson(withCareer, 'tasse_json', `${profileId}:tasse`);
+  const withTaxes = decryptProfileJson(withCareer, 'tasse_json', `${profileId}:tasse`);
+  return decryptProfileJson(withTaxes, 'prenotazioni_json', `${profileId}:prenotazioni`);
 }
 
 function upsertStudentProfile(arg1, arg2) {
@@ -113,9 +114,9 @@ function upsertStudentProfile(arg1, arg2) {
   db.prepare(`
     INSERT INTO StudentProfile (
       id, matricola, course_id, course_name, cohort_year, current_course_year, channel, surname_initial,
-      carriera_json, tasse_json
+      carriera_json, tasse_json, prenotazioni_json
     )
-    VALUES (@id, @matricola, @courseId, @courseName, @cohortYear, @currentCourseYear, @channel, @surnameInitial, @carrieraJson, @tasseJson)
+    VALUES (@id, @matricola, @courseId, @courseName, @cohortYear, @currentCourseYear, @channel, @surnameInitial, @carrieraJson, @tasseJson, @prenotazioniJson)
     ON CONFLICT(id) DO UPDATE SET
       matricola = COALESCE(excluded.matricola, StudentProfile.matricola),
       course_id = COALESCE(excluded.course_id, StudentProfile.course_id),
@@ -126,6 +127,7 @@ function upsertStudentProfile(arg1, arg2) {
       surname_initial = COALESCE(excluded.surname_initial, StudentProfile.surname_initial),
       carriera_json = COALESCE(excluded.carriera_json, StudentProfile.carriera_json),
       tasse_json = COALESCE(excluded.tasse_json, StudentProfile.tasse_json),
+      prenotazioni_json = COALESCE(excluded.prenotazioni_json, StudentProfile.prenotazioni_json),
       updated_at = CURRENT_TIMESTAMP
   `).run({
     id: targetId,
@@ -137,10 +139,29 @@ function upsertStudentProfile(arg1, arg2) {
     channel: profile.channel || null,
     surnameInitial: profile.surnameInitial || null,
     carrieraJson: sealJson(profile.esamiSostenuti, `${targetId}:carriera`),
-    tasseJson: sealJson(profile.tasse, `${targetId}:tasse`)
+    tasseJson: sealJson(profile.tasse, `${targetId}:tasse`),
+    prenotazioniJson: sealJson(profile.prenotazioni, `${targetId}:prenotazioni`)
   });
 
   return getStudentProfile(db, targetId);
+}
+
+/** Persist the slow career payload so it survives a process restart. */
+function saveStudentSlowData(profileId, data = {}, database = db) {
+  if (!profileId || !database?.prepare) return false;
+  const assignments = [];
+  const values = { id: String(profileId) };
+  if (Object.hasOwn(data, 'taxes') && data.taxes !== null && data.taxes !== undefined) {
+    assignments.push('tasse_json = @tasseJson');
+    values.tasseJson = sealJson(data.taxes, `${profileId}:tasse`);
+  }
+  if (Object.hasOwn(data, 'prenotazioni')) {
+    assignments.push('prenotazioni_json = @prenotazioniJson');
+    values.prenotazioniJson = sealJson(Array.isArray(data.prenotazioni) ? data.prenotazioni : [], `${profileId}:prenotazioni`);
+  }
+  if (!assignments.length) return false;
+  assignments.push('updated_at = CURRENT_TIMESTAMP');
+  return database.prepare(`UPDATE StudentProfile SET ${assignments.join(', ')} WHERE id = @id`).run(values).changes > 0;
 }
 
 function updateStudentProfile(arg1, profileIdOrUpdates, optionalUpdates) {
@@ -567,6 +588,7 @@ module.exports = {
   normalizeName,
   getStudentProfile,
   upsertStudentProfile,
+  saveStudentSlowData,
   updateStudentProfile,
   saveStudyPlan,
   getStudyPlan,

@@ -258,6 +258,32 @@ select {
   color: var(--app-text);
 }
 
+/* Schermata di accesso: usa gli stessi token del resto dell'app, così il
+   selettore tema funziona anche prima dell'autenticazione. */
+.login-shell {
+  background: var(--app-bg) !important;
+  color: var(--app-text);
+}
+
+.login-card {
+  border: 1px solid var(--app-line);
+  border-radius: 1rem;
+  background: var(--app-card);
+  color: var(--app-text);
+  box-shadow: var(--app-shadow);
+}
+
+.login-input {
+  border-color: var(--app-line);
+  background: var(--app-surface);
+  color: var(--app-text);
+}
+
+.login-input::placeholder,
+.login-label {
+  color: var(--app-muted);
+}
+
 /* Privacy mode is deliberately ephemeral and only masks visible values. */
 .privacy-mode .privacy-sensitive,
 .privacy-mode .profile-card,

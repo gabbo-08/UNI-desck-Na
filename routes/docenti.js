@@ -299,7 +299,7 @@ async function getCachedFavoriteAnnouncements(teachers, dependencies) {
 function createDocentiRouter(dependencies = {}) {
   const router = express.Router();
 
-  async function loadForUser(req, res) {
+  async function loadForUser(req, res, allowSessionRetry = true) {
     if (!docentiSyncEnabledForRequest(req, dependencies)) {
       res.status(403).json({ success: false, error: 'Integrazione Docenti disabilitata.', code: 'DOCENTI_SYNC_DISABLED' });
       return null;
@@ -328,6 +328,16 @@ function createDocentiRouter(dependencies = {}) {
         );
 
       if (isHardFailure(data)) {
+        // Una sessione del portale può scadere mentre il cookie HttpOnly
+        // dell'app è ancora valido. Ricollega una sola volta prima di
+        // propagare l'errore, così summary/subscriptions non restano vuoti
+        // dopo un cold start o un timeout del portale.
+        if (allowSessionRetry && data.reason === 'DOCENTI_SESSION_EXPIRED') {
+          clearDocentiRouteCache(req.user.sub);
+          if (await refreshDocentiSession(req, dependencies)) {
+            return loadForUser(req, res, false);
+          }
+        }
         const status = data.reason === 'DOCENTI_EMAIL_REQUIRED' ? 400
           : data.reason === 'DOCENTI_AUTH_REJECTED' ? 424
             : data.reason === 'DOCENTI_SESSION_EXPIRED' ? 401 : 502;

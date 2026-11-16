@@ -425,7 +425,7 @@ async function fetchTeacherPhoto(teacherId, dependencies = {}) {
       },
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
     });
-    ensureDocentiSessionResponse(response, { hasSession: Boolean(cookie) });
+    ensureDocentiSessionResponse(response, { hasSession: hasPortalSession(dependencies.sessionKey, cookie) });
     if (!response.ok) return null;
     const contentType = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
     if (!TEACHER_IMAGE_TYPES.has(contentType)) return null;
@@ -495,7 +495,7 @@ async function fetchTeacherMaterial(teacherId, folderId, fileId, section, course
     signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
   });
   try {
-    ensureDocentiSessionResponse(response, { hasSession: Boolean(cookie) });
+    ensureDocentiSessionResponse(response, { hasSession: hasPortalSession(dependencies.sessionKey, cookie) });
   } catch (error) {
     if (error?.code === 'DOCENTI_SESSION_EXPIRED' && dependencies.sessionKey) {
       deletePortalCookies(dependencies.sessionKey);
@@ -678,6 +678,14 @@ function portalCookieHeader(sessionKey) {
   return cookies?.length ? cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ') : '';
 }
 
+// On a Vercel cold start the in-memory cookie jar may be empty even though
+// the request still belongs to an authenticated student. Keep that context
+// so routes/docenti.js can reconnect the portal instead of treating a 401/403
+// as an ordinary empty response.
+function hasPortalSession(sessionKey, cookieHeader) {
+  return Boolean(sessionKey || cookieHeader);
+}
+
 function docentiSessionExpiredError() {
   const error = new Error('La sessione del portale Docenti è scaduta.');
   error.code = 'DOCENTI_SESSION_EXPIRED';
@@ -707,7 +715,7 @@ async function fetchDocentiJson(path, dependencies = {}) {
       },
       signal: AbortSignal.timeout(HTTP_TIMEOUT_MS)
     });
-    ensureDocentiSessionResponse(response, { hasSession: Boolean(cookie) });
+    ensureDocentiSessionResponse(response, { hasSession: hasPortalSession(dependencies.sessionKey, cookie) });
     if (!response.ok) return null;
     const contentType = response.headers.get('content-type') || '';
     if (!contentType.includes('json')) return null;
@@ -975,24 +983,18 @@ async function loginStudente(page, username, password, sessionKey = null) {
     }
   }
 
-  const loginResponse = await page.goto(DOCENTI_LOGIN_URL, { waitUntil: 'networkidle2', timeout: 35000 }).catch(() => null);
-  const loginHttpStatus = loginResponse?.status?.() ?? null;
+  await page.goto(DOCENTI_LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
   // 1. Seleziona la scheda Studente e aspetta lo stato attivo prima di usare il form.
   await page.waitForFunction(() => Array.from(document.querySelectorAll('a, button, li, .nav-link, span, div'))
-    .some(element => (element.textContent || '').trim().toLowerCase() === 'studente' || (element.textContent || '').trim().toLowerCase() === 'student'), { timeout: 30000 }).catch(async () => {
-      const diag = await page.evaluate(() => ({
-        title: document.title || '',
-        snippet: (document.body?.innerText || '').replace(/\s+/g, ' ').trim().slice(0, 180)
-      })).catch(() => ({ title: '', snippet: '' }));
-      console.warn(`[Docenti] Login form assente (HTTP ${loginHttpStatus}, url=${page.url()}, title="${diag.title}"): ${diag.snippet}`);
+    .some(element => (element.textContent || '').trim().toLowerCase() === 'studente'), { timeout: 15000 }).catch(() => {
       const error = new Error('La scheda Studente del portale Docenti non è stata caricata.');
       error.code = 'DOCENTI_LOGIN_FORM_UNAVAILABLE';
       throw error;
     });
   const selectedStudentTab = await page.evaluate(() => {
     const elements = Array.from(document.querySelectorAll('a, button, li, .nav-link, span, div'));
-    const studentEl = elements.find(element => (element.textContent || '').trim().toLowerCase() === 'studente' || (element.textContent || '').trim().toLowerCase() === 'student');
+    const studentEl = elements.find(element => (element.textContent || '').trim().toLowerCase() === 'studente');
     if (!studentEl) return false;
     const tab = studentEl.closest('a, button, li') || studentEl;
     if (!tab.closest('.active')) tab.click();
@@ -1003,19 +1005,20 @@ async function loginStudente(page, username, password, sessionKey = null) {
     error.code = 'DOCENTI_LOGIN_FORM_UNAVAILABLE';
     throw error;
   }
-  if (selectedStudentTab === true) await page.waitForFunction(() => {
-    const label = Array.from(document.querySelectorAll('a, button, li, .nav-link, span, div'))
-      .find(element => (element.textContent || '').trim().toLowerCase() === 'studente' || (element.textContent || '').trim().toLowerCase() === 'student');
-    return Boolean(label?.closest('.active'));
-  }, { timeout: 5000 }).catch(() => {
-    const error = new Error('Non è stato possibile selezionare il profilo Studente nel portale Docenti.');
+  // Il portale aggiorna il tab con classi diverse tra i deploy Angular. Non
+  // vincoliamo il login alla presenza di `.active`: è sufficiente che il form
+  // studente diventi disponibile, verificato dal selettore subito sotto.
+  // 2. Digitazione credenziali e sblocco pulsante Angular
+  const usernameSelector = 'input[placeholder="Username"], input[placeholder="username"], input[autocomplete="username"], input[type="email"], input[type="text"]';
+  const passwordSelector = 'input[placeholder="Password"], input[placeholder="password"], input[autocomplete="current-password"], input[type="password"]';
+  await page.waitForSelector(usernameSelector, { timeout: 15000 });
+  const uInput = await page.$(usernameSelector);
+  const pInput = await page.$(passwordSelector);
+  if (!uInput || !pInput) {
+    const error = new Error('Il modulo di accesso Studente del portale Docenti non è disponibile.');
     error.code = 'DOCENTI_LOGIN_FORM_UNAVAILABLE';
     throw error;
-  });
-  // 2. Digitazione credenziali e sblocco pulsante Angular
-  await page.waitForSelector('input[placeholder="Username"], input[type="text"]', { timeout: 15000 });
-  const uInput = await page.$('input[placeholder="Username"], input[type="text"]');
-  const pInput = await page.$('input[placeholder="Password"], input[type="password"]');
+  }
 
   await uInput.click({ clickCount: 3 });
   await uInput.type(username);
@@ -1032,7 +1035,7 @@ async function loginStudente(page, username, password, sessionKey = null) {
   // 3. Invio form
   const submitted = await page.evaluate(() => {
     const btns = Array.from(document.querySelectorAll('button, input[type="submit"]'));
-    const btn = btns.find(b => (/^(accedi|sign in)$/i.test((b.textContent || b.value || '').trim())));
+    const btn = btns.find(b => (b.textContent || b.value || '').trim().toLowerCase().startsWith('accedi'));
     if (btn) {
       btn.click();
       return true;
@@ -1271,7 +1274,7 @@ async function getDocentiData(userCredentials = {}, dependencies = {}) {
           item => `${item.name}|${item.courseName}|${item.date}|${item.group}`
         );
       }
-      if (process.env.DOCENTI_COLLECT_TESTS === 'true' && subscriptions.some(item => item.professorId)) {
+      if (subscriptions.some(item => item.professorId)) {
         const teacherTests = await collectTeacherTests(page, subscriptions, extract);
         tests = dedupe(
           [...tests, ...teacherTests],

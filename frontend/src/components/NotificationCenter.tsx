@@ -1,8 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { BellRing, CalendarClock, CheckCircle2 } from 'lucide-react';
-import { fetchPushVapidKey, sendPushTest, subscribePush, unsubscribePush, type Prenotazione, type TassaSnapshot } from '@/lib/api';
+import { ApiError, apiUrl, fetchPushVapidKey, sendPushTest, subscribePush, unsubscribePush, type Prenotazione, type TassaSnapshot } from '@/lib/api';
 
 type Reminder = { id: string; title: string; date: Date; detail?: string };
 
@@ -52,7 +52,34 @@ export default function NotificationCenter({ exams = [], taxes }: Props) {
   const [pushSubscription, setPushSubscription] = useState<PushSubscription | null>(null);
   const [pushBusy, setPushBusy] = useState(false);
 
+  useEffect(() => {
+    // Mantieni visibile lo stato reale dopo la riapertura della PWA: la
+    // subscription è conservata dal browser anche quando la scheda viene
+    // chiusa.
+    if (!window.isSecureContext || typeof Notification === 'undefined' || Notification.permission !== 'granted' || !('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    let cancelled = false;
+    void navigator.serviceWorker.register('/sw.js')
+      .then(registration => registration.pushManager.getSubscription())
+      .then(async subscription => {
+        if (cancelled || !subscription) return;
+        setPushSubscription(subscription);
+        // La subscription resta nel browser anche se il backend viene
+        // riavviato: ripubblicala in modo trasparente dopo un accesso valido.
+        await subscribePush(subscription.toJSON()).catch(() => undefined);
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, []);
+
   const enableNotifications = async () => {
+    if (!window.isSecureContext) {
+      setMessage('Notifiche push non disponibili: apri l’app su HTTPS (localhost è consentito in sviluppo).');
+      return;
+    }
+    if (window.location.protocol === 'https:' && /^http:\/\//i.test(apiUrl('/api/notifications/vapid-public-key'))) {
+      setMessage('Notifiche push non disponibili: il backend è configurato con HTTP. Imposta un URL HTTPS su Vercel.');
+      return;
+    }
     if (typeof Notification === 'undefined' || !('serviceWorker' in navigator) || !('PushManager' in window)) {
       setMessage('Il browser non supporta le notifiche push in background.');
       return;
@@ -69,7 +96,7 @@ export default function NotificationCenter({ exams = [], taxes }: Props) {
       if (!vapid.configured || !vapid.publicKey) {
         const next = reminders[0];
         if (next) new Notification('UniDesk NA · Promemoria', { body: `${next.title} · ${next.date.toLocaleDateString('it-IT')}${next.detail ? ` · ${next.detail}` : ''}` });
-        setMessage('Permesso concesso. Le notifiche in background richiedono la configurazione VAPID del server.');
+        setMessage('Permesso concesso. Le notifiche push in background non sono attive: il backend non ha ancora configurato VAPID.');
         return;
       }
       const registration = await navigator.serviceWorker.register('/sw.js');
@@ -78,8 +105,14 @@ export default function NotificationCenter({ exams = [], taxes }: Props) {
       await subscribePush(subscription.toJSON());
       setPushSubscription(subscription);
       setMessage('Notifiche push in background attive su questo browser.');
-    } catch {
-      setMessage('Impossibile configurare le notifiche push. Riprova dopo aver verificato HTTPS e VAPID.');
+    } catch (error) {
+      if (error instanceof ApiError && error.code === 'SESSION_EXPIRED') {
+        setMessage('Sessione scaduta. Effettua di nuovo l’accesso per attivare le notifiche.');
+      } else if (error instanceof ApiError && error.code === 'NETWORK' && window.location.protocol === 'https:') {
+        setMessage('Backend non raggiungibile in modo sicuro. Verifica che l’URL API su Vercel inizi con https://.');
+      } else {
+        setMessage('Impossibile configurare le notifiche push. Controlla la configurazione VAPID del backend.');
+      }
     } finally {
       setPushBusy(false);
     }

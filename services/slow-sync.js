@@ -2,6 +2,7 @@
 const snapshots = require('./career-snapshots');
 const { getDatiCarriera } = require('../scraper/segrepass');
 const { safeErrorMeta } = require('../lib/safe-log');
+const { saveStudentSlowData } = require('../db/repository');
 
 const statuses = new Map();
 const inFlight = new Map(); // Modificato in Map per conservare la Promise in esecuzione
@@ -53,6 +54,11 @@ function startSlowSync(profileId, credentials, dependencies = {}) {
         prenotazioni,
         updatedAt: Date.now()
       });
+      // Mantieni una copia cifrata nel profilo: le mappe RAM vengono perse
+      // quando il processo viene riavviato o una funzione serverless cambia istanza.
+      try { saveStudentSlowData(profileId, { taxes, prenotazioni }); } catch (error) {
+        console.warn('[slow-sync] Snapshot persistente non aggiornato:', safeErrorMeta(error));
+      }
       statuses.set(profileId, { state: 'ready', finishedAt: Date.now() });
       return statuses.get(profileId);
     })

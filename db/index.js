@@ -39,6 +39,7 @@ function initSchema(database) {
       surname_initial TEXT,
       carriera_json TEXT,
       tasse_json TEXT,
+      prenotazioni_json TEXT,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -168,6 +169,9 @@ function initSchema(database) {
   if (!profileColumns.some(column => column.name === 'matricola')) {
     database.exec('ALTER TABLE StudentProfile ADD COLUMN matricola TEXT');
   }
+  if (!profileColumns.some(column => column.name === 'prenotazioni_json')) {
+    database.exec('ALTER TABLE StudentProfile ADD COLUMN prenotazioni_json TEXT');
+  }
 }
 
 function sealLegacyJson(value, associatedData) {
@@ -182,12 +186,13 @@ function sealLegacyJson(value, associatedData) {
 
 /** Upgrade valid legacy personal JSON rows to encrypted-at-rest storage. */
 function migratePersonalJson(database) {
-  const profiles = database.prepare('SELECT id, carriera_json, tasse_json FROM StudentProfile').all();
-  const updateProfile = database.prepare('UPDATE StudentProfile SET carriera_json = ?, tasse_json = ? WHERE id = ?');
+  const profiles = database.prepare('SELECT id, carriera_json, tasse_json, prenotazioni_json FROM StudentProfile').all();
+  const updateProfile = database.prepare('UPDATE StudentProfile SET carriera_json = ?, tasse_json = ?, prenotazioni_json = ? WHERE id = ?');
   for (const row of profiles) {
     const career = sealLegacyJson(row.carriera_json, `${row.id}:carriera`);
     const taxes = sealLegacyJson(row.tasse_json, `${row.id}:tasse`);
-    if (career || taxes) updateProfile.run(career || row.carriera_json || null, taxes || row.tasse_json || null, row.id);
+    const bookings = sealLegacyJson(row.prenotazioni_json, `${row.id}:prenotazioni`);
+    if (career || taxes || bookings) updateProfile.run(career || row.carriera_json || null, taxes || row.tasse_json || null, bookings || row.prenotazioni_json || null, row.id);
   }
 
   const docenti = database.prepare('SELECT profile_id, data_json FROM DocentiDataCache').all();
