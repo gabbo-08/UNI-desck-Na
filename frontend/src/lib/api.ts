@@ -885,13 +885,14 @@ const PROFILE_PREFS_PREFIX = 'unidesk_profile_prefs_v1:';
 export function saveProfilePrefsCache(profileId: string, profile: Partial<ProfiloRecord> | ProfiloStudente): void {
   if (typeof window === 'undefined' || !profileId) return;
   try {
+    const rawProfile = profile as Record<string, unknown>;
     const payload = {
-      courseId: profile.courseId || profile.course_id || null,
-      courseName: profile.courseName || profile.course_name || null,
-      cohortYear: profile.cohortYear || profile.cohort_year || null,
-      currentCourseYear: profile.currentCourseYear || profile.current_course_year || null,
-      channel: profile.channel || null,
-      surnameInitial: profile.surnameInitial || profile.surname_initial || null
+      courseId: (rawProfile.courseId ?? rawProfile.course_id ?? null) as string | null,
+      courseName: (rawProfile.courseName ?? rawProfile.course_name ?? null) as string | null,
+      cohortYear: (rawProfile.cohortYear ?? rawProfile.cohort_year ?? null) as number | null,
+      currentCourseYear: (rawProfile.currentCourseYear ?? rawProfile.current_course_year ?? null) as number | null,
+      channel: (rawProfile.channel ?? null) as string | null,
+      surnameInitial: (rawProfile.surnameInitial ?? rawProfile.surname_initial ?? null) as string | null
     };
     window.localStorage.setItem(`${PROFILE_PREFS_PREFIX}${profileId.toUpperCase()}`, JSON.stringify(payload));
   } catch {}

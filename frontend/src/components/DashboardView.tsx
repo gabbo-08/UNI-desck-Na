@@ -1,7 +1,12 @@
 
 'use client';
 
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import {
+  useState,
+  useEffect,
+  useMemo,
+  useRef,
+  useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import Image from 'next/image';
 import {
@@ -34,7 +39,7 @@ import {
   Eye,
   EyeOff,
   MoreHorizontal,
-} from 'lucide-react';
+  } from 'lucide-react';
 import {
   fetchDocentiSummary,
   fetchMetriche,
@@ -63,6 +68,10 @@ import {
   type ProfessorPreference,
   type PlanCourse,
   fetchProfessorPreferences,
+  apiUrl,
+  updateProfile,
+  saveProfilePrefsCache,
+  readProfilePrefsCache
 } from '@/lib/api';
 import { safePaymentUrl } from '@/lib/safe-content';
 import ProfileSetupView from '@/components/ProfileSetupView';
@@ -505,14 +514,14 @@ const handleLogin = async (e: React.FormEvent) => {
         resolvedOnboarding = false;
         resolvedProfile = {
           ...resolvedProfile,
-          ...(localPrefs.courseId ? { course_id: localPrefs.courseId } : {}),
-          ...(localPrefs.courseName ? { course_name: localPrefs.courseName } : {}),
-          ...(localPrefs.cohortYear ? { cohort_year: localPrefs.cohortYear } : {}),
-          ...(localPrefs.currentCourseYear ? { current_course_year: localPrefs.currentCourseYear } : {}),
+          ...(localPrefs.courseId ? { courseId: localPrefs.courseId } : {}),
+          ...(localPrefs.courseName ? { courseName: localPrefs.courseName } : {}),
+          ...(localPrefs.cohortYear ? { cohortYear: localPrefs.cohortYear } : {}),
+          ...(localPrefs.currentCourseYear ? { currentCourseYear: localPrefs.currentCourseYear } : {}),
           ...(localPrefs.channel ? { channel: localPrefs.channel } : {}),
-          ...(localPrefs.surnameInitial ? { surname_initial: localPrefs.surnameInitial } : {})
+          ...(localPrefs.surnameInitial ? { surnameInitial: localPrefs.surnameInitial } : {})
         } as ProfiloStudente;
-        void updateProfile(localPrefs).then(res => {
+        void updateProfile(localPrefs).then((res: { profile: ProfiloStudente; onboardingRequired: boolean }) => {
           setProfile(res.profile);
           setOnboardingRequired(res.onboardingRequired);
         }).catch(() => {});
