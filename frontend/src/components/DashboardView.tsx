@@ -394,6 +394,11 @@ export default function DashboardView() {
   }, [slowNotice]);
 
   useEffect(() => {
+    if (authenticated || checkingSession) return;
+    fetch(apiUrl('/health'), { cache: 'no-store' }).catch(() => {});
+  }, [authenticated, checkingSession]);
+
+  useEffect(() => {
     if (!authenticated) {
       Promise.resolve().then(() => setSlowNotice(null));
       return;
@@ -492,8 +497,28 @@ const handleLogin = async (e: React.FormEvent) => {
       
       setLoginStep('Finalizzazione sessione...');
       setAuthenticated(true);
-      setProfile(access.profile);
-      setOnboardingRequired(access.onboardingRequired);
+      let resolvedProfile = access.profile;
+      let resolvedOnboarding = access.onboardingRequired;
+      const resolvedId = (access as { profileId?: string }).profileId || access.profile?.id;
+      const localPrefs = readProfilePrefsCache(resolvedId);
+      if (resolvedOnboarding && localPrefs) {
+        resolvedOnboarding = false;
+        resolvedProfile = {
+          ...resolvedProfile,
+          ...(localPrefs.courseId ? { course_id: localPrefs.courseId } : {}),
+          ...(localPrefs.courseName ? { course_name: localPrefs.courseName } : {}),
+          ...(localPrefs.cohortYear ? { cohort_year: localPrefs.cohortYear } : {}),
+          ...(localPrefs.currentCourseYear ? { current_course_year: localPrefs.currentCourseYear } : {}),
+          ...(localPrefs.channel ? { channel: localPrefs.channel } : {}),
+          ...(localPrefs.surnameInitial ? { surname_initial: localPrefs.surnameInitial } : {})
+        } as ProfiloStudente;
+        void updateProfile(localPrefs).then(res => {
+          setProfile(res.profile);
+          setOnboardingRequired(res.onboardingRequired);
+        }).catch(() => {});
+      }
+      setProfile(resolvedProfile);
+      setOnboardingRequired(resolvedOnboarding);
       setData(access.metriche);
       const nextDocenti = enableDocentiSync && access.docentiReason !== 'DOCENTI_SYNC_DISABLED';
       setDocentiEnabled(nextDocenti);
@@ -531,6 +556,16 @@ const handleLogin = async (e: React.FormEvent) => {
     setProfile(savedProfile);
     setOnboardingRequired(false);
     setEditingProfile(false);
+    const cached = readBootstrapCache();
+    writeBootstrapCache({
+      profile: savedProfile,
+      onboardingRequired: false,
+      docentiEnabled: cached?.docentiEnabled ?? docentiEnabled,
+      metriche: cached?.metriche ?? data
+    });
+    if (savedProfile?.id) {
+      saveProfilePrefsCache(String(savedProfile.id), savedProfile);
+    }
   };
 
   const extProfile: ProfiloRecord = profile ?? {};

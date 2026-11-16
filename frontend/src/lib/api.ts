@@ -882,7 +882,7 @@ export async function bookCareerExam(
 
 const PROFILE_PREFS_PREFIX = 'unidesk_profile_prefs_v1:';
 
-export function saveProfilePrefsCache(profileId: string, profile: Partial<ProfiloRecord>): void {
+export function saveProfilePrefsCache(profileId: string, profile: Partial<ProfiloRecord> | ProfiloStudente): void {
   if (typeof window === 'undefined' || !profileId) return;
   try {
     const payload = {
