@@ -45,6 +45,9 @@ import {
   logoutAPI,
   deleteAccountAPI,
   fetchBootstrap,
+  clearClientCache,
+  readBootstrapCache,
+  writeBootstrapCache,
   type BookedExamDocenti,
   type TestDocenti,
   type TimetableEvent,
@@ -227,6 +230,8 @@ function formatGiornoLungo(iso: string): string {
 export default function DashboardView() {
   const [authenticated, setAuthenticated] = useState(false);
   const [checkingSession, setCheckingSession] = useState(true);
+  const [sessionSyncState, setSessionSyncState] = useState<'idle' | 'syncing' | 'synced' | 'offline'>('idle');
+  const lastBootstrapSyncRef = useRef<number>(0);
 
   const [profile, setProfile] = useState<ProfiloStudente | null>(null);
   const [credentials, setCredentials] = useState<CredenzialiSegrepass>({ codiceFiscale: '', password: '' });
@@ -255,6 +260,7 @@ export default function DashboardView() {
   const timetableLoadedRef = useRef(false);
 
   const clearSession = useCallback(() => {
+    clearClientCache();
     setAuthenticated(false);
     setProfile(null);
     setData(null);
@@ -266,6 +272,7 @@ export default function DashboardView() {
     setDocentiEnabled(false);
     setBookingReceipt(null);
     setTimetableReady(false);
+    setSessionSyncState('idle');
     timetableLoadedRef.current = false;
   }, []);
 
@@ -284,7 +291,19 @@ export default function DashboardView() {
     setError('');
     try {
       const metriche = await fetchMetriche({ refresh });
-      setData(metriche);
+      setData(prev => {
+        const merged = { ...prev, ...metriche };
+        const cached = readBootstrapCache();
+        if (cached?.profile) {
+          writeBootstrapCache({
+            profile: cached.profile,
+            onboardingRequired: cached.onboardingRequired,
+            docentiEnabled: cached.docentiEnabled,
+            metriche: merged
+          });
+        }
+        return merged;
+      });
     } catch (err: unknown) {
       if (err instanceof Error && err.message === 'SESSION_EXPIRED') {
         clearSession();
@@ -297,32 +316,78 @@ export default function DashboardView() {
     }
   }, [clearSession]);
 
+  const revalidateBootstrap = useCallback(async (hasLocalSnapshot: boolean, attempt = 0): Promise<void> => {
+    setSessionSyncState('syncing');
+    try {
+      const bootstrap = await fetchBootstrap({ timeoutMs: hasLocalSnapshot ? 20_000 : 45_000 });
+      if (!bootstrap) {
+        clearSession();
+        setCheckingSession(false);
+        return;
+      }
+      const nextDocentiEnabled = Boolean(bootstrap.sync?.docenti?.enabled);
+      setAuthenticated(true);
+      setProfile(bootstrap.profile);
+      setOnboardingRequired(bootstrap.onboardingRequired);
+      setDocentiEnabled(nextDocentiEnabled);
+      setSessionSyncState('synced');
+      lastBootstrapSyncRef.current = Date.now();
+      let mergedMetriche: Metriche | null = bootstrap.metriche || null;
+      setData(prev => {
+        if (!bootstrap.metriche) return prev;
+        mergedMetriche = { ...prev, ...bootstrap.metriche, anagrafica: { ...prev?.anagrafica, ...bootstrap.metriche.anagrafica } };
+        return mergedMetriche;
+      });
+      writeBootstrapCache({ profile: bootstrap.profile, onboardingRequired: bootstrap.onboardingRequired, docentiEnabled: nextDocentiEnabled, metriche: mergedMetriche });
+      setCheckingSession(false);
+      const needsSummaryMetrics = mergedMetriche?.mediaPonderata === undefined;
+      if (!bootstrap.metriche || !bootstrap.sync?.fromCache || needsSummaryMetrics) {
+        void caricaDati(false);
+      }
+    } catch (sessionError: unknown) {
+      if (hasLocalSnapshot) {
+        setSessionSyncState('offline');
+        setCheckingSession(false);
+        if (attempt === 0) {
+          window.setTimeout(() => { void revalidateBootstrap(true, 1); }, 6000);
+        }
+        return;
+      }
+      setCheckingSession(false);
+      setError(sessionError instanceof Error ? sessionError.message : 'Impossibile verificare la sessione.');
+    }
+  }, [caricaDati, clearSession]);
+
   useEffect(() => {
     let active = true;
-    fetchBootstrap()
-      .then(async bootstrap => {
-        if (!active || !bootstrap) return;
+    const cached = readBootstrapCache();
+    Promise.resolve().then(() => {
+      if (!active) return;
+      if (cached) {
         setAuthenticated(true);
-        setProfile(bootstrap.profile);
-        setOnboardingRequired(bootstrap.onboardingRequired);
-        // Ripristina l'opt-in Docenti anche dopo un reload.  Il backend legge
-        // questo flag dalla sessione cifrata, quindi la sezione può partire
-        // mentre il riepilogo/cache viene aggiornato in background.
-        setDocentiEnabled(Boolean(bootstrap.sync?.docenti?.enabled));
-        if (bootstrap.metriche) setData(bootstrap.metriche);
-        // Mostra subito ciò che è già in cache; completa medie, CFU e PIN in
-        // background senza bloccare il primo rendering della dashboard.
-        if (!bootstrap.metriche || !bootstrap.sync?.fromCache) void caricaDati();
-      })
-      .catch((sessionError: unknown) => {
-        if (active) setError(sessionError instanceof Error ? sessionError.message : 'Impossibile verificare la sessione.');
-      })
-      .finally(() => {
-        if (active) setCheckingSession(false);
-      });
-
+        setProfile(cached.profile);
+        setOnboardingRequired(cached.onboardingRequired);
+        setDocentiEnabled(cached.docentiEnabled);
+        if (cached.metriche) setData(cached.metriche);
+        setCheckingSession(false);
+        void revalidateBootstrap(true);
+      } else {
+        void revalidateBootstrap(false);
+      }
+    });
     return () => { active = false; };
-  }, [caricaDati]);
+  }, [revalidateBootstrap]);
+
+  useEffect(() => {
+    if (!authenticated) return;
+    const onVisibilityChange = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (Date.now() - lastBootstrapSyncRef.current < 10 * 60 * 1000) return;
+      void revalidateBootstrap(true);
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
+  }, [authenticated, revalidateBootstrap]);
 
   useEffect(() => {
     setDismissedSlowNotice(null);
@@ -430,7 +495,11 @@ const handleLogin = async (e: React.FormEvent) => {
       setProfile(access.profile);
       setOnboardingRequired(access.onboardingRequired);
       setData(access.metriche);
-      setDocentiEnabled(enableDocentiSync && access.docentiReason !== 'DOCENTI_SYNC_DISABLED');
+      const nextDocenti = enableDocentiSync && access.docentiReason !== 'DOCENTI_SYNC_DISABLED';
+      setDocentiEnabled(nextDocenti);
+      setSessionSyncState('synced');
+      lastBootstrapSyncRef.current = Date.now();
+      writeBootstrapCache({ profile: access.profile, onboardingRequired: access.onboardingRequired, docentiEnabled: nextDocenti, metriche: access.metriche });
       setCredentials({ codiceFiscale: '', password: '', email: '' });
       setEnableDocentiSync(false);
     } catch (err: unknown) {
@@ -963,6 +1032,8 @@ const handleLogin = async (e: React.FormEvent) => {
             {privacyMode ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
             <span className="hidden sm:inline">Privacy</span>
           </button>
+          {sessionSyncState === 'syncing' && (<span className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-[#3B7BC4]/40 bg-[#2F7FD0]/15 px-2.5 text-xs text-[#9CCBF5]"><span className="h-2 w-2 animate-pulse rounded-full bg-[#5AB0F0]" /><span className="hidden sm:inline">Sincronizzazione...</span></span>)}
+          {sessionSyncState === 'offline' && (<button type="button" onClick={() => void revalidateBootstrap(true)} title="Server in avvio o non raggiungibile. Clicca per sincronizzare." className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/15 px-2.5 text-xs text-amber-200 hover:bg-amber-500/25"><span className="h-2 w-2 rounded-full bg-amber-400" /><span className="hidden sm:inline">Cache locale ? Riprova</span></button>)}
           <PinReveal pin={data?.pin} />
           <ThemeSwitch />
           <button onClick={refresh} disabled={loading} aria-label="Aggiorna carriera" title="Aggiorna carriera" className={GHOST_BTN}>

@@ -477,6 +477,38 @@ export function clearClientCache(): void {
 /* Base                                                                */
 /* ------------------------------------------------------------------ */
 
+const BOOTSTRAP_CACHE_KEY = 'segrepass:cache:bootstrap:v1';
+
+export type CachedBootstrapSnapshot = {
+  savedAt: number;
+  profile: ProfiloRecord;
+  onboardingRequired: boolean;
+  docentiEnabled: boolean;
+  metriche: Metriche | null;
+};
+
+export function readBootstrapCache(): CachedBootstrapSnapshot | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.localStorage.getItem(BOOTSTRAP_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as CachedBootstrapSnapshot;
+    if (!parsed || typeof parsed !== 'object' || !parsed.profile) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+export function writeBootstrapCache(snapshot: Omit<CachedBootstrapSnapshot, 'savedAt'>): void {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(BOOTSTRAP_CACHE_KEY, JSON.stringify({ ...snapshot, savedAt: Date.now() }));
+  } catch {
+    /* storage non disponibile */
+  }
+}
+
 const API_BASE = (process.env.NEXT_PUBLIC_BACKEND_URL || '').trim().replace(/\/+$/, '');
 const API_TIMEOUT_MS = 260_000;
 
@@ -558,9 +590,10 @@ export async function restoreSession(): Promise<RestoreSessionResponse | null> {
   }
 }
 
-export async function fetchBootstrap(): Promise<BootstrapResponse | null> {
+export async function fetchBootstrap(options: { timeoutMs?: number } = {}): Promise<BootstrapResponse | null> {
   try {
-    return await fetchWithAuth(apiUrl('/api/auth/bootstrap')) as BootstrapResponse;
+    const signal = options.timeoutMs ? AbortSignal.timeout(options.timeoutMs) : undefined;
+    return await fetchWithAuth(apiUrl('/api/auth/bootstrap'), { signal }) as BootstrapResponse;
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) return null;
     throw error;
