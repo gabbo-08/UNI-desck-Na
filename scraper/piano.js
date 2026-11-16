@@ -28,7 +28,7 @@ async function openPianoPage(page, esisUrl) {
 
   await page.waitForFunction(
     () => /Insegnamenti del Piano|Piano di Studi/i.test(document.body ? document.body.innerText : ''),
-    { timeout: 6000 }
+    { timeout: 3000 }
   ).catch(() => {});
   await page.waitForFunction(() => Array.from(document.querySelectorAll('table')).some(table => {
     const text = table.innerText || '';

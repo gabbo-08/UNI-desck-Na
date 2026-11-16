@@ -6,8 +6,8 @@ const { seal } = require('../lib/secret-box');
 const SCHEMA_VERSION = 8;
 const DEFAULT_DB_PATH = path.resolve(__dirname, '../data/unicorno.sqlite');
 
-function ensureDataDir() {
-  const dataDir = path.dirname(DEFAULT_DB_PATH);
+function ensureDataDir(filename = DEFAULT_DB_PATH) {
+  const dataDir = path.dirname(filename);
   if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 }
 
@@ -214,7 +214,7 @@ function migratePersonalJson(database) {
  * Crea un'istanza isolata del database (usare ':memory:' nei test).
  */
 function createDatabase(filename = DEFAULT_DB_PATH) {
-  if (filename !== ':memory:') ensureDataDir();
+  if (filename !== ':memory:') ensureDataDir(filename);
   const database = new Database(filename);
   database.pragma('journal_mode = WAL');
   database.pragma('foreign_keys = ON');

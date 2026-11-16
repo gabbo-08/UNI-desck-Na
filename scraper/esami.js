@@ -32,7 +32,7 @@ async function scrapeEsamiSostenuti(context, esisUrl) {
     }
     
     if (clicked) {
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 10; i++) {
         let ready = false;
         for (const frame of page.frames()) {
           if (await frame.$('table').catch(() => null)) { ready = true; break; }

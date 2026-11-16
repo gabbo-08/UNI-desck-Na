@@ -499,7 +499,7 @@ const handleLogin = async (e: React.FormEvent) => {
       setDocentiEnabled(nextDocenti);
       setSessionSyncState('synced');
       lastBootstrapSyncRef.current = Date.now();
-      writeBootstrapCache({ profile: access.profile, onboardingRequired: access.onboardingRequired, docentiEnabled: nextDocenti, metriche: access.metriche });
+      writeBootstrapCache({ profile: resolvedProfile, onboardingRequired: resolvedOnboarding, docentiEnabled: nextDocenti, metriche: access.metriche });
       setCredentials({ codiceFiscale: '', password: '', email: '' });
       setEnableDocentiSync(false);
     } catch (err: unknown) {

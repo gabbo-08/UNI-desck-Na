@@ -9,7 +9,8 @@ const { normalizePianoTable } = require('../lib/piano-normalizer');
 const { enableFastMode } = require('./utils');
 
 const NODI_SEGREPASS = ['segrepass1', 'segrepass2', 'segrepass3'];
-const NODE_TIMEOUT_MS = 8000;
+const NODE_TIMEOUT_MS = 4500;
+let lastWorkingNode = null;
 // Il portale a volte invia il login via form/XHR senza una navigazione
 // completa. Non lasciare il primo accesso bloccato per 60 secondi in quel
 // caso: lo stato della pagina viene verificato subito dopo il click.
@@ -103,7 +104,7 @@ async function scrapePin(context, esisUrl) {
     // La pagina PIN è un frameset legacy: domcontentloaded può precedere il
     // caricamento del frame che contiene i dati. Riprova per alcuni secondi,
     // leggendo sia il testo sia i valori dei campi (non presenti in innerText).
-    const deadline = Date.now() + 8000;
+    const deadline = Date.now() + 2500;
     while (Date.now() < deadline && !pin) {
       const sources = await Promise.all(page.frames().map(frame => frame.evaluate(() => {
         const text = document.body?.innerText || '';
@@ -143,7 +144,8 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
     let nodoAttivo = null;
     let base = '';
 
-    for (const nodo of NODI_SEGREPASS) {
+    const orderedNodes = lastWorkingNode ? [lastWorkingNode, ...NODI_SEGREPASS.filter(n => n !== lastWorkingNode)] : NODI_SEGREPASS;
+    for (const nodo of orderedNodes) {
       try {
         console.log(`[Segrepass] Controllo https://www.${nodo}.unina.it/identificazione.do...`);
         const response = await page.goto(`https://www.${nodo}.unina.it/identificazione.do`, {
@@ -156,6 +158,7 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
           
           if (hasInputs) {
             nodoAttivo = nodo;
+            lastWorkingNode = nodo;
             base = `https://www.${nodo}.unina.it`;
             console.log(`[Segrepass] ✅ Trovato nodo attivo su identificazione: ${nodoAttivo}`);
             break;

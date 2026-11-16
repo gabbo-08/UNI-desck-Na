@@ -878,3 +878,41 @@ export async function bookCareerExam(
     })
   }) as Promise<{ success: boolean; message?: string }>;
 }
+
+
+const PROFILE_PREFS_PREFIX = 'unidesk_profile_prefs_v1:';
+
+export function saveProfilePrefsCache(profileId: string, profile: Partial<ProfiloRecord>): void {
+  if (typeof window === 'undefined' || !profileId) return;
+  try {
+    const payload = {
+      courseId: profile.courseId || profile.course_id || null,
+      courseName: profile.courseName || profile.course_name || null,
+      cohortYear: profile.cohortYear || profile.cohort_year || null,
+      currentCourseYear: profile.currentCourseYear || profile.current_course_year || null,
+      channel: profile.channel || null,
+      surnameInitial: profile.surnameInitial || profile.surname_initial || null
+    };
+    window.localStorage.setItem(`${PROFILE_PREFS_PREFIX}${profileId.toUpperCase()}`, JSON.stringify(payload));
+  } catch {}
+}
+
+export function readProfilePrefsCache(profileId?: string | null): ProfileUpdatePayload | null {
+  if (typeof window === 'undefined' || !profileId) return null;
+  try {
+    const raw = window.localStorage.getItem(`${PROFILE_PREFS_PREFIX}${String(profileId).toUpperCase()}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+    const out: ProfileUpdatePayload = {};
+    if (parsed.courseId) out.courseId = String(parsed.courseId);
+    if (parsed.courseName) out.courseName = String(parsed.courseName);
+    if (parsed.cohortYear) out.cohortYear = Number(parsed.cohortYear);
+    if (parsed.currentCourseYear) out.currentCourseYear = Number(parsed.currentCourseYear);
+    if (parsed.channel) out.channel = String(parsed.channel);
+    if (parsed.surnameInitial) out.surnameInitial = String(parsed.surnameInitial);
+    return Object.keys(out).length ? out : null;
+  } catch {
+    return null;
+  }
+}

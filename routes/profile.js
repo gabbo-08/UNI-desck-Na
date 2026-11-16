@@ -11,6 +11,7 @@ const {
 
 const router = express.Router();
 const { toProfileDto } = require('../lib/dto');
+const { writeProfilePrefsCookie } = require('../lib/profile-cookie');
 
 function isConfigured(profile) {
   return Boolean(

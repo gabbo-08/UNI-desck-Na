@@ -1,7 +1,8 @@
 const express = require('express');
 const { createStudentSession } = require('../services/student-session');
 const { authMiddleware, extractToken } = require('../middleware/auth');
-const { getStudentProfile, getDocentiDataCache, getProfessorPreferences, getBookingReceipts } = require('../db/repository');
+const { getStudentProfile, updateStudentProfile, getDocentiDataCache, getProfessorPreferences, getBookingReceipts } = require('../db/repository');
+const { readProfilePrefsCookie, writeProfilePrefsCookie } = require('../lib/profile-cookie');
 const { db } = require('../db');
 const { sessionErrorStatus, sessionErrorMessage } = require('../lib/errors');
 const { setAuthCookie, clearAuthCookie } = require('../lib/cookies');

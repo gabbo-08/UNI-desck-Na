@@ -163,6 +163,7 @@ function buildStudentProfile(anagrafica = {}, { taxes = null, existing = null, f
     courseId = findPlanByName(courseName, [anagrafica.codiceCorso, existing?.course_id].filter(Boolean), cohortYear, listPlans, findPlan);
   }
   courseId = courseId ?? existing?.course_id ?? candidates[0] ?? null;
+  const resolvedCourseName = courseName || (courseId && CODE_TO_COURSE_NAME[String(courseId).trim().toUpperCase()]) || null;
 
   const surname = anagrafica.cognome ? String(anagrafica.cognome).trim().toUpperCase() : '';
   const surnameInitial = surname.charAt(0) || existing?.surname_initial || null;
@@ -172,7 +173,7 @@ function buildStudentProfile(anagrafica = {}, { taxes = null, existing = null, f
     ? calculateCourseYear(cohortYear, MAX_COURSE_YEARS, now)
     : (existing?.current_course_year ?? null);
 
-  return { courseId, courseName, cohortYear, currentCourseYear, channel, surnameInitial };
+  return { courseId, courseName: resolvedCourseName, cohortYear, currentCourseYear, channel, surnameInitial };
 }
 
 /**
