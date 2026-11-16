@@ -177,11 +177,12 @@ async function start() {
     try { purgeExpiredPersonalData(db); } catch (error) { console.error('[Retention Error]', safeErrorMeta(error)); }
   }, 60 * 60 * 1000);
   retentionTimer.unref?.();
-  await initCluster();
+  const clusterStartup = initCluster();
   server = app.listen(PORT, HOST, () => {
     const publicOrigin = normalizeOrigin(process.env.PUBLIC_ORIGIN) || `http://${HOST}:${PORT}`;
     console.log(`[System] API attive su ${publicOrigin}`);
   });
+  await clusterStartup;
 }
 
 async function gracefulShutdown(signal, exitCode = 0) {
