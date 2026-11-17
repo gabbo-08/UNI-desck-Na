@@ -6,6 +6,9 @@ const { normalizeName } = require('../db/repository');
 const COURSE_CODE_MAP = {
   'INGEGNERIA INFORMATICA': 'DE3'
 };
+const CODE_TO_COURSE_NAME = Object.fromEntries(
+  Object.entries(COURSE_CODE_MAP).map(([name, code]) => [code, name])
+);
 
 const MAX_COURSE_YEARS = 3;
 
