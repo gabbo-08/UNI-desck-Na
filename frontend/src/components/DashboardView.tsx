@@ -363,7 +363,6 @@ export default function DashboardView() {
         return;
       }
       setCheckingSession(false);
-      setError(sessionError instanceof Error ? sessionError.message : 'Impossibile verificare la sessione.');
     }
   }, [caricaDati, clearSession]);
 
@@ -381,8 +380,9 @@ export default function DashboardView() {
         setCheckingSession(false);
         void revalidateBootstrap(true);
       } else {
-        void revalidateBootstrap(false);
-      }
+          setCheckingSession(false);
+          void revalidateBootstrap(false);
+        }
     });
     return () => { active = false; };
   }, [revalidateBootstrap]);
