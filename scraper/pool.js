@@ -2,6 +2,7 @@
 const { Cluster } = require('puppeteer-cluster');
 
 let cluster = null;
+let initPromise = null;
 
 async function initCluster() {
   if (cluster) return cluster;
