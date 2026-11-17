@@ -18,7 +18,7 @@ const metricheRoutes = require('./routes/metriche');
 
 const authModule = require('./middleware/auth');
 const authMiddleware = authModule.authMiddleware || authModule;
-const { csrfProtection, normalizeOrigin } = require('./lib/csrf');
+const { csrfProtection, normalizeOrigin, isOriginAllowed } = require('./lib/csrf');
 
 const { db } = require('./db');
 const { startSessionCleanup } = require('./services/server-sessions');
@@ -50,7 +50,17 @@ const frontendOrigins = [...new Set([
   normalizeOrigin(process.env.PUBLIC_ORIGIN)
 ].filter(Boolean))];
 
-app.use(cors({ origin: frontendOrigins, credentials: true }));
+app.use(cors({
+  origin(origin, callback) {
+    if (!origin) return callback(null, true);
+    const normalized = normalizeOrigin(origin);
+    if (normalized && (frontendOrigins.includes(normalized) || isOriginAllowed({ headers: { origin: normalized } }, normalized))) {
+      return callback(null, true);
+    }
+    return callback(null, false);
+  },
+  credentials: true
+}));
 app.use('/api', (_req, res, next) => {
   res.set('Cache-Control', 'private, no-store');
   next();

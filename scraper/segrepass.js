@@ -9,7 +9,7 @@ const { normalizePianoTable } = require('../lib/piano-normalizer');
 const { enableFastMode } = require('./utils');
 
 const NODI_SEGREPASS = ['segrepass1', 'segrepass2', 'segrepass3'];
-const NODE_TIMEOUT_MS = 4500;
+const NODE_TIMEOUT_MS = 9500;
 let lastWorkingNode = null;
 // Il portale a volte invia il login via form/XHR senza una navigazione
 // completa. Non lasciare il primo accesso bloccato per 60 secondi in quel
