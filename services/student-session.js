@@ -1,7 +1,6 @@
-
-// services/student-session.js
+﻿// services/student-session.js
 const { getDatiCarriera } = require('../scraper/segrepass');
-const { getDocentiData } = require('../scraper/docenti');
+const { getDocentiData, resolveCodiceFiscaleFromDocenti } = require('../scraper/docenti');
 const { buildStudentProfile } = require('./profile-extractor');
 const snapshots = require('./career-snapshots');
 const careerCache = require('./career-cache');
@@ -43,15 +42,10 @@ function listPlansForCohort(cohortYear, database = db) {
 }
 
 function docentiCredentials(dependencies = {}) {
-  // Nessun fallback globale: in produzione non esistono credenziali Docenti
-  // condivise. I servizi possono ancora ricevere credenziali esplicite per
-  // test o integrazioni, ma il default resta vuoto.
   return dependencies.docentiCredentials || {};
 }
 
 function loadDocentiInBackground(profileId, dependencies = {}) {
-  // Un solo job per studente: due login ravvicinati non devono aprire due
-  // sessioni sullo stesso account (il portale invaliderebbe la prima).
   if (snapshots.isDocentiLoading(profileId)) return Promise.resolve();
 
   if (!docentiSyncEnabled(dependencies)) {
@@ -104,9 +98,6 @@ function loadDocentiInBackground(profileId, dependencies = {}) {
     .catch(error => {
       if (!snapshots.isCurrentDocentiLoad(profileId, generation)) return;
       console.warn(`[docenti] Acquisizione per ${safeProfileRef(profileId)} non riuscita:`, safeErrorMeta(error));
-      // Un refresh fallito non deve cancellare dati Docenti già validi:
-      // manteniamo lo snapshot utilizzabile e lasciamo al client lo stato
-      // stale, così bootstrap/polling non scollegano l'integrazione.
       const previous = snapshots.getDocentiSnapshot(profileId);
       if (previous?.available) {
         snapshots.setDocentiSnapshot(profileId, {
@@ -125,10 +116,6 @@ function loadDocentiInBackground(profileId, dependencies = {}) {
     .finally(() => snapshots.clearDocentiLoading(profileId, generation));
 }
 
-/**
- * Email da usare per il portale Docenti: quella del profilo, oppure l'id
- * stesso se l'utente ha fatto login con l'email istituzionale.
- */
 function resolveDocentiEmail(profile, profileId) {
   const fromProfile = profile?.email;
   if (typeof fromProfile === 'string' && fromProfile.includes('@')) return fromProfile.trim().toLowerCase();
@@ -136,57 +123,49 @@ function resolveDocentiEmail(profile, profileId) {
   return null;
 }
 
-/**
- * Accetta solo email ben formate (es. nome.cognome@studenti.unina.it).
- */
 function normalizeEmail(value) {
   const email = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  return /^[^\s@]+@studenti\.unina\.it$/.test(email) ? email : null;
+  if (!email || email.includes(' ') || !email.endsWith('@studenti.unina.it')) return null;
+  const local = email.slice(0, -'@studenti.unina.it'.length);
+  return local.length > 0 && !local.includes('@') ? email : null;
 }
 
 function normalizeLoginIdentifier(value) {
-  if (typeof value !== 'string') return null;
-  const normalized = value.trim();
-  if (normalizeEmail(normalized)) return normalized.toLowerCase();
-  const codiceFiscale = normalized.toUpperCase();
-  return /^[A-Z]{6}\d{2}[A-Z]\d{2}[A-Z]\d{3}[A-Z]$/.test(codiceFiscale)
-    ? codiceFiscale
-    : null;
+  return normalizeEmail(value);
 }
 
-async function createStudentSession({ codiceFiscale, password, email, enableDocentiSync } = {}, dependencies = {}) {
-  const normalizedIdentifier = normalizeLoginIdentifier(codiceFiscale);
-  if (!normalizedIdentifier || typeof password !== 'string' || !password) {
-    const error = new Error('Inserisci codice fiscale o email istituzionale e password.');
+async function createStudentSession({ codiceFiscale, password, email, identifier, enableDocentiSync } = {}, dependencies = {}) {
+  const cleanEmail = normalizeEmail(email ?? codiceFiscale ?? identifier);
+  if (!cleanEmail || typeof password !== 'string' || !password) {
+    const error = new Error('Inserisci la tua email istituzionale (@studenti.unina.it) e la password.');
     error.status = 400;
     throw error;
   }
 
   const database = dependencies.database || db;
   const scraper = dependencies.getDatiCarriera || getDatiCarriera;
-  const cfClean = normalizedIdentifier;
 
-  // Limite globale per account (indipendente dall'IP): va verificato prima
-  // di contattare il portale, così un account in cooldown non genera scraping.
-  assertLoginAllowed(cfClean);
+  assertLoginAllowed(cleanEmail);
 
-  // Cache per studente: se i dati sono freschi si evita lo scraping completo.
-  // La chiave include un HMAC della password, così una password errata non
-  // può riutilizzare i dati di un login precedente.
+  const cfClean = cleanEmail;
+
   let careerResult;
   try {
     careerResult = await careerCache.getOrLoadCareer(
       cfClean,
       password,
-      () => scraper({ codiceFiscale: cfClean, password }, { phase: 'fast' })
+      () => scraper({ email: cleanEmail, password }, { phase: 'fast' })
     );
   } catch (error) {
-    // Solo i fallimenti di credenziali (401) alimentano il cooldown: un portale
-    // irraggiungibile (502) non deve bloccare gli utenti legittimi.
-    if (sessionErrorStatus(error) === 401) recordLoginFailure(cfClean);
+    if (sessionErrorStatus(error) === 401) {
+      recordLoginFailure(cleanEmail);
+    }
     throw error;
   }
+
+  recordLoginSuccess(cleanEmail);
   recordLoginSuccess(cfClean);
+
   const datiCarriera = careerResult.value;
   const fromCache = careerResult.fromCache;
 
@@ -201,7 +180,6 @@ async function createStudentSession({ codiceFiscale, password, email, enableDoce
     listPlans: dependencies.listPlans || (cohortYear => listPlansForCohort(cohortYear, database))
   });
 
-  // Se il piano è già a database, completa il nome corso mancante.
   if (profile.courseId && profile.cohortYear && !profile.courseName) {
     const plan = getStudyPlan(database, profile.courseId, profile.cohortYear);
     if (plan?.course_name) profile.courseName = plan.course_name;
@@ -211,6 +189,7 @@ async function createStudentSession({ codiceFiscale, password, email, enableDoce
     id: cfClean,
     anagrafica: datiCarriera.anagrafica,
     ...profile,
+    email: cleanEmail,
     esamiSostenuti: esami,
     tasse
   });
@@ -218,20 +197,15 @@ async function createStudentSession({ codiceFiscale, password, email, enableDoce
   snapshots.setCareerSnapshot(cfClean, esami);
   snapshots.setPianoSnapshot(cfClean, datiCarriera.pianoDiStudiRaw || []);
   snapshots.setTaxesSnapshot(cfClean, tasse);
-  // Ogni login invalida i dati Docenti precedenti e forza un refresh completo:
-  // niente dati stale di sessioni precedenti, anche a parità di credenziali.
   snapshots.invalidateDocentiSnapshot(cfClean);
   clearDocentiCache(cfClean);
   clearDocentiRouteCache(cfClean);
   slowSync.resetSlowSync(cfClean);
 
-  // Tasse e appelli partono in background: il login non li attende.
   const ensureSlow = dependencies.ensureSlowSync || slowSync.ensureSlowSync;
   const slowStatus = ensureSlow(cfClean, { codiceFiscale: cfClean, password }, dependencies);
 
-  // Il portale Docenti richiede l'email istituzionale (@studenti.unina.it),
-  // non il codice fiscale.
-  const docentiEmail = normalizeEmail(email) || resolveDocentiEmail(storedProfile || profile, cfClean);
+  const docentiEmail = cleanEmail || resolveDocentiEmail(storedProfile || profile, cfClean);
 
   const docentiDependencies = enableDocentiSync === undefined
     ? dependencies
@@ -240,13 +214,11 @@ async function createStudentSession({ codiceFiscale, password, email, enableDoce
 
   const serverSession = createServerSession(cfClean, {
     codiceFiscale: cfClean,
-    email: docentiEmail || null,
+    email: docentiEmail,
     password,
     enableDocentiSync: docentiEnabled
   }, { database });
 
-  // Eventuali credenziali esplicite passate dal chiamante (es. test) hanno
-  // la precedenza; non esistono credenziali di servizio globali.
   const configuredDocenti = docentiCredentials(dependencies);
   const credentials = dependencies.docentiCredentials
     || (configuredDocenti.username && configuredDocenti.password
@@ -294,3 +266,4 @@ module.exports = {
   normalizeEmail,
   normalizeLoginIdentifier
 };
+

@@ -509,7 +509,11 @@ export function writeBootstrapCache(snapshot: Omit<CachedBootstrapSnapshot, 'sav
   }
 }
 
-const API_BASE = (process.env.NEXT_PUBLIC_BACKEND_URL || '').trim().replace(/\/+$/, '');
+const API_BASE = (
+  typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    ? ''
+    : (process.env.NEXT_PUBLIC_BACKEND_URL || '')
+).trim().replace(/\/+$/, '');
 const API_TIMEOUT_MS = 260_000;
 
 export function apiUrl(path: string): string {

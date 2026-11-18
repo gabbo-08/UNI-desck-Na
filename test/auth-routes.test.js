@@ -122,7 +122,7 @@ test('POST /login con Origin e body vuoto risponde 400 senza scraping', async t 
   const body = await response.json();
 
   assert.equal(response.status, 400);
-  assert.match(body.error, /codice fiscale/i);
+  assert.match(body.error, /email istituzionale/i);
 });
 
 test('POST /login con Origin non consentito risponde 403', async t => {

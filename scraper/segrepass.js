@@ -1,4 +1,4 @@
-
+﻿
 const { queueScrapingTask } = require('./pool');
 const { scrapeEsamiSostenuti } = require('./esami');
 const { scrapeCalendarioAppelli } = require('./prenotazioni');
@@ -18,7 +18,7 @@ const LOGIN_NAV_TIMEOUT_MS = Math.min(
   60000,
   Math.max(10000, Number.parseInt(process.env.SEGREPASS_LOGIN_NAV_TIMEOUT_MS || '20000', 10) || 20000)
 );
-// Il debug dello scraper è escluso in produzione: anche con DEBUG_SCRAPER=1,
+// Il debug dello scraper Ã¨ escluso in produzione: anche con DEBUG_SCRAPER=1,
 // NODE_ENV=production lo disattiva per non esporre dati personali nei log.
 const DEBUG = process.env.DEBUG_SCRAPER === '1' && process.env.NODE_ENV !== 'production';
 
@@ -39,7 +39,7 @@ function classifyLoginPage({ pageText = '', hasLoginForm = false, hasAuthenticat
 
 function debugLog(...args) {
   if (!DEBUG) return;
-  // Gli argomenti funzione sono thunk: valutati solo con debug attivo, così
+  // Gli argomenti funzione sono thunk: valutati solo con debug attivo, cosÃ¬
   // in produzione non serializziamo dati personali a ogni scraping.
   console.log(...args.map(arg => (typeof arg === 'function' ? arg() : arg)));
 }
@@ -101,7 +101,7 @@ async function scrapePin(context, esisUrl) {
     let pin = null;
     let cnp = null;
 
-    // La pagina PIN è un frameset legacy: domcontentloaded può precedere il
+    // La pagina PIN Ã¨ un frameset legacy: domcontentloaded puÃ² precedere il
     // caricamento del frame che contiene i dati. Riprova per alcuni secondi,
     // leggendo sia il testo sia i valori dei campi (non presenti in innerText).
     const deadline = Date.now() + 2500;
@@ -131,16 +131,18 @@ async function scrapePin(context, esisUrl) {
     if (page) await page.close().catch(() => {});
   }
 }
-async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
-  if (!codiceFiscale || !password) throw new Error('Credenziali Segrepass mancanti.');
+async function getDatiCarriera({ email, username, codiceFiscale, password } = {}, options = {}) {
+  const loginUser = String(username || email || codiceFiscale || "").trim();
+  const segrepassUsername = loginUser;
+  if (!segrepassUsername || !password) throw new Error('Credenziali Segrepass mancanti.');
 
   const phase = ['fast', 'slow'].includes(options.phase) ? options.phase : 'full';
 
-  return await queueScrapingTask({ codiceFiscale, password }, async (page, data) => {
+  return await queueScrapingTask({ username: segrepassUsername, password }, async (page, data) => {
     await enableFastMode(page);
     const context = page.browserContext();
 
-    console.log(`[Segrepass] Avvio scansione nodi su identificazione.do (${maskId(data.codiceFiscale)})...`);
+    console.log(`[Segrepass] Avvio scansione nodi su identificazione.do (${maskId(data.username)})...`);
     let nodoAttivo = null;
     let base = '';
 
@@ -160,22 +162,21 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
             nodoAttivo = nodo;
             lastWorkingNode = nodo;
             base = `https://www.${nodo}.unina.it`;
-            console.log(`[Segrepass] ✅ Trovato nodo attivo su identificazione: ${nodoAttivo}`);
+            console.log(`[Segrepass] âœ… Trovato nodo attivo su identificazione: ${nodoAttivo}`);
             break;
           }
         }
       } catch (err) {
-        console.log(`[Segrepass] ❌ Nodo ${nodo} non raggiungibile o timeout.`);
+        console.log(`[Segrepass] âŒ Nodo ${nodo} non raggiungibile o timeout.`);
       }
     }
 
     if (!nodoAttivo) {
-      throw portalError('PORTAL_UNAVAILABLE', 'Il portale Segrepass non è disponibile. Riprova più tardi.');
+      throw portalError('PORTAL_UNAVAILABLE', 'Il portale Segrepass non Ã¨ disponibile. Riprova piÃ¹ tardi.');
     }
 
-    const inputs = await page.$$('input[type="text"], input[type="password"]');
-    const userInput = inputs[0];
-    const passInput = inputs[1];
+    const userInput = await page.$('input[name="codice_fiscale"]') || (await page.$('input[type="text"]'))[0];
+    const passInput = await page.$('input[name="password"]');
 
     if (!userInput || !passInput) {
       throw new Error('Impossibile trovare i campi di input del modulo di login.');
@@ -183,23 +184,21 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
 
     await userInput.click({ clickCount: 3 });
     await userInput.press('Backspace');
-    await userInput.type(data.codiceFiscale.trim());
+    await userInput.type(data.username.trim());
 
     await passInput.click({ clickCount: 3 });
     await passInput.press('Backspace');
     await passInput.type(data.password);
 
     console.log(`[Segrepass] Invio credenziali in corso...`);
-    const navigation = page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: LOGIN_NAV_TIMEOUT_MS }).catch(() => null);
-    const loginStateChange = page.waitForFunction(() => {
-      const text = document.body?.innerText || '';
-      return !document.querySelector('input[type="password"]') ||
-        /segreteria\s+online|benvenut[oa]|credenziali\s+non\s+valide|verificare\s+i\s+dati/i.test(text);
-    }, { timeout: LOGIN_NAV_TIMEOUT_MS }).catch(() => null);
-    const clicked = await page.click('input[type="submit"], button[type="submit"], input[value="Login"], button.btn')
-      .then(() => true)
-      .catch(() => false);
-    if (clicked) await Promise.race([navigation, loginStateChange]);
+    await Promise.all([
+      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: LOGIN_NAV_TIMEOUT_MS }).catch(() => null),
+      page.click('#isSubmit, input[type="submit"], button[type="submit"], input[value="Login"], button.btn').catch(() => null)
+    ]);
+    await page.waitForFunction(() => {
+      const text = (document.body?.innerText || '').trim();
+      return text.length > 20;
+    }, { timeout: 8000 }).catch(() => null);
 
     const currentUrl = page.url();
     debugLog(`[Segrepass] URL post-login: ${safePath(currentUrl)}`);
@@ -212,7 +211,7 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
         Boolean(document.querySelector('input[type="submit"], button[type="submit"], input[value="Login"], button.btn'));
       const hasAuthenticatedNavigation = Array.from(document.querySelectorAll('a, span, div'))
         .some(element => normalized(element.textContent) === 'segreteria online');
-      const hasIdentityMarker = /\b(?:numero di )?matricola\b|\bmatr\.?\b/i.test(text);
+      const hasIdentityMarker = /\b(?:numero di )?matricola\b|\bmatr\.?\b|menu\s+utente|benvenuto\s*:/i.test(text);
       return { hasLoginForm, hasAuthenticatedNavigation, hasIdentityMarker };
     }).catch(() => ({ hasLoginForm: false, hasAuthenticatedNavigation: false, hasIdentityMarker: false }));
     const loginClassification = classifyLoginPage({ pageText, ...loginState });
@@ -221,6 +220,17 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
     }
     if (loginClassification !== 'AUTHENTICATED') {
       throw portalError('PORTAL_UNAVAILABLE', 'Impossibile verificare l’autenticazione sul portale Segrepass.');
+    }
+
+    const clickedSegreteria = await page.evaluate(() => {
+      const link = Array.from(document.querySelectorAll('a')).find(a => /segreteria\s+online/i.test(a.textContent || ''));
+      if (link) { link.click(); return true; }
+      return false;
+    }).catch(() => false);
+
+    if (clickedSegreteria) {
+      await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: LOGIN_NAV_TIMEOUT_MS }).catch(() => null);
+      await new Promise(r => setTimeout(r, 800));
     }
 
     const anagraficaDinamica = await page.evaluate(() => {
@@ -235,10 +245,10 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
         const value = clean(source);
         if (!value) return null;
         const labeled = value.match(new RegExp(
-          `(?:Numero\\s+di\\s+)?Matricola\\s*(?:n[°º.]?|numero)?\\s*(?:[:\\-]\\s*)?(${matricolaPattern})`,
+          `(?:Numero\\s+di\\s+)?Matricola\\s*(?:n[Â°Âº.]?|numero)?\\s*(?:[:\\-]\\s*)?(${matricolaPattern})`,
           'i'
         )) || value.match(new RegExp(
-          `Matr\\.?\\s*(?:n[°º.]?|numero)?\\s*(?:[:\\-]\\s*)?(${matricolaPattern})`,
+          `Matr\\.?\\s*(?:n[Â°Âº.]?|numero)?\\s*(?:[:\\-]\\s*)?(${matricolaPattern})`,
           'i'
         ));
         return labeled?.[1] ? clean(labeled[1]).replace(/\s+/g, '') : null;
@@ -291,7 +301,7 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
       };
     }).catch(() => ({}));
 
-    // ESIS può mostrare il riepilogo dentro un frame separato dal documento
+    // ESIS puÃ² mostrare il riepilogo dentro un frame separato dal documento
     // principale: cerca la matricola anche nei frame della pagina autenticata.
     if (!anagraficaDinamica.matricola) {
       const frameSources = await Promise.all(page.frames().map(frame => frame.evaluate(() => ({
@@ -300,10 +310,10 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
       })).catch(() => ({ text: '', html: '' }))));
       const frameText = frameSources.map(source => `${source.text} ${source.html}`).join(' ');
       const frameMatricola = frameText.match(new RegExp(
-        `(?:Numero\\s+di\\s+)?Matricola\\s*(?:n[°º.]?|numero)?\\s*(?:[:\\-]\\s*)?((?:[A-Z]{1,2}\\d{2,4}\\s*[/.-]\\s*\\d{3,8}|[A-Z]{1,4}\\d{5,10}|\\d{6,10}))`,
+        `(?:Numero\\s+di\\s+)?Matricola\\s*(?:n[Â°Âº.]?|numero)?\\s*(?:[:\\-]\\s*)?((?:[A-Z]{1,2}\\d{2,4}\\s*[/.-]\\s*\\d{3,8}|[A-Z]{1,4}\\d{5,10}|\\d{6,10}))`,
         'i'
       )) || frameText.match(new RegExp(
-        `Matr\\.?\\s*(?:n[°º.]?|numero)?\\s*(?:[:\\-]\\s*)?((?:[A-Z]{1,2}\\d{2,4}\\s*[/.-]\\s*\\d{3,8}|[A-Z]{1,4}\\d{5,10}|\\d{6,10}))`,
+        `Matr\\.?\\s*(?:n[Â°Âº.]?|numero)?\\s*(?:[:\\-]\\s*)?((?:[A-Z]{1,2}\\d{2,4}\\s*[/.-]\\s*\\d{3,8}|[A-Z]{1,4}\\d{5,10}|\\d{6,10}))`,
         'i'
       ));
       if (frameMatricola) anagraficaDinamica.matricola = frameMatricola[1].replace(/\s+/g, '').trim();
@@ -336,7 +346,7 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
     }
 
     await page.waitForFunction(
-      () => /(?:Numero\s+di\s+)?Matricola\s+n?[°º.]?\s*:/i.test(document.body?.innerText || ''),
+      () => /(?:Numero\s+di\s+)?Matricola\s+n?[Â°Âº.]?\s*:/i.test(document.body?.innerText || ''),
       { timeout: 10000 }
     ).catch(() => {});
 
@@ -365,10 +375,10 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
         for (const source of sources) {
           const value = clean(source);
           const match = value.match(new RegExp(
-            `(?:Numero\\s+di\\s+)?Matricola\\s*(?:n[°º.]?|numero)?\\s*(?:[:\\-]\\s*)?(${pattern})`,
+            `(?:Numero\\s+di\\s+)?Matricola\\s*(?:n[Â°Âº.]?|numero)?\\s*(?:[:\\-]\\s*)?(${pattern})`,
             'i'
           )) || value.match(new RegExp(
-            `Matr\\.?\\s*(?:n[°º.]?|numero)?\\s*(?:[:\\-]\\s*)?(${pattern})`,
+            `Matr\\.?\\s*(?:n[Â°Âº.]?|numero)?\\s*(?:[:\\-]\\s*)?(${pattern})`,
             'i'
           ));
           if (match?.[1]) return match[1].replace(/\s+/g, '');
@@ -392,10 +402,10 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
           ];
           for (const value of contexts) {
             const match = clean(value).match(new RegExp(
-              `(?:Numero\\s+di\\s+)?Matricola\\s*(?:n[°º.]?|numero)?\\s*(?:[:\\-]\\s*)?(${pattern})`,
+              `(?:Numero\\s+di\\s+)?Matricola\\s*(?:n[Â°Âº.]?|numero)?\\s*(?:[:\\-]\\s*)?(${pattern})`,
               'i'
             )) || clean(value).match(new RegExp(
-              `Matr\\.?\\s*(?:n[°º.]?|numero)?\\s*(?:[:\\-]\\s*)?(${pattern})`,
+              `Matr\\.?\\s*(?:n[Â°Âº.]?|numero)?\\s*(?:[:\\-]\\s*)?(${pattern})`,
               'i'
             ));
             if (match?.[1]) return match[1].replace(/\s+/g, '');
@@ -444,7 +454,7 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
           materia: record['Insegnamento'] || '',
           voto: votoNumerico,
           giudizio: votoNumerico ? null : (voto || null),
-          // Campi storici, mantenuti per compatibilità.
+          // Campi storici, mantenuti per compatibilitÃ .
           votoNumerico: votoNumerico,
           isLode: voto.toLowerCase().includes('lode'),
           cfu: cfu,
@@ -492,7 +502,7 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
     }
 
     if (phase !== 'slow') {
-      console.log(`[Segrepass] Carriera calcolata: ${cfuAcquisiti} CFU, Media: ${mediaPonderata}, PIN trovato: ${pinInfo.pin ? 'SÌ' : 'NO'}`);
+      console.log(`[Segrepass] Carriera calcolata: ${cfuAcquisiti} CFU, Media: ${mediaPonderata}, PIN trovato: ${pinInfo.pin ? 'SÃŒ' : 'NO'}`);
     } else {
       console.log(`[Segrepass] Dati lenti pronti: ${taxes?.pending?.length || 0} debiti, ${appelliCalendario.length} appelli.`);
     }
@@ -531,3 +541,4 @@ async function getDatiCarriera({ codiceFiscale, password } = {}, options = {}) {
 }
 
 module.exports = { getDatiCarriera, classifyLoginPage, scrapePin, redactForDebug };
+

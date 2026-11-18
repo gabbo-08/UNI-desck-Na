@@ -1,4 +1,4 @@
-process.env.DB_PATH = ':memory:';
+﻿process.env.DB_PATH = ':memory:';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -9,6 +9,7 @@ const { clearCareerCache } = require('../services/career-cache');
 const { getDocentiDataCache } = require('../db/repository');
 
 const CF = 'AAABBB00A00A000A';
+const EMAIL = 'studente@studenti.unina.it';
 
 function careerData() {
   return {
@@ -27,6 +28,7 @@ function careerData() {
 function dependencies(db, overrides = {}) {
   return {
     database: db,
+    resolveCodiceFiscaleFromDocenti: async () => CF,
     getDatiCarriera: async () => careerData(),
     ensureSlowSync: () => ({ state: 'idle' }),
     findPlan: () => null,
@@ -45,7 +47,7 @@ test('crea la sessione, salva profilo ed esami senza memorizzare credenziali', a
     db.close();
   });
 
-  const session = await createStudentSession({ codiceFiscale: CF, password: 'do-not-store' }, dependencies(db));
+  const session = await createStudentSession({ email: EMAIL, password: 'do-not-store' }, dependencies(db));
   assert.equal(session.fromCache, false);
   const storedProfile = db.prepare('SELECT * FROM StudentProfile WHERE id = ?').get(CF);
   const storedSession = db.prepare('SELECT * FROM Sessions WHERE token_hash = ?').get(
@@ -78,8 +80,8 @@ test('registra un motivo stabile quando lo scraper Docenti fallisce', async t =>
     db.close();
   });
 
-  await createStudentSession({ codiceFiscale: CF, password: 'test-password' }, dependencies(db, {
-    docentiCredentials: { username: 'docenti-user', password: 'docenti-pass' },
+  await createStudentSession({ email: EMAIL, password: 'test-password' }, dependencies(db, {
+    docentiCredentials: { username: EMAIL, password: 'docenti-pass' },
     getDocentiData: async () => { throw null; }
   }));
 
@@ -98,19 +100,19 @@ test('salva il riepilogo Docenti riuscito nel database per il prossimo accesso',
 
   let docentiCalls = 0;
   const deps = dependencies(db, {
-    docentiCredentials: { username: 'studente@studenti.unina.it', password: 'test-password' },
+    docentiCredentials: { username: EMAIL, password: 'test-password' },
     getDocentiData: async () => {
       docentiCalls += 1;
       return { available: true, subscriptions: [{ courseName: 'Analisi II', professor: 'Docente A' }], announcements: [] };
     }
   });
-  await createStudentSession({ codiceFiscale: CF, password: 'test-password' }, deps);
+  await createStudentSession({ email: EMAIL, password: 'test-password' }, deps);
   await new Promise(resolve => setTimeout(resolve, 10));
 
   const saved = getDocentiDataCache(CF, db);
   assert.deepEqual(saved?.data.subscriptions, [{ courseName: 'Analisi II', professor: 'Docente A' }]);
   assert.ok(saved?.fetchedAt > 0);
-  await createStudentSession({ codiceFiscale: CF, password: 'test-password' }, deps);
+  await createStudentSession({ email: EMAIL, password: 'test-password' }, deps);
   assert.equal(docentiCalls, 1);
 });
 
@@ -128,8 +130,8 @@ test('riusa i dati in cache al secondo login dello stesso studente', async t => 
     getDatiCarriera: async () => { calls += 1; return careerData(); }
   });
 
-  const first = await createStudentSession({ codiceFiscale: CF, password: 'cache-pass' }, deps);
-  const second = await createStudentSession({ codiceFiscale: CF, password: 'cache-pass' }, deps);
+  const first = await createStudentSession({ email: EMAIL, password: 'cache-pass' }, deps);
+  const second = await createStudentSession({ email: EMAIL, password: 'cache-pass' }, deps);
 
   assert.equal(calls, 1);
   assert.equal(first.fromCache, false);
@@ -150,24 +152,26 @@ test('una password diversa non riusa la cache', async t => {
     getDatiCarriera: async () => { calls += 1; return careerData(); }
   });
 
-  await createStudentSession({ codiceFiscale: CF, password: 'first-pass' }, deps);
-  const second = await createStudentSession({ codiceFiscale: CF, password: 'second-pass' }, deps);
+  await createStudentSession({ email: EMAIL, password: 'first-pass' }, deps);
+  const second = await createStudentSession({ email: EMAIL, password: 'second-pass' }, deps);
 
   assert.equal(calls, 2);
   assert.equal(second.fromCache, false);
 });
 
-test('rifiuta credenziali vuote prima di invocare lo scraper', async () => {
+test('rifiuta credenziali vuote o codice fiscale prima di invocare lo scraper', async () => {
   let scraperCalled = false;
-  await assert.rejects(
-    createStudentSession({}, { getDatiCarriera: async () => { scraperCalled = true; } }),
-    { status: 400 }
-  );
+  const deps = {
+    resolveCodiceFiscaleFromDocenti: async () => { scraperCalled = true; return CF; },
+    getDatiCarriera: async () => { scraperCalled = true; }
+  };
+  await assert.rejects(createStudentSession({}, deps), { status: 400 });
+  await assert.rejects(createStudentSession({ codiceFiscale: CF, password: 'secret' }, deps), { status: 400 });
   assert.equal(scraperCalled, false);
 });
 
-test('normalizza solo email istituzionali e codici fiscali validi', () => {
-  assert.equal(normalizeLoginIdentifier(' aaabbb00a00a000a '), CF);
+test('normalizza solo email istituzionali @studenti.unina.it', () => {
+  assert.equal(normalizeLoginIdentifier(' aaabbb00a00a000a '), null);
   assert.equal(normalizeLoginIdentifier(' Nome.Cognome@STUDENTI.UNINA.IT '), 'nome.cognome@studenti.unina.it');
   assert.equal(normalizeLoginIdentifier('utente@example.com'), null);
   assert.equal(normalizeLoginIdentifier('123'), null);
@@ -180,14 +184,14 @@ test('un vecchio scraping Docenti non sovrascrive i dati del login più recente'
 
   let resolveOld;
   const oldJob = loadDocentiInBackground(profileId, {
-    docentiCredentials: { username: 'studente@studenti.unina.it', password: 'old' },
+    docentiCredentials: { username: EMAIL, password: 'old' },
     getDocentiData: () => new Promise(resolve => { resolveOld = resolve; })
   });
   await new Promise(resolve => setImmediate(resolve));
 
   clearSnapshots(profileId);
   await loadDocentiInBackground(profileId, {
-    docentiCredentials: { username: 'studente@studenti.unina.it', password: 'new' },
+    docentiCredentials: { username: EMAIL, password: 'new' },
     getDocentiData: async () => ({ available: true, subscriptions: [{ courseName: 'Analisi II', professor: 'Docente nuovo' }] })
   });
   resolveOld({ available: true, subscriptions: [{ courseName: 'Analisi II', professor: 'Docente vecchio' }] });

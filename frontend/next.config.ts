@@ -1,17 +1,41 @@
-import type { NextConfig } from 'next';
+﻿import type { NextConfig } from 'next';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const BACKEND_URL =(process.env.BACKEND_URL?.trim() || process.env.NEXT_PUBLIC_BACKEND_URL?.trim() || 'http://127.0.0.1:3001').replace(/\/+$/, '');
+const BACKEND_URL = (
+  process.env.BACKEND_URL?.trim() ||
+  process.env.NEXT_PUBLIC_BACKEND_URL?.trim() ||
+  'http://127.0.0.1:3001'
+).replace(/\/+$/, '');
+
 const isDevelopment = process.env.NODE_ENV !== 'production';
-if (process.env.NODE_ENV === 'production' && !BACKEND_URL.startsWith('https://')) {
-  throw new Error('NEXT_PUBLIC_BACKEND_URL deve usare HTTPS in produzione.');
+const isLocalBackend = /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(BACKEND_URL);
+
+if (process.env.NODE_ENV === 'production' && !isLocalBackend && !BACKEND_URL.startsWith('https://')) {
+  throw new Error('BACKEND_URL / NEXT_PUBLIC_BACKEND_URL deve usare HTTPS in produzione.');
 }
+
+const backendOrigin = (() => {
+  try {
+    return new URL(BACKEND_URL).origin;
+  } catch {
+    return '';
+  }
+})();
+
+const connectSources = [
+  "'self'",
+  backendOrigin,
+  ...(isDevelopment ? ['http://localhost:3001', 'http://127.0.0.1:3001', 'ws:', 'wss:'] : ['https:', 'wss:']),
+].filter((value, index, self) => Boolean(value) && self.indexOf(value) === index);
+
 const allowedDevOrigins = String(process.env.NEXT_ALLOWED_DEV_ORIGINS || '')
   .split(',')
   .map(value => value.trim())
   .filter(Boolean);
+
 const FRONTEND_ROOT = path.dirname(fileURLToPath(import.meta.url));
+
 const securityHeaders = [
   { key: 'X-Content-Type-Options', value: 'nosniff' },
   { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
@@ -29,20 +53,17 @@ const securityHeaders = [
       "font-src 'self' data: https:",
       "style-src 'self' 'unsafe-inline' https:",
       `script-src 'self' 'unsafe-inline'${isDevelopment ? " 'unsafe-eval'" : ''}`,
-      "connect-src 'self' https: ws: wss:",
-      "worker-src 'self' blob:"
-    ].join('; ')
-  }
+      `connect-src ${connectSources.join(' ')}`,
+      "worker-src 'self' blob:",
+    ].join('; '),
+  },
 ];
 
 const nextConfig: NextConfig = {
-  // Origini LAN aggiuntive solo in sviluppo, configurate esplicitamente.
   allowedDevOrigins,
-  // Il backend ha un proprio lockfile nella root del repository.
   turbopack: {
     root: FRONTEND_ROOT,
   },
-  // In sviluppo React esegue due volte gli effetti: ogni chiamata al backend partiva doppia.
   reactStrictMode: false,
   async headers() {
     return [{ source: '/(.*)', headers: securityHeaders }];
@@ -63,7 +84,7 @@ const nextConfig: NextConfig = {
     keepAlive: true,
   },
   experimental: {
-    proxyTimeout: 270000, // Leggermente oltre il timeout client e quello del pool Puppeteer.
+    proxyTimeout: 270000,
   },
 };
 

@@ -1380,7 +1380,78 @@ function normalizeDocentiTables(tables) {
   };
 }
 
+
+async function resolveCodiceFiscaleFromDocenti({ email, password } = {}) {
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  if (!cleanEmail.endsWith('@studenti.unina.it') || cleanEmail.length <= '@studenti.unina.it'.length || !password) {
+    const err = new Error('Inserisci la tua email istituzionale (@studenti.unina.it) e la password.');
+    err.status = 400;
+    throw err;
+  }
+
+  return await queueScrapingTask({ username: cleanEmail, password }, async (page, data) => {
+    if (typeof page.setUserAgent === 'function') await page.setUserAgent(DOCENTI_BROWSER_USER_AGENT);
+    if (typeof page.setExtraHTTPHeaders === 'function') {
+      await page.setExtraHTTPHeaders({ 'Accept-Language': 'it-IT,it;q=0.9' });
+    }
+    await enableFastMode(page);
+
+    const api = startApiCollector(page);
+    try {
+      await loginStudente(page, data.username, data.password, null);
+    } catch (loginErr) {
+      api.stop();
+      if (/credenziali|password|non valide|401|403/i.test(loginErr?.message || '')) {
+        const err = new Error('Credenziali non valide su WebDocenti.');
+        err.code = 'INVALID_CREDENTIALS';
+        err.status = 401;
+        throw err;
+      }
+      const err = new Error(loginErr?.message || 'Portale Docenti non raggiungibile.');
+      err.code = 'PORTAL_UNAVAILABLE';
+      err.status = 502;
+      throw err;
+    }
+
+    const cfRegex = new RegExp('([A-Z]{6}[0-9]{2}[A-Z][0-9]{2}[A-Z][0-9]{3}[A-Z])', 'i');
+
+    const extractCf = async () => {
+      const rawPayloads = JSON.stringify(api.entries || []);
+      const fromApi = rawPayloads.match(cfRegex);
+      if (fromApi) return fromApi[1].toUpperCase();
+
+      const bodyText = await page.evaluate(
+        () => (document.body?.innerText || '') + ' ' + (document.body?.innerHTML || '')
+      ).catch(() => '');
+      const fromDom = bodyText.match(cfRegex);
+      return fromDom ? fromDom[1].toUpperCase() : null;
+    };
+
+    try {
+      await page.goto(DOCENTI_SUMMARIES_URL, { waitUntil: 'networkidle2', timeout: 25000 }).catch(() => {});
+      await api.settle();
+      let cf = await extractCf();
+      if (cf) return cf;
+
+      for (const profileUrl of [
+        'https://www.docenti.unina.it/#!/studenti/profilo',
+        'https://www.docenti.unina.it/#!/profilo',
+        'https://www.docenti.unina.it/#!/studenti/anagrafica'
+      ]) {
+        await page.goto(profileUrl, { waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
+        await api.settle();
+        cf = await extractCf();
+        if (cf) return cf;
+      }
+
+      return null;
+    } finally {
+      api.stop();
+    }
+  });
+}
 module.exports = {
+  resolveCodiceFiscaleFromDocenti,
   getDocentiData,
   fetchAnnouncementsForProfessors,
   fetchAnnouncementsForTeacherIds,

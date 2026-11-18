@@ -71,7 +71,7 @@ test('il login globale è bloccato prima di contattare il portale', async t => {
 
   let scraperCalls = 0;
   const deps = {
-    getDatiCarriera: async () => {
+    resolveCodiceFiscaleFromDocenti: async () => CF, getDatiCarriera: async () => {
       scraperCalls += 1;
       const error = new Error('Credenziali Segrepass non valide.');
       error.code = 'INVALID_CREDENTIALS';
@@ -87,7 +87,7 @@ test('il login globale è bloccato prima di contattare il portale', async t => {
   // contatta e poi attiva il cooldown.
   for (let i = 0; i <= throttle.MAX_FREE_FAILURES; i++) {
     await assert.rejects(
-      createStudentSession({ codiceFiscale: CF, password: 'wrong' }, deps),
+      createStudentSession({ email: 'studente@studenti.unina.it', password: 'wrong' }, deps),
       { code: 'INVALID_CREDENTIALS' }
     );
   }
@@ -95,7 +95,7 @@ test('il login globale è bloccato prima di contattare il portale', async t => {
 
   // Il tentativo successivo è respinto dal throttle SENZA aprire il portale.
   await assert.rejects(
-    createStudentSession({ codiceFiscale: CF, password: 'wrong' }, deps),
+    createStudentSession({ email: 'studente@studenti.unina.it', password: 'wrong' }, deps),
     { status: 429, code: 'LOGIN_THROTTLED' }
   );
   assert.equal(scraperCalls, throttle.MAX_FREE_FAILURES + 1);
