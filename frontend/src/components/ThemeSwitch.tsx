@@ -43,15 +43,13 @@ export default function ThemeSwitch() {
 
   return (
     <button
+      type="button"
       onClick={() => apply(next)}
       aria-label={`Tema: ${labels[theme]} (${resolved})`}
       title={`Tema: ${labels[theme]} → ${resolved === 'dark' ? 'scuro' : 'chiaro'}`}
-      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[var(--app-line)] bg-[var(--app-card)] text-[var(--app-text)] transition hover:bg-[var(--app-raised)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5AB0F0] group"
+      className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-[var(--app-line)] bg-[var(--app-card)] text-[var(--app-text)] transition hover:bg-[var(--app-raised)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[#5AB0F0]"
     >
       {icons[theme]}
-      <span className="absolute -right-8 top-1/2 -translate-y-1/2 z-50 whitespace-nowrap text-[10px] font-medium text-slate-400 bg-zinc-900/90 px-2 py-1 rounded border border-white/10 opacity-0 group-hover:opacity-100 transition-opacity">
-        {labels[theme]} ({resolved === 'dark' ? 'scuro' : 'chiaro'})
-      </span>
       <span className="sr-only">Cambia tema: {labels[theme]}</span>
     </button>
   );

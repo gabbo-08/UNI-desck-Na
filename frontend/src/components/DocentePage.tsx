@@ -22,7 +22,7 @@ type DocentePageProps = {
 function mapFolderItem(item: unknown, index: number, folderId: string, section: 'areapubb' | 'aree-ftp' | 'arearis'): MaterialeDocente {
   const raw = item && typeof item === 'object' ? item as Record<string, unknown> : {};
   const id = String(raw.materialId ?? raw.idMateriale ?? raw.uuid ?? raw.id ?? raw.idFile ?? raw.idDirectory ?? raw.nome ?? `item-${index}`);
-  const tipo = raw.tipo === 'D' || raw.idDirectory ||
+  const tipo = raw.tipo === 'D' || raw.tipo === 'cartella' || raw.type === 'directory' || raw.idDirectory ||
     [raw.children, raw.files, raw.figli, raw.contenuto].some(value => Array.isArray(value) && value.length > 0)
     ? 'cartella' : 'file';
   return {
@@ -34,7 +34,7 @@ function mapFolderItem(item: unknown, index: number, folderId: string, section: 
     section,
     percorso: typeof raw.percorso === 'string' ? raw.percorso : null,
     children: (Array.isArray(raw.children) ? raw.children : Array.isArray(raw.files) ? raw.files : Array.isArray(raw.figli) ? raw.figli : Array.isArray(raw.contenuto) ? raw.contenuto : undefined)
-      ?.map((child, childIndex) => mapFolderItem(child, childIndex, folderId, section)),
+      ?.map((child, childIndex) => mapFolderItem(child, childIndex, tipo === 'cartella' ? id : folderId, section)),
   };
 }
 
@@ -96,9 +96,9 @@ export default function DocentePage({
   const [favoriteMaterialIds, setFavoriteMaterialIds] = useState<Set<string>>(new Set());
   const [recentMaterials, setRecentMaterials] = useState<string[]>([]);
   const lastOpenedRef = useRef<{ key: string; at: number } | null>(null);
+  const courseFilter = courseCodes.join(',') || coursePrefix;
   const openMaterial = (file: MaterialeDocente) => {
     const teacherId = data?.profilo.id || professorIdentifier;
-    const courseFilter = courseCodes.length ? courseCodes.join(',') : coursePrefix;
     const target = file.folderId && file.section && file.tipo === 'file'
       ? teacherMaterialUrl(teacherId, file.folderId, file.id, file.section, courseFilter)
       : file.url && /^https:\/\//i.test(file.url) ? file.url : null;
@@ -140,7 +140,6 @@ export default function DocentePage({
       setLoading(false);
       return () => { active = false; };
     }
-    const courseFilter = courseCodes.length > 0 ? courseCodes.join(',') : coursePrefix;
     const cacheKey = `${studentId || 'session'}|${professorIdentifier}|${courseFilter || ''}`;
     const cached = teacherDetailCache.get(cacheKey);
     if (cached) {
@@ -170,7 +169,7 @@ export default function DocentePage({
     return () => {
       active = false;
     };
-  }, [courseCodes, coursePrefix, professorIdentifier, studentId, authenticated]);
+  }, [courseFilter, professorIdentifier, studentId, authenticated]);
 
   if (loading) {
     return <div className="rounded-2xl border border-white/10 bg-white/5 p-8 text-center text-sm text-slate-400">Caricamento scheda docente...</div>;
@@ -188,6 +187,7 @@ export default function DocentePage({
   return (
     <>
       <DocenteDetailView
+        key={`${professorIdentifier}|${courseFilter || ''}`}
         data={{
           ...data,
           iscrizioni: data.iscrizioni.map(item => ({

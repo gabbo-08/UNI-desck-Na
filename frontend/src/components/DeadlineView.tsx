@@ -3,26 +3,12 @@
 import { useState } from 'react';
 import { BellRing, CalendarClock, CheckCircle2, Clock3 } from 'lucide-react';
 import type { Prenotazione, TassaSnapshot } from '@/lib/api';
+import { calendarDayDifference, parseCalendarDate as parseDate } from '@/lib/calendar-date';
 
 type DeadlineKind = 'exam' | 'booking' | 'tax';
 type Deadline = { id: string; kind: DeadlineKind; title: string; date: Date; detail?: string; source: string };
 
 type Props = { exams: Prenotazione[]; taxes?: TassaSnapshot | null; horizonDays?: number };
-
-function parseDate(value?: string | null): Date | null {
-  if (!value) return null;
-  const raw = String(value).trim();
-  if (/^\d{12,14}$/.test(raw)) {
-    const date = new Date(Number(raw));
-    return Number.isNaN(date.getTime()) ? null : date;
-  }
-  const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
-  const it = raw.match(/^(\d{1,2})[/. -](\d{1,2})[/. -](\d{4})/);
-  if (it) return new Date(Number(it[3]), Number(it[2]) - 1, Number(it[1]));
-  const date = new Date(raw);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
 
 function dayStart(date: Date) { return new Date(date.getFullYear(), date.getMonth(), date.getDate()); }
 
@@ -75,7 +61,7 @@ export default function DeadlineView({ exams, taxes, horizonDays = 90 }: Props) 
       ) : (
         <div className="grid gap-2.5">
           {visible.map(item => {
-            const days = Math.ceil((dayStart(item.date).getTime() - today.getTime()) / 86400000);
+            const days = calendarDayDifference(item.date, today);
             return <article key={item.id} className="flex items-start gap-3 rounded-xl border border-white/10 bg-white/5 p-3.5"><div className="mt-0.5 rounded-lg bg-amber-300/10 p-2 text-amber-200">{item.kind === 'exam' ? <CalendarClock className="h-4 w-4" /> : item.kind === 'booking' ? <BellRing className="h-4 w-4" /> : <Clock3 className="h-4 w-4" />}</div><div className="min-w-0 flex-1"><div className="flex flex-wrap justify-between gap-2"><h3 className="truncate text-sm font-semibold text-white">{item.title}</h3><span className="text-[11px] text-amber-200">{days === 0 ? 'Oggi' : days === 1 ? 'Domani' : `Tra ${days} giorni`}</span></div><p className="mt-1 text-xs text-slate-400">{item.date.toLocaleDateString('it-IT')} · {item.source}{item.detail ? ` · ${item.detail}` : ''}</p></div></article>;
           })}
         </div>

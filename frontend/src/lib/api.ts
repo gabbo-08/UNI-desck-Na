@@ -106,6 +106,8 @@ export type TassaItem = {
 };
 
 export type TassaSnapshot = {
+  available?: boolean;
+  reason?: string;
   paid?: TassaItem[];
   pagati?: TassaItem[];
   pending?: TassaItem[];
@@ -370,7 +372,13 @@ export type ProfileUpdateResponse = {
   onboardingRequired: boolean;
 };
 
-export type SlowSyncStatus = 'idle' | 'loading' | 'ready' | 'error';
+export type SlowSyncStatus = 'idle' | 'loading' | 'ready' | 'partial' | 'error';
+
+export type SlowSectionState = {
+  status: 'ready' | 'loading' | 'error';
+  stale?: boolean;
+  error?: string | null;
+};
 
 export type SlowData = {
   status: SlowSyncStatus;
@@ -378,6 +386,8 @@ export type SlowData = {
   updatedAt?: number | null;
   taxes?: TassaSnapshot | null;
   prenotazioni?: Prenotazione[];
+  sections?: { taxes?: SlowSectionState; appelli?: SlowSectionState };
+  retryAfterMs?: number;
 };
 
 export type LoginResponse = {
@@ -416,12 +426,14 @@ export type BootstrapResponse = RestoreSessionResponse & {
 export class ApiError extends Error {
   readonly status: number;
   readonly code?: string;
+  readonly retryAfterMs?: number;
 
-  constructor(message: string, status: number, code?: string) {
+  constructor(message: string, status: number, code?: string, retryAfterMs?: number) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
     this.code = code;
+    this.retryAfterMs = Number.isFinite(retryAfterMs) ? Math.max(0, retryAfterMs!) : undefined;
     Object.setPrototypeOf(this, ApiError.prototype);
   }
 }
@@ -454,12 +466,14 @@ const LEGACY_CACHE_PREFIX = 'segrepass:docenti-summary';
 
 /** Cancella dal dispositivo le copie locali dei dati personali. Chiamata al logout. */
 export function clearClientCache(): void {
+  sessionVersion += 1;
+  inFlightReads.clear();
   if (typeof window === 'undefined') return;
   try {
     const storage = window.localStorage;
     for (let i = storage.length - 1; i >= 0; i -= 1) {
       const key = storage.key(i);
-      if (key && (key.startsWith(CACHE_PREFIX) || key.startsWith(LEGACY_CACHE_PREFIX))) {
+      if (key && (key.startsWith(CACHE_PREFIX) || key.startsWith(LEGACY_CACHE_PREFIX) || key.startsWith(PROFILE_PREFS_PREFIX))) {
         storage.removeItem(key);
       }
     }
@@ -531,6 +545,7 @@ function jsonHeaders(options: RequestInit = {}): Headers {
 }
 
 async function fetchWithAuthUncached(url: string, options: RequestInit = {}) {
+  const version = sessionVersion;
   let res: Response;
   try {
     res = await fetch(url, {
@@ -548,12 +563,14 @@ async function fetchWithAuthUncached(url: string, options: RequestInit = {}) {
 
   // Un proxy o un 502 possono rispondere con HTML: in quel caso il corpo è vuoto.
   const data = await res.json().catch(() => ({}));
+  // A response from the previous account must not expire or populate a new session.
+  if (version !== sessionVersion) throw new DOMException('Richiesta di una sessione precedente annullata.', 'AbortError');
   if (!res.ok) {
     if (res.status === 401 && data?.code === 'SESSION_EXPIRED') {
       if (typeof window !== 'undefined') window.dispatchEvent(new Event('segrepass:session-expired'));
       throw new ApiError('SESSION_EXPIRED', res.status, 'SESSION_EXPIRED');
     }
-    throw new ApiError(data?.error || data?.message || defaultErrorMessage(res.status), res.status, data?.code);
+    throw new ApiError(data?.error || data?.message || defaultErrorMessage(res.status), res.status, data?.code, data?.retryAfterMs);
   }
   return data;
 }
@@ -561,6 +578,7 @@ async function fetchWithAuthUncached(url: string, options: RequestInit = {}) {
 // Deduplicate simultaneous read requests (for example dashboard + mobile
 // navigation mounting together) without caching personal data in the browser.
 const inFlightReads = new Map<string, Promise<unknown>>();
+let sessionVersion = 0;
 
 function fetchWithAuth(url: string, options: RequestInit = {}) {
   const method = String(options.method || 'GET').toUpperCase();
@@ -579,6 +597,8 @@ function fetchWithAuth(url: string, options: RequestInit = {}) {
 /* ------------------------------------------------------------------ */
 
 export async function loginAPI(credentials: CredenzialiSegrepass): Promise<LoginResponse> {
+  sessionVersion += 1;
+  inFlightReads.clear();
   return fetchWithAuth(apiUrl('/api/auth/login'), {
     method: 'POST',
     body: JSON.stringify(credentials)
@@ -605,10 +625,12 @@ export async function fetchBootstrap(options: { timeoutMs?: number } = {}): Prom
 }
 
 export async function logoutAPI(): Promise<void> {
-  clearClientCache();
+  sessionVersion += 1;
+  inFlightReads.clear();
   await fetchWithAuth(apiUrl('/api/auth/logout'), {
     method: 'POST',
-  }).catch(() => undefined);
+  });
+  clearClientCache();
 }
 
 export async function deleteAccountAPI(): Promise<void> {
@@ -624,8 +646,8 @@ export async function fetchMetriche(options: { refresh?: boolean } = {}): Promis
   return fetchWithAuth(apiUrl(`/api/metriche${options.refresh ? '?refresh=1' : ''}`)) as Promise<Metriche>;
 }
 
-export async function fetchSlowData(): Promise<SlowData> {
-  return fetchWithAuth(apiUrl('/api/career/slow-data')) as Promise<SlowData>;
+export async function fetchSlowData(options: { refresh?: boolean } = {}): Promise<SlowData> {
+  return fetchWithAuth(apiUrl(`/api/career/slow-data${options.refresh ? '?refresh=1' : ''}`)) as Promise<SlowData>;
 }
 
 export async function fetchStudyPlan(courseId: string, cohortYear: number): Promise<StudyPlan> {
@@ -641,8 +663,8 @@ export async function updateProfile(profileData: ProfileUpdatePayload): Promise<
   }) as Promise<ProfileUpdateResponse>;
 }
 
-export async function fetchCareerPlan(): Promise<CareerPlan> {
-  return fetchWithAuth(apiUrl('/api/career-plan')) as Promise<CareerPlan>;
+export async function fetchCareerPlan(options: { refresh?: boolean } = {}): Promise<CareerPlan> {
+  return fetchWithAuth(apiUrl(`/api/career-plan${options.refresh ? '?refresh=1' : ''}`)) as Promise<CareerPlan>;
 }
 
 /* ------------------------------------------------------------------ */

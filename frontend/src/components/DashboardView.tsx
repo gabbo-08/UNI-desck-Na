@@ -74,6 +74,7 @@ import {
   readProfilePrefsCache
 } from '@/lib/api';
 import { safePaymentUrl } from '@/lib/safe-content';
+import { mergeSlowData, slowRetryDelay, slowSectionState, slowStatusMessage, slowSyncOutcome } from '@/lib/slow-data';
 import ProfileSetupView from '@/components/ProfileSetupView';
 import AgendaView from '@/components/AgendaView';
 import ThemeSwitch from '@/components/ThemeSwitch';
@@ -241,6 +242,9 @@ export default function DashboardView() {
   const [checkingSession, setCheckingSession] = useState(true);
   const [sessionSyncState, setSessionSyncState] = useState<'idle' | 'syncing' | 'synced' | 'offline'>('idle');
   const lastBootstrapSyncRef = useRef<number>(0);
+  const sessionGenerationRef = useRef(0);
+  const bootstrapSequenceRef = useRef(0);
+  const bootstrapRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [profile, setProfile] = useState<ProfiloStudente | null>(null);
   const [credentials, setCredentials] = useState<CredenzialiSegrepass>({ codiceFiscale: '', password: '' });
@@ -260,15 +264,31 @@ export default function DashboardView() {
   const [simulatorGrade, setSimulatorGrade] = useState('');
   const [simulatorCfu, setSimulatorCfu] = useState('6');
   const [taxTab, setTaxTab] = useState<'pending' | 'paid'>('pending');
-  const [slowNotice, setSlowNotice] = useState<'loading' | 'ready' | 'error' | null>(null);
-  const [dismissedSlowNotice, setDismissedSlowNotice] = useState<'loading' | 'ready' | 'error' | null>(null);
+  const [slowNotice, setSlowNotice] = useState<'loading' | 'ready' | 'partial' | 'error' | null>(null);
+  const [dismissedSlowNotice, setDismissedSlowNotice] = useState<'loading' | 'ready' | 'partial' | 'error' | null>(null);
+  const [slowData, setSlowData] = useState<SlowData | null>(null);
+  const [slowReload, setSlowReload] = useState(0);
+  const slowForceRefreshRef = useRef(false);
   const [bookingReceipt, setBookingReceipt] = useState<{ id: string; message: string; at: string } | null>(null);
   const [timetableReady, setTimetableReady] = useState(false);
   // Stato solo in memoria: non persiste dati personali nel browser.
   const [privacyMode, setPrivacyMode] = useState(false);
   const timetableLoadedRef = useRef(false);
+  const [timetableEvents, setTimetableEvents] = useState<TimetableEvent[]>([]);
+  const [timetableLoading, setTimetableLoading] = useState(false);
+  const [timetableError, setTimetableError] = useState('');
+  const [clockNow, setClockNow] = useState(() => new Date());
+  const [docentiBookings, setDocentiBookings] = useState<BookedExamDocenti[]>([]);
+  const [docentiTests, setDocentiTests] = useState<TestDocenti[]>([]);
+  const [docentiSubscriptions, setDocentiSubscriptions] = useState<SubscriptionDocenti[]>([]);
+  const [professorPreferences, setProfessorPreferences] = useState<ProfessorPreference[]>([]);
+  const [teacherFromSearch, setTeacherFromSearch] = useState<SubscriptionDocenti | null>(null);
+  const [bookingId, setBookingId] = useState<string | null>(null);
 
   const clearSession = useCallback(() => {
+    sessionGenerationRef.current += 1;
+    bootstrapSequenceRef.current += 1;
+    if (bootstrapRetryRef.current) clearTimeout(bootstrapRetryRef.current);
     clearClientCache();
     setAuthenticated(false);
     setProfile(null);
@@ -281,7 +301,22 @@ export default function DashboardView() {
     setDocentiEnabled(false);
     setBookingReceipt(null);
     setTimetableReady(false);
+    setTimetableEvents([]);
+    setTimetableError('');
+    setTimetableLoading(false);
+    setDocentiBookings([]);
+    setDocentiTests([]);
+    setDocentiSubscriptions([]);
+    setProfessorPreferences([]);
+    setTeacherFromSearch(null);
+    setCheckingSession(false);
+    setLoading(false);
+    setLoginStep('');
     setSessionSyncState('idle');
+    setSlowData(null);
+    setSlowNotice(null);
+    setDismissedSlowNotice(null);
+    slowForceRefreshRef.current = false;
     timetableLoadedRef.current = false;
   }, []);
 
@@ -295,11 +330,14 @@ export default function DashboardView() {
   }, [clearSession]);
 
   const caricaDati = useCallback(async (refresh = false) => {
+    const generation = sessionGenerationRef.current;
     await Promise.resolve();
+    if (generation !== sessionGenerationRef.current) return;
     setLoading(true);
     setError('');
     try {
       const metriche = await fetchMetriche({ refresh });
+      if (generation !== sessionGenerationRef.current) return;
       setData(prev => {
         const merged = { ...prev, ...metriche };
         const cached = readBootstrapCache();
@@ -314,6 +352,7 @@ export default function DashboardView() {
         return merged;
       });
     } catch (err: unknown) {
+      if (generation !== sessionGenerationRef.current) return;
       if (err instanceof Error && err.message === 'SESSION_EXPIRED') {
         clearSession();
         setError('Sessione scaduta. Inserisci di nuovo le credenziali.');
@@ -321,14 +360,18 @@ export default function DashboardView() {
         setError(err instanceof Error ? err.message : 'Impossibile sincronizzare i dati.');
       }
     } finally {
-      setLoading(false);
+      if (generation === sessionGenerationRef.current) setLoading(false);
     }
   }, [clearSession]);
 
-  const revalidateBootstrap = useCallback(async (hasLocalSnapshot: boolean, attempt = 0): Promise<void> => {
+  const revalidateBootstrap = useCallback(async function revalidate(hasLocalSnapshot: boolean, attempt = 0): Promise<void> {
+    const generation = sessionGenerationRef.current;
+    const sequence = ++bootstrapSequenceRef.current;
+    if (bootstrapRetryRef.current) clearTimeout(bootstrapRetryRef.current);
     setSessionSyncState('syncing');
     try {
       const bootstrap = await fetchBootstrap({ timeoutMs: hasLocalSnapshot ? 20_000 : 45_000 });
+      if (generation !== sessionGenerationRef.current || sequence !== bootstrapSequenceRef.current) return;
       if (!bootstrap) {
         clearSession();
         setCheckingSession(false);
@@ -341,24 +384,27 @@ export default function DashboardView() {
       setDocentiEnabled(nextDocentiEnabled);
       setSessionSyncState('synced');
       lastBootstrapSyncRef.current = Date.now();
-      let mergedMetriche: Metriche | null = bootstrap.metriche || null;
-      setData(prev => {
-        if (!bootstrap.metriche) return prev;
-        mergedMetriche = { ...prev, ...bootstrap.metriche, anagrafica: { ...prev?.anagrafica, ...bootstrap.metriche.anagrafica } };
-        return mergedMetriche;
-      });
+      const cached = readBootstrapCache();
+      const previous = bootstrap.profile.id && cached?.profile.id === bootstrap.profile.id ? cached?.metriche : null;
+      const mergedMetriche: Metriche | null = bootstrap.metriche
+        ? { ...previous, ...bootstrap.metriche, anagrafica: { ...previous?.anagrafica, ...bootstrap.metriche.anagrafica } }
+        : previous || null;
+      setData(mergedMetriche);
       writeBootstrapCache({ profile: bootstrap.profile, onboardingRequired: bootstrap.onboardingRequired, docentiEnabled: nextDocentiEnabled, metriche: mergedMetriche });
       setCheckingSession(false);
       const needsSummaryMetrics = mergedMetriche?.mediaPonderata === undefined;
       if (!bootstrap.metriche || !bootstrap.sync?.fromCache || needsSummaryMetrics) {
         void caricaDati(false);
       }
-    } catch (sessionError: unknown) {
+    } catch {
+      if (generation !== sessionGenerationRef.current || sequence !== bootstrapSequenceRef.current) return;
       if (hasLocalSnapshot) {
         setSessionSyncState('offline');
         setCheckingSession(false);
         if (attempt === 0) {
-          window.setTimeout(() => { void revalidateBootstrap(true, 1); }, 6000);
+          bootstrapRetryRef.current = setTimeout(() => {
+            if (generation === sessionGenerationRef.current) void revalidate(true, 1);
+          }, 6000);
         }
         return;
       }
@@ -384,7 +430,11 @@ export default function DashboardView() {
           void revalidateBootstrap(false);
         }
     });
-    return () => { active = false; };
+    return () => {
+      active = false;
+      sessionGenerationRef.current += 1;
+      if (bootstrapRetryRef.current) clearTimeout(bootstrapRetryRef.current);
+    };
   }, [revalidateBootstrap]);
 
   useEffect(() => {
@@ -414,40 +464,60 @@ export default function DashboardView() {
     }
 
     let active = true;
+    const generation = sessionGenerationRef.current;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let nextDelay = 3000;
+    let forceRefresh = slowForceRefreshRef.current;
+    slowForceRefreshRef.current = false;
 
     const poll = async () => {
       try {
-        const slow: SlowData = await fetchSlowData();
-        if (!active) return;
+        const refresh = forceRefresh;
+        forceRefresh = false;
+        const slow: SlowData = await fetchSlowData({ refresh });
+        if (!active || generation !== sessionGenerationRef.current) return;
+        setSlowData(slow);
+        const outcome = slowSyncOutcome(slow);
+        setData(prev => {
+          const merged = mergeSlowData(prev, slow);
+          const cached = readBootstrapCache();
+          if (merged && cached && cached.profile.id && cached.profile.id === profile?.id) {
+            writeBootstrapCache({ profile: cached.profile, onboardingRequired: cached.onboardingRequired, docentiEnabled: cached.docentiEnabled, metriche: merged });
+          }
+          return merged;
+        });
 
-        if (slow.status === 'ready') {
-          setData(prev => (prev ? {
-            ...prev,
-            tasse: slow.taxes ?? prev.tasse,
-            prenotazioni: slow.prenotazioni ?? prev.prenotazioni
-          } : prev));
+        if (outcome === 'ready') {
           setSlowNotice('ready');
           nextDelay = 3000;
           timer = setTimeout(() => { if (active) setSlowNotice(null); }, 5000);
           return;
         }
 
-        if (slow.status === 'error') {
-          setSlowNotice('error');
+        if (outcome === 'error' || outcome === 'partial') {
+          setSlowNotice(outcome);
+          timer = setTimeout(poll, slowRetryDelay({ ...slow, status: outcome }, Math.max(30_000, nextDelay)));
+          nextDelay = Math.min(60_000, nextDelay * 2);
           return;
         }
 
         setSlowNotice('loading');
-        timer = setTimeout(poll, nextDelay);
+        timer = setTimeout(poll, slowRetryDelay(slow, nextDelay));
         nextDelay = Math.min(60000, nextDelay * 2);
       } catch (error) {
-        if (!active) return;
+        if (!active || generation !== sessionGenerationRef.current) return;
         if (error instanceof Error && error.message === 'SESSION_EXPIRED') return;
         setSlowNotice('error');
-        timer = setTimeout(poll, nextDelay);
+        setSlowData(previous => ({
+          ...previous,
+          status: 'error',
+          sections: {
+            taxes: { status: 'error', stale: Boolean(previous?.taxes) },
+            appelli: { status: 'error', stale: Array.isArray(previous?.prenotazioni) },
+          },
+        }));
         nextDelay = Math.min(60000, Math.max(10000, nextDelay * 2));
+        timer = setTimeout(poll, nextDelay);
       }
     };
 
@@ -461,7 +531,13 @@ export default function DashboardView() {
       active = false;
       if (timer) clearTimeout(timer);
     };
-  }, [authenticated]);
+  }, [authenticated, profile?.id, slowReload]);
+
+  const retrySlowData = () => {
+    slowForceRefreshRef.current = true;
+    setDismissedSlowNotice(null);
+    setSlowReload(value => value + 1);
+  };
 
 const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -479,6 +555,8 @@ const handleLogin = async (e: React.FormEvent) => {
       return;
     }
 
+    const generation = ++sessionGenerationRef.current;
+    if (bootstrapRetryRef.current) clearTimeout(bootstrapRetryRef.current);
     setLoading(true);
     setError('');
     setLoginStep('Connessione ai servizi Unina...');
@@ -503,6 +581,7 @@ const handleLogin = async (e: React.FormEvent) => {
         email: emailIstituzionale,
         enableDocentiSync
       });
+      if (generation !== sessionGenerationRef.current) return;
       
       setLoginStep('Finalizzazione sessione...');
       setAuthenticated(true);
@@ -522,6 +601,7 @@ const handleLogin = async (e: React.FormEvent) => {
           ...(localPrefs.surnameInitial ? { surnameInitial: localPrefs.surnameInitial } : {})
         } as ProfiloStudente;
         void updateProfile(localPrefs).then((res: { profile: ProfiloStudente; onboardingRequired: boolean }) => {
+          if (generation !== sessionGenerationRef.current) return;
           setProfile(res.profile);
           setOnboardingRequired(res.onboardingRequired);
         }).catch(() => {});
@@ -537,17 +617,24 @@ const handleLogin = async (e: React.FormEvent) => {
       setCredentials({ codiceFiscale: '', password: '', email: '' });
       setEnableDocentiSync(false);
     } catch (err: unknown) {
+      if (generation !== sessionGenerationRef.current) return;
       setError(err instanceof Error ? err.message : 'Accesso non riuscito. Controlla le credenziali.');
     } finally {
       clearInterval(stepTimer);
-      setLoginStep('');
-      setLoading(false);
+      if (generation === sessionGenerationRef.current) {
+        setLoginStep('');
+        setLoading(false);
+      }
     }
   };
   const handleLogout = async () => {
-    await logoutAPI();
-    clearSession();
-    setError('');
+    try {
+      await logoutAPI();
+      clearSession();
+      setError('');
+    } catch {
+      setError('Uscita non completata. Controlla la connessione e riprova.');
+    }
   };
 
   const handleDeleteAccount = async () => {
@@ -562,6 +649,9 @@ const handleLogin = async (e: React.FormEvent) => {
   };
 
   const handleProfileSaved = (savedProfile: ProfiloStudente) => {
+    timetableLoadedRef.current = false;
+    setTimetableReady(false);
+    setTimetableEvents([]);
     setProfile(savedProfile);
     setOnboardingRequired(false);
     setEditingProfile(false);
@@ -588,7 +678,10 @@ const handleLogin = async (e: React.FormEvent) => {
   const coorte = anagrafica?.annoImmatricolazione || extProfile?.cohortYear || extProfile?.cohort_year || '—';
   const canale = extProfile?.channel || 'Da impostare';
 
-  const taxesObj = data?.tasse;
+  const taxesObj = data?.tasse?.available === false ? undefined : data?.tasse;
+  const taxesState = slowSectionState(slowData, 'taxes');
+  const appelliState = slowSectionState(slowData, 'appelli');
+  const taxesUnavailable = taxesState.status === 'error' && !taxesObj;
   const paidTaxes: TassaItem[] = taxesObj?.paid || taxesObj?.pagati || [];
   const pendingTaxes: TassaItem[] = taxesObj?.pending || taxesObj?.inDebito || [];
 
@@ -597,10 +690,6 @@ const handleLogin = async (e: React.FormEvent) => {
   const nextDeadline = taxesObj?.summary?.nextDeadline || pendingTaxes.map(t => t.dueDate || t.scadenzaISO || t.scadenza).filter(Boolean).sort()[0];
 
   // Orario per la Home: caricato una volta; la cache del backend evita scraping ripetuti.
-  const [timetableEvents, setTimetableEvents] = useState<TimetableEvent[]>([]);
-  const [timetableLoading, setTimetableLoading] = useState(false);
-  const [timetableError, setTimetableError] = useState('');
-  const [clockNow, setClockNow] = useState(() => new Date());
 
   useEffect(() => {
     const timer = window.setInterval(() => setClockNow(new Date()), 30_000);
@@ -629,7 +718,7 @@ const handleLogin = async (e: React.FormEvent) => {
         .finally(() => { if (active) setTimetableLoading(false); });
     }, delay);
     return () => { active = false; window.clearTimeout(timer); };
-  }, [authenticated, activeView]);
+  }, [authenticated, activeView, profile]);
 
   // Prossima lezione: il primo giorno con lezioni da oggi in avanti.
   // Per oggi conta solo ciò che non è ancora finito.
@@ -663,24 +752,14 @@ const handleLogin = async (e: React.FormEvent) => {
 
   // Prenotazioni del portale Docenti: caricate subito dopo il primo rendering
   // e mostrate insieme agli appelli Segrepass.
-  const [docentiBookings, setDocentiBookings] = useState<BookedExamDocenti[]>([]);
-  const [docentiTests, setDocentiTests] = useState<TestDocenti[]>([]);
-  const [docentiSubscriptions, setDocentiSubscriptions] = useState<SubscriptionDocenti[]>([]);
-  const [professorPreferences, setProfessorPreferences] = useState<ProfessorPreference[]>([]);
-  const [teacherFromSearch, setTeacherFromSearch] = useState<SubscriptionDocenti | null>(null);
-  const [bookingId, setBookingId] = useState<string | null>(null);
-
- const fetchingDocentiRef = useRef(false);
 
   useEffect(() => {
     if (!authenticated || !docentiEnabled || !['home', 'docenti', 'prenotazioni'].includes(activeView)) return;
-    if (fetchingDocentiRef.current) return; // Blocca le chiamate parallele
 
     let active = true;
     const delay = activeView === 'home' ? 1200 : 0;
     const timer = window.setTimeout(() => {
-      if (!active || fetchingDocentiRef.current) return;
-      fetchingDocentiRef.current = true;
+      if (!active) return;
 
       fetchDocentiSummary()
         .then(({ bookedExams: bookings, tests, subscriptions }) => {
@@ -696,8 +775,7 @@ const handleLogin = async (e: React.FormEvent) => {
             setDocentiTests([]);
             setDocentiSubscriptions([]);
           }
-        })
-        .finally(() => { fetchingDocentiRef.current = false; });
+        });
     }, delay);
 
     return () => { active = false; window.clearTimeout(timer); };
@@ -705,11 +783,12 @@ const handleLogin = async (e: React.FormEvent) => {
 
   useEffect(() => {
     if (!authenticated || !docentiEnabled || !['home', 'docenti', 'prenotazioni'].includes(activeView)) return;
+    let active = true;
     const delay = activeView === 'home' ? 1200 : 0;
     const timer = window.setTimeout(() => {
-      void fetchProfessorPreferences().then(setProfessorPreferences).catch(() => setProfessorPreferences([]));
+      void fetchProfessorPreferences().then(value => { if (active) setProfessorPreferences(value); }).catch(() => { if (active) setProfessorPreferences([]); });
     }, delay);
-    return () => window.clearTimeout(timer);
+    return () => { active = false; window.clearTimeout(timer); };
   }, [authenticated, activeView, docentiEnabled]);
 
   const listaPrenotazioni = useMemo<Prenotazione[]>(() => {
@@ -1006,13 +1085,17 @@ const handleLogin = async (e: React.FormEvent) => {
     );
   }
 
-  const refresh = () => authenticated && caricaDati(true);
+  const refresh = () => {
+    if (!authenticated) return;
+    void caricaDati(true);
+    retrySlowData();
+  };
   const serviceStatuses: Array<{ label: string; ready: boolean; status: string }> = [
     { label: 'Carriera', ready: Boolean(data), status: data ? 'Disponibile' : 'In caricamento' },
     {
       label: 'Tasse e appelli',
-      ready: slowNotice !== 'error' && (slowNotice === 'ready' || Boolean(data?.tasse)),
-      status: slowNotice === 'error' ? 'Da aggiornare' : slowNotice === 'loading' ? 'In aggiornamento' : 'Disponibile'
+      ready: taxesState.status === 'ready' && appelliState.status === 'ready',
+      status: taxesState.status === 'error' ? 'Tasse da aggiornare' : appelliState.status === 'error' ? 'Appelli da aggiornare' : slowNotice === 'loading' ? 'In aggiornamento' : 'Disponibile'
     },
     { label: 'Portale Docenti', ready: docentiEnabled, status: docentiEnabled ? 'Opt-in attivo' : 'Non collegato' },
     { label: 'Orario', ready: timetableReady, status: timetableError ? 'Non disponibile' : timetableLoading ? 'In caricamento' : timetableReady ? 'Disponibile' : 'Su richiesta' },
@@ -1034,9 +1117,8 @@ const handleLogin = async (e: React.FormEvent) => {
         >
           <div className="flex items-start gap-3">
             <span className="min-w-0 flex-1">
-              {slowNotice === 'loading' && 'Tasse e appelli in preparazione: i dati già disponibili sono visibili subito.'}
-              {slowNotice === 'ready' && 'Dati completi ricevuti; verifica sempre tasse e appelli sul portale ufficiale.'}
-              {slowNotice === 'error' && 'Tasse e appelli non sono disponibili in questo momento.'}
+              {slowStatusMessage(slowData)}
+              {(slowNotice === 'error' || slowNotice === 'partial') && <button type="button" onClick={retrySlowData} className="mt-2 block rounded border border-current/40 px-2 py-1 font-semibold">Riprova tasse e appelli</button>}
             </span>
             <button
               type="button"
@@ -1349,7 +1431,7 @@ const handleLogin = async (e: React.FormEvent) => {
                   </div>
                 ) : (
                   <div className={`${CARD} p-4 text-center text-xs text-slate-400`}>
-                    {slowNotice === 'loading' ? 'Appelli in preparazione…' : 'Nessuna prenotazione d&apos;esame attiva al momento.'}
+                    {appelliState.status === 'loading' ? 'Appelli in preparazione…' : appelliState.status === 'error' ? 'Lettura appelli Segrepass non riuscita. Puoi riprovare l’aggiornamento.' : 'Nessuna prenotazione d’esame attiva al momento.'}
                   </div>
                 )}
               </section>
@@ -1363,12 +1445,12 @@ const handleLogin = async (e: React.FormEvent) => {
                     Vedi dettaglio <ChevronRight className="h-3.5 w-3.5" />
                   </button>
                 </div>
-                {slowNotice === 'loading' && !taxesObj && (
+                {(taxesState.status === 'loading' || taxesUnavailable) && !taxesObj && (
                   <div className={`${CARD} p-4 text-center text-xs text-slate-400`}>
-                    Dati tasse in preparazione…
+                    {taxesUnavailable ? 'Lettura tasse non riuscita. Riprova l’aggiornamento.' : 'Dati tasse in preparazione…'}
                   </div>
                 )}
-                <div className={`grid gap-4 sm:grid-cols-3 ${slowNotice === 'loading' && !taxesObj ? 'hidden' : ''}`}>
+                <div className={`grid gap-4 sm:grid-cols-3 ${(taxesState.status === 'loading' || taxesUnavailable) && !taxesObj ? 'hidden' : ''}`}>
                   <div className={`${CARD} p-4 flex items-center gap-3`}>
                     <div className="grid h-10 w-10 place-items-center rounded-xl bg-emerald-500/15 text-emerald-400 shrink-0">
                       <CheckCircle2 className="h-5 w-5" />
@@ -1464,6 +1546,13 @@ const handleLogin = async (e: React.FormEvent) => {
                 </div>
               </div>
 
+              {appelliState.status === 'error' && (
+                <div role="status" className={`${CARD} border-amber-500/30 p-3 text-xs text-amber-200`}>
+                  <p>Lettura appelli Segrepass non riuscita. Restano visibili gli ultimi dati disponibili e le prenotazioni del portale Docenti.</p>
+                  <button type="button" onClick={retrySlowData} className="mt-2 rounded border border-amber-500/40 px-2 py-1 font-semibold">Riprova lettura appelli</button>
+                </div>
+              )}
+
               <div className={`${CARD} space-y-3 p-4`} aria-label="Pianificatore esami">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
@@ -1487,12 +1576,12 @@ const handleLogin = async (e: React.FormEvent) => {
                       </div>
                     ))}
                   </div>
-                ) : <p className="text-xs text-slate-500">Nessun appello futuro con data disponibile.</p>}
+                ) : <p className="text-xs text-slate-500">{appelliState.status === 'error' ? 'Le date degli appelli Segrepass non sono state aggiornate.' : 'Nessun appello futuro con data disponibile.'}</p>}
               </div>
 
               {prenotazioniFiltrate.length === 0 ? (
                 <div className={`${CARD} p-8 text-center text-sm text-slate-400`}>
-                  {loading ? 'Caricamento appelli in corso...' : 'Nessun appello o prenotazione trovata.'}
+                  {appelliState.status === 'loading' ? 'Caricamento appelli in corso...' : appelliState.status === 'error' ? 'Appelli Segrepass temporaneamente non disponibili. Riprova la lettura.' : 'Nessun appello o prenotazione trovata.'}
                 </div>
               ) : (
                 <div className="space-y-8">
@@ -1500,7 +1589,7 @@ const handleLogin = async (e: React.FormEvent) => {
                     <h3 className="text-xs font-bold uppercase tracking-wider text-[#5AB0F0]">Appelli Disponibili</h3>
                     {appelliDisponibili.length === 0 ? (
                       <div className={`${CARD} p-5 text-center text-xs text-slate-400`}>
-                        Nessun appello aperto al momento.
+                        {appelliState.status === 'error' ? 'Gli appelli Segrepass non sono stati aggiornati.' : 'Nessun appello aperto al momento.'}
                       </div>
                     ) : (
                       appelliPerCorso.map((group, idx) => (
@@ -1655,7 +1744,7 @@ const handleLogin = async (e: React.FormEvent) => {
                       taxTab === 'pending' ? 'bg-[#2F7FD0] text-white' : 'text-slate-400 hover:text-white'
                     }`}
                   >
-                    Da Pagare ({pendingTaxes.length})
+                    Da Pagare ({taxesUnavailable ? '—' : pendingTaxes.length})
                   </button>
                   <button
                     onClick={() => setTaxTab('paid')}
@@ -1663,10 +1752,17 @@ const handleLogin = async (e: React.FormEvent) => {
                       taxTab === 'paid' ? 'bg-[#2F7FD0] text-white' : 'text-slate-400 hover:text-white'
                     }`}
                   >
-                    Storico Pagati ({paidTaxes.length})
+                    Storico Pagati ({taxesUnavailable ? '—' : paidTaxes.length})
                   </button>
                 </div>
               </div>
+
+              {taxesState.status === 'error' && (
+                <div role="status" className={`${CARD} border-amber-500/30 p-3 text-xs text-amber-200`}>
+                  <p>{taxesObj ? 'Lettura tasse non riuscita: stai consultando gli ultimi dati disponibili.' : 'Lettura tasse non riuscita. I pagamenti non possono essere verificati al momento.'}</p>
+                  <button type="button" onClick={retrySlowData} className="mt-2 rounded border border-amber-500/40 px-2 py-1 font-semibold">Riprova lettura tasse</button>
+                </div>
+              )}
 
               {taxTab === 'pending' && (
                 <div className="grid gap-3">
@@ -1713,9 +1809,9 @@ const handleLogin = async (e: React.FormEvent) => {
                     })
                   ) : (
                     <div className={`${CARD} p-8 text-center text-sm text-slate-400`}>
-                      {slowNotice === 'loading'
+                      {taxesState.status === 'loading' && !taxesObj
                         ? 'Dati tasse in preparazione…'
-                        : slowNotice === 'error' && !taxesObj
+                        : taxesUnavailable
                         ? 'Tasse non disponibili in questo momento.'
                         : 'Nessuna tassa in sospeso o in debito.'}
                     </div>
@@ -1753,7 +1849,7 @@ const handleLogin = async (e: React.FormEvent) => {
                     })
                   ) : (
                     <div className={`${CARD} p-8 text-center text-sm text-slate-400`}>
-                      {slowNotice === 'loading' ? 'Dati tasse in preparazione…' : 'Nessun versamento storico registrato.'}
+                      {taxesState.status === 'loading' && !taxesObj ? 'Dati tasse in preparazione…' : taxesUnavailable ? 'Storico versamenti non disponibile: la lettura delle tasse non è riuscita.' : 'Nessun versamento storico registrato.'}
                     </div>
                   )}
                 </div>

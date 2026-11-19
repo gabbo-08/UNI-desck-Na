@@ -47,12 +47,21 @@ async function openTeacher(page) {
 }
 
 test.beforeEach(async ({ page }) => {
+  await page.route('**/health', route => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok' }),
+  }));
   await page.route('**/api/**', async route => {
     const url = new URL(route.request().url());
     let body;
 
     if (url.pathname === '/api/auth/session') {
       body = session;
+    } else if (url.pathname === '/api/auth/bootstrap') {
+      body = {
+        ...session,
+        metriche: { anagrafica: { matricola: session.profile.matricola, nomeCompleto: session.profile.name, corsoDiLaurea: session.profile.courseName }, pianoDiStudiRaw: [], mediaPonderata: null },
+        sync: { fromCache: true, docenti: { enabled: true } },
+      };
     } else if (url.pathname === '/api/metriche') {
       body = { anagrafica: { matricola: session.profile.matricola, nomeCompleto: session.profile.name, corsoDiLaurea: session.profile.courseName }, pianoDiStudiRaw: [] };
     } else if (url.pathname === '/api/career/slow-data') {
@@ -68,7 +77,7 @@ test.beforeEach(async ({ page }) => {
     } else if (url.pathname === '/api/docenti/teacher/teacher-1') {
       body = teacherDetail;
     } else if (url.pathname === '/api/docenti/teacher/teacher-1/photo') {
-      await route.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from('iVBORw0KGgo=', 'base64') });
+      await route.fulfill({ status: 200, contentType: 'image/png', body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jXioAAAAASUVORK5CYII=', 'base64') });
       return;
     } else if (url.pathname === '/api/docenti/teacher/teacher-1/folder/folder-1') {
       body = { items: [{ id: 'file-1', nome: 'Slide introduttive.pdf', tipo: 'file' }] };
@@ -92,20 +101,27 @@ test('Docente page sections remain visually stable and inscriptions are unique',
     has: page.getByRole('heading', { name: 'Iscrizioni alle lezioni' }),
   });
   await expect(inscriptions.getByText('Laboratorio Demo', { exact: true })).toHaveCount(1);
+  await page.addStyleTag({ content: 'nextjs-portal { display: none !important; }' });
+  const dismissMessage = page.getByRole('button', { name: 'Nascondi messaggio' });
+  if (await dismissMessage.isVisible()) await dismissMessage.click();
+  await page.mouse.move(0, 0);
   await expect(page).toHaveScreenshot('docente-page.png', { fullPage: true });
 });
 
-test('Estrae TUTTI i docenti dal piano studi', async ({ page }) => {
+test('Mostra il docente del corso selezionato', async ({ page }) => {
   await openTeacher(page);
   await expect(page.getByText('Prof.ssa Demo', { exact: true })).toBeVisible();
 });
 
-test('Immagine profilo docente non restituisce 404', async ({ page }) => {
+test('Immagine profilo docente viene caricata e decodificata', async ({ page }) => {
   const photoResponse = page.waitForResponse(response =>
     response.url().includes('/api/docenti/teacher/teacher-1/photo')
   );
   await openTeacher(page);
   await expect((await photoResponse).status()).toBe(200);
+  await expect.poll(async () => page.locator('img[src*="/teacher/teacher-1/photo"]').evaluateAll(images =>
+    images.some(image => image.complete && image.naturalWidth > 0)
+  )).toBe(true);
 });
 
 test('Cliccando sulla cartella del materiale, i file diventano visibili nel DOM', async ({ page }) => {
@@ -114,14 +130,15 @@ test('Cliccando sulla cartella del materiale, i file diventano visibili nel DOM'
   await expect(page.getByRole('button', { name: 'Slide introduttive.pdf', exact: true })).toBeVisible();
 });
 
-test('Il backend risponde ai dati in cache in meno di 250ms', async ({ page }) => {
+test('Il dettaglio docente resta consultabile dopo una seconda richiesta API', async ({ page }) => {
   await openTeacher(page);
-  const elapsed = await page.evaluate(async () => {
-    const started = performance.now();
+  // Le API di questa suite sono simulate: i tempi del backend vanno misurati
+  // contro un server reale, non sul route handler di Playwright.
+  const detail = await page.evaluate(async () => {
     const response = await fetch('/api/docenti/teacher/teacher-1');
     if (!response.ok) throw new Error(`Unexpected status: ${response.status}`);
-    await response.json();
-    return performance.now() - started;
+    return response.json();
   });
-  expect(elapsed).toBeLessThan(250);
+  expect(detail.profilo.id).toBe('teacher-1');
+  await expect(page.getByRole('heading', { name: 'Materiale didattico' })).toBeVisible();
 });

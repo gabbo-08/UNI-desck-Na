@@ -3,28 +3,16 @@
 import { useEffect, useMemo, useState } from 'react';
 import { BellRing, CalendarClock, CheckCircle2 } from 'lucide-react';
 import { ApiError, apiUrl, fetchPushVapidKey, sendPushTest, subscribePush, unsubscribePush, type Prenotazione, type TassaSnapshot } from '@/lib/api';
+import { parseCalendarDate as parseDate } from '@/lib/calendar-date';
 
 type Reminder = { id: string; title: string; date: Date; detail?: string };
 
-function parseDate(value?: string | null): Date | null {
-  if (!value) return null;
-  const raw = String(value).trim();
-  if (/^\d{12,14}$/.test(raw)) {
-    const date = new Date(Number(raw));
-    return Number.isNaN(date.getTime()) ? null : date;
-  }
-  const iso = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-  if (iso) return new Date(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]));
-  const italian = raw.match(/^(\d{1,2})[/. -](\d{1,2})[/. -](\d{4})/);
-  if (italian) return new Date(Number(italian[3]), Number(italian[2]) - 1, Number(italian[1]));
-  const date = new Date(raw);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
 function reminderList(exams: Prenotazione[], taxes?: TassaSnapshot | null): Reminder[] {
   const now = new Date();
+  now.setHours(0, 0, 0, 0);
   const end = new Date(now);
   end.setDate(end.getDate() + 30);
+  end.setHours(23, 59, 59, 999);
   const reminders: Reminder[] = [];
   exams.forEach((exam, index) => {
     const date = parseDate(exam.dataAppello);

@@ -48,7 +48,8 @@ function MaterialTree({
   path?: string;
 }) {
   const [open, setOpen] = useState<Record<string, boolean>>({});
-  const [loading, setLoading] = useState<string | null>(null);
+  const [loading, setLoading] = useState<Record<string, boolean>>({});
+  const [errors, setErrors] = useState<Record<string, boolean>>({});
   const [loaded, setLoaded] = useState<Record<string, boolean>>({});
   const [folderItems, setFolderItems] = useState<Record<string, MaterialeDocente[]>>({});
 
@@ -79,26 +80,28 @@ function MaterialTree({
         }
         return (
           <div key={itemKey} className="teacher-folder-row min-w-0 rounded border border-white/10">
-            <button type="button" onClick={() => {
+            <button type="button" aria-expanded={expanded} disabled={loading[itemKey]} onClick={() => {
               const next = !expanded;
               setOpen(current => ({ ...current, [itemKey]: next }));
               if (next && !loaded[itemKey]) {
-                setLoading(itemKey);
+                setLoading(current => ({ ...current, [itemKey]: true }));
+                setErrors(current => ({ ...current, [itemKey]: false }));
                 void onLoadFolder(item, section)
                   .then(value => {
                     setFolderItems(current => ({ ...current, [itemKey]: value }));
                     setLoaded(current => ({ ...current, [itemKey]: true }));
                   })
-                  .catch(() => setLoaded(current => ({ ...current, [itemKey]: true })))
-                  .finally(() => setLoading(null));
+                  .catch(() => setErrors(current => ({ ...current, [itemKey]: true })))
+                  .finally(() => setLoading(current => ({ ...current, [itemKey]: false })));
               }
             }} className="flex w-full min-w-0 items-start gap-2 px-2 py-2 text-left text-sm text-slate-200">
               {expanded ? <FolderOpen className="h-4 w-4" /> : <Folder className="h-4 w-4" />}
               <span className="min-w-0 flex-1 break-words whitespace-normal leading-5">{item.nome}</span>
             </button>
-            {expanded && loading === itemKey && <p className="border-t border-white/10 px-2 py-2 text-xs text-slate-400">Caricamento contenuti...</p>}
-            {expanded && loading !== itemKey && children.length > 0 && <div className="border-t border-white/10 py-1 pl-5"><MaterialTree items={children} onDownload={onDownload} onLoadFolder={onLoadFolder} favoriteMaterialIds={favoriteMaterialIds} onToggleFavorite={onToggleFavorite} restricted={restricted} section={section} path={itemKey} /></div>}
-            {expanded && loading !== itemKey && children.length === 0 && (
+            {expanded && loading[itemKey] && <p className="border-t border-white/10 px-2 py-2 text-xs text-slate-400">Caricamento contenuti...</p>}
+            {expanded && errors[itemKey] && <p role="alert" className="border-t border-white/10 px-2 py-2 text-xs text-amber-200">Cartella non caricata. Chiudi e riapri per riprovare.</p>}
+            {expanded && !loading[itemKey] && children.length > 0 && <div className="border-t border-white/10 py-1 pl-5"><MaterialTree items={children} onDownload={onDownload} onLoadFolder={onLoadFolder} favoriteMaterialIds={favoriteMaterialIds} onToggleFavorite={onToggleFavorite} restricted={restricted} section={section} path={itemKey} /></div>}
+            {expanded && !loading[itemKey] && !errors[itemKey] && children.length === 0 && (
               <p className="border-t border-white/10 px-2 py-2 text-xs italic text-slate-500">
                 {restricted ? 'Contenuto riservato a questo insegnamento.' : 'Nessun file disponibile in questa cartella.'}
               </p>

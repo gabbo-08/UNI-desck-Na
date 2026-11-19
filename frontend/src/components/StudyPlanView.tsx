@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertTriangle, ExternalLink, LoaderCircle, RefreshCw } from 'lucide-react';
 import {
   fetchCareerPlan,
+  ApiError,
   type CareerPlan,
   type CareerPlanCourse,
   type ProfiloRecord
@@ -20,44 +21,52 @@ function statusLabel(status?: string) {
 }
 
 export default function StudyPlanView({ authenticated, profile }: Props) {
+  const identity = `${authenticated}:${profile?.id || ''}:${profile?.course_id || profile?.courseId || ''}:${profile?.cohort_year || profile?.cohortYear || ''}`;
+  return <StudyPlanContent key={identity} authenticated={authenticated} profile={profile} />;
+}
+
+function StudyPlanContent({ authenticated, profile }: Props) {
   const [data, setData] = useState<CareerPlan | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(authenticated);
   const [error, setError] = useState('');
+  const [errorCode, setErrorCode] = useState<string | undefined>();
+  const [retryAfterMs, setRetryAfterMs] = useState<number | undefined>();
+  const requestSequence = useRef(0);
 
   const extProfile = profile ?? {};
   const sourceUrl = safeExternalUrl(data?.plan?.source_url);
 
-  const loadPlan = async () => {
+  const loadPlan = useCallback(async (refresh = false) => {
     if (!authenticated) return;
+    const sequence = ++requestSequence.current;
     setLoading(true);
     setError('');
+    setErrorCode(undefined);
+    setRetryAfterMs(undefined);
     try {
-      setData(await fetchCareerPlan());
+      const result = await fetchCareerPlan({ refresh });
+      if (sequence === requestSequence.current) setData(result);
     } catch (loadError: unknown) {
+      if (sequence !== requestSequence.current || (loadError instanceof Error && loadError.name === 'AbortError')) return;
       setError(loadError instanceof Error ? loadError.message : 'Impossibile caricare il piano.');
-      setData(null);
+      if (loadError instanceof ApiError) {
+        setErrorCode(loadError.code);
+        setRetryAfterMs(loadError.retryAfterMs);
+      }
     } finally {
-      setLoading(false);
+      if (sequence === requestSequence.current) setLoading(false);
     }
-  };
+  }, [authenticated]);
 
   useEffect(() => {
     let active = true;
 
-    if (!authenticated) return;
-    fetchCareerPlan()
-      .then(result => { if (active) setData(result); })
-      .catch(loadError => {
-        if (active) setError(loadError instanceof Error ? loadError.message : 'Impossibile caricare il piano.');
-      })
-      .finally(() => { if (active) setLoading(false); });
+    Promise.resolve().then(() => { if (active) void loadPlan(); });
 
-    return () => { active = false; };
-  }, [authenticated]);
+    return () => { active = false; requestSequence.current += 1; };
+  }, [loadPlan]);
 
-  const isUnsupportedCourse = error.toLowerCase().includes('manifesto') ||
-    error.toLowerCase().includes('non disponibile') ||
-    error.toLowerCase().includes('supportato');
+  const planNotRetrieved = errorCode === 'STUDY_PLAN_NOT_AVAILABLE';
 
   const groups = new Map<string, CareerPlanCourse[]>();
   for (const course of data?.courses || []) {
@@ -80,7 +89,8 @@ export default function StudyPlanView({ authenticated, profile }: Props) {
           </p>
         </div>
         <button
-          onClick={loadPlan}
+          type="button"
+          onClick={() => void loadPlan(true)}
           disabled={loading}
           aria-label="Aggiorna piano"
           className="rounded-md border border-zinc-700 p-2 transition-colors hover:bg-zinc-800 disabled:opacity-50"
@@ -89,23 +99,21 @@ export default function StudyPlanView({ authenticated, profile }: Props) {
         </button>
       </header>
 
-      {error && isUnsupportedCourse && (
+      {error && (
         <div role="alert" className="rounded-r-md border-l-4 border-amber-500 bg-amber-950/30 p-4 text-amber-100 shadow-sm">
           <div className="flex items-start gap-3">
             <AlertTriangle className="mt-0.5 h-5 w-5 shrink-0 text-amber-400" />
             <div>
-              <h3 className="font-semibold text-amber-300">Corso non ancora supportato</h3>
+              <h3 className="font-semibold text-amber-300">{planNotRetrieved ? 'Piano non ancora recuperato' : 'Recupero piano non riuscito'}</h3>
               <p className="mt-1 text-sm text-zinc-300 leading-relaxed">
-                I dati di carriera per <strong className="text-zinc-100">{extProfile.course_name || extProfile.courseName || 'questo corso'}</strong> (Coorte {extProfile.cohort_year || extProfile.cohortYear || 'non impostata'}) sono stati letti correttamente da Segrepass, ma il manifesto degli studi non è ancora stato importato nel database dell&apos;app.
+                {planNotRetrieved
+                  ? `Non è stato possibile recuperare il piano personale di ${extProfile.course_name || extProfile.courseName || 'questo corso'} (coorte ${extProfile.cohort_year || extProfile.cohortYear || 'non impostata'}). Puoi riprovare la lettura da Segrepass. Gli esami già acquisiti restano disponibili.`
+                  : error}
               </p>
+              {retryAfterMs !== undefined && retryAfterMs > 0 && <p className="mt-2 text-xs text-zinc-400">Attesa indicata dal servizio: circa {Math.ceil(retryAfterMs / 1000)} secondi.</p>}
+              <button type="button" onClick={() => void loadPlan(true)} disabled={loading} className="mt-3 rounded-md border border-amber-500/50 px-3 py-2 text-xs font-semibold disabled:opacity-50">Riprova lettura piano</button>
             </div>
           </div>
-        </div>
-      )}
-
-      {error && !isUnsupportedCourse && (
-        <div role="alert" className="border-l-2 border-red-500 bg-red-950/20 px-4 py-3 text-sm text-red-200">
-          {error}
         </div>
       )}
 
