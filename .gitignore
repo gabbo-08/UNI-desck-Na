@@ -36,3 +36,8 @@ android_app/android/app/google-services.json
 android_app/lib/firebase_options.dart
 .vercel
 .env*
+!.env.example
+
+# Risultati generati da Playwright
+test-results/
+playwright-report/

@@ -20,7 +20,7 @@
     "seed:plan:l8-2025-26": "node scripts/seed-study-plan-l8-2025-26.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.12.0"
   },
   "author": "Gabriele Cacace",
   "license": "ISC",

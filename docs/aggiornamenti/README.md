@@ -4,7 +4,10 @@ Questa cartella raccoglie le spiegazioni delle modifiche recenti, delle nuove fu
 
 ## Documenti
 
-- [Aggiornamenti di oggi e roadmap](../../AGGIORNAMENTI_OGGI_E_ROADMAP.md)
+- [Collegamenti ai servizi ufficiali nella Home](../../AGGIORNAMENTO_SERVIZI_HOME_2026-11-19.md)
+- [Recupero piano di studi, tasse e appelli](../../AGGIORNAMENTO_PIANO_TASSE_APPELLI_2026-11-19.md)
+- [Report correzione bug del 19 novembre 2026](../../REPORT_BUG_2026-11-19.md)
+- [Aggiornamento del 16 novembre 2026](../../AGGIORNAMENTO_2026-11-16.md)
 - [Notifiche Web Push e APK Android](PUSH_NOTIFICHE.md)
 
 ## Stato generale
@@ -22,7 +25,6 @@ Questa cartella raccoglie le spiegazioni delle modifiche recenti, delle nuove fu
 
 Per installazione e deploy usa:
 
-- [Procedura da casa](../../PROCEDURA_CASA.md)
 - [Deploy senza PC acceso](../DEPLOYMENT.md)
 - [Salvataggio sicuro su GitHub](../GITHUB_SALVATAGGIO_CASA.md)
 - [Operazioni di produzione](../OPERATIONS.md)

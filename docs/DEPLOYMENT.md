@@ -6,6 +6,8 @@ La procedura presuppone un repository Git, un dominio opzionale e accesso al pro
 
 ## 1. Preparare il repository
 
+Usare Node.js almeno 22.12.0; il Dockerfile usa Node 24. Node 20 non supporta le versioni di Puppeteer e SQLite installate.
+
 1. Eseguire i controlli locali:
 
    ```powershell

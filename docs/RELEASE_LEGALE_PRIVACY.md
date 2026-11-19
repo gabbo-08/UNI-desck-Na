@@ -100,19 +100,22 @@ lo stato resta `NO-GO` o `BETA PRIVATA`.
 7. Riesaminare privacy, subfornitori, dipendenze e retention a ogni modifica
    significativa e con cadenza almeno annuale.
 
-## Stato noto del repository alla data del controllo
+## Stato tecnico aggiornato al 19 novembre 2026
 
-- I test backend risultano passati: 206/206, inclusi i test di configurazione
+- I test backend risultano passati: 276/276, inclusi i test di configurazione
   runtime e ciclo di vita Web Push.
-- Lint frontend passato senza warning; build Next.js 16.4.6
-  superata usando un backend HTTPS di staging.
-- L'audit delle dipendenze di produzione è a zero vulnerabilità per backend e
-  frontend; l'audit completo del frontend mantiene advisory solo su tool di
-  sviluppo e va riesaminato prima di ogni build CI.
-- La suite E2E visuale è stata eseguita: 5/5 test passati con Chromium
+- Lint frontend passato senza warning; 15/15 test frontend e build Next.js 16.4.6
+  superati con la configurazione locale. Il deploy HTTPS resta da verificare.
+- L'audit completo delle dipendenze è a zero vulnerabilità segnalate per backend
+  e frontend, inclusi gli strumenti di sviluppo.
+- La suite E2E visuale è stata eseguita: 15/15 test passati con Chromium
   Playwright; `playwright.config.js` imposta automaticamente
   `NEXT_ALLOWED_DEV_ORIGINS=127.0.0.1,localhost` per rendere il controllo
   riproducibile anche in CI.
+- Le correzioni, le migrazioni dello schema e i limiti delle verifiche sono
+  descritti nel [report del 19 novembre 2026](../REPORT_BUG_2026-11-19.md).
+- Il recupero successivo di piano, tasse e appelli è descritto
+  nell'[aggiornamento dedicato](../AGGIORNAMENTO_PIANO_TASSE_APPELLI_2026-11-19.md).
 - La consegna FCM dell'APK richiede ancora progetto Firebase, configurazione
   Flutter, registrazione token e build verificata.
 - Il worker/cron per l'invio automatico delle scadenze deve essere protetto,

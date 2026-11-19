@@ -24,6 +24,9 @@ let authCookie = null;
 
 function record(name, status, detail = '') {
   results.push({ name, status, detail });
+  if (status === 'ERRORE' || status === 'TIMEOUT' || (typeof status === 'number' && status >= 400)) {
+    process.exitCode = 1;
+  }
   console.log(`[${status}] ${name}${detail ? ` — ${detail}` : ''}`);
 }
 
@@ -47,7 +50,7 @@ function count(value) {
 async function main() {
   console.log(`[live-check] API ${BASE_URL}`);
 
-  const health = await fetch(`${BASE_URL}/health`);
+  const health = await fetch(`${BASE_URL}/health`, { signal: AbortSignal.timeout(5000) });
   record('GET /health', health.status);
 
   async function performLogin() {
@@ -104,13 +107,15 @@ async function main() {
   for (let attempt = 0; !slowReady && attempt < 50; attempt++) {
     const response = await call('/api/career/slow-data');
     const payload = await response.json().catch(() => ({}));
-    if (payload.status === 'ready' || payload.status === 'error') {
+    if (['ready', 'partial', 'error'].includes(payload.status)) {
       const seconds = ((Date.now() - slowStartedAt) / 1000).toFixed(1);
       record(
         'GET /api/career/slow-data',
         response.status,
         `stato=${payload.status} debiti=${count(payload.taxes?.pending)} appelli=${count(payload.prenotazioni)} (${seconds}s)`
       );
+      if (payload.status === 'error') record('sincronizzazione dati lenti', 'ERRORE', 'sincronizzazione non riuscita');
+      if (payload.status === 'partial') record('sincronizzazione dati lenti', 'ERRORE', 'solo una parte delle fonti è disponibile');
       slowReady = true;
       break;
     }
@@ -129,13 +134,9 @@ async function main() {
   const profile = await profileResponse.json().catch(() => ({}));
   record('GET /api/profile', profileResponse.status, `corso=${Boolean(profile?.profile?.course_id)} coorte=${Boolean(profile?.profile?.cohort_year)} canale=${Boolean(profile?.profile?.channel)}`);
 
-  const esami = await call('/api/esami');
-  const esamiBody = await esami.json().catch(() => ({}));
-  record('GET /api/esami', esami.status, `esami=${count(esamiBody.esami)}`);
-
   const metriche = await call('/api/metriche');
   const metricheBody = await metriche.json().catch(() => ({}));
-  record('GET /api/metriche', metriche.status, `cfu=${metricheBody.cfuAcquisiti ?? 'n/d'}`);
+  record('GET /api/metriche', metriche.status, `esami=${count(metricheBody.esami)} cfu=${metricheBody.cfuAcquisiti ?? 'n/d'}`);
 
   const careerPlan = await call('/api/career-plan');
   const careerPlanBody = await careerPlan.json().catch(() => ({}));
@@ -179,7 +180,7 @@ async function main() {
   const bookedBody = await booked.json().catch(() => []);
   record('GET /api/docenti/booked-exams', booked.status, `appelli=${count(bookedBody)}`);
 
-  const failures = results.filter(result => result.status === 'ERRORE' || (typeof result.status === 'number' && result.status >= 500));
+  const failures = results.filter(result => result.status === 'ERRORE' || result.status === 'TIMEOUT' || (typeof result.status === 'number' && result.status >= 400));
   console.log(`\n[live-check] Completato: ${results.length} controlli, ${failures.length} errori gravi.`);
   if (failures.length) process.exitCode = 1;
 }

@@ -27,7 +27,7 @@ Dashboard web (PWA) e client unificato per consultare in un'unica interfaccia mo
 - **Promemoria locali:** Centro notifiche per le prossime scadenze; il permesso browser viene richiesto solo su azione esplicita e i dati non vengono persistiti.
 - **Web Push:** La PWA può registrare una subscription cifrata e ricevere notifiche in background dopo configurazione VAPID e consenso dell'utente.
 - **APK Android:** Il percorso Firebase Cloud Messaging è predisposto, ma richiede un progetto Firebase, `flutterfire configure` e i file generati localmente.
-- **Servizi ufficiali configurabili:** Pannello per link HTTPS verificati dal gestore, senza URL inventati o dati istituzionali fittizi.
+- **Servizi ufficiali:** Collegamenti Home a Segrepass, Docenti ed EasyAcademy con le icone originali dei portali; è possibile configurare altri link HTTPS.
 - **Notifiche push Web:** La PWA può registrare `public/sw.js` e ricevere notifiche in background dopo consenso esplicito e configurazione VAPID del backend. L'APK WebView richiede invece un'integrazione Firebase Cloud Messaging separata.
 
 ---
@@ -52,7 +52,7 @@ Il backend utilizza **Puppeteer Cluster** per gestire le sessioni di scraping co
 
 ## Requisiti
 
-- **Node.js** `>= 20`
+- **Node.js** `>= 22.12.0` (il container usa Node 24)
 - **npm**
 - **Chromium / Google Chrome** compatibile con Puppeteer
 - Credenziali valide di accesso ai portali studenti Federico II
@@ -255,10 +255,12 @@ npm run smoke:health
 
 La documentazione operativa è raccolta in:
 
-- [Procedura da casa](PROCEDURA_CASA.md)
+- [Collegamenti ai servizi ufficiali nella Home](AGGIORNAMENTO_SERVIZI_HOME_2026-11-19.md)
+- [Recupero piano di studi, tasse e appelli](AGGIORNAMENTO_PIANO_TASSE_APPELLI_2026-11-19.md)
 - [Deploy senza PC acceso](docs/DEPLOYMENT.md)
 - [Salvataggio sicuro su GitHub](docs/GITHUB_SALVATAGGIO_CASA.md)
-- [Aggiornamenti di oggi e roadmap](AGGIORNAMENTI_OGGI_E_ROADMAP.md)
+- [Report correzione bug del 19 novembre 2026](REPORT_BUG_2026-11-19.md)
+- [Aggiornamento del 16 novembre 2026](AGGIORNAMENTO_2026-11-16.md)
 - [Funzioni da sviluppare in seguito](FUNZIONI_DA_FARE.md)
 - [Operazioni di produzione](docs/OPERATIONS.md)
 - [Configurazione notifiche Web Push e APK](docs/aggiornamenti/PUSH_NOTIFICHE.md)
