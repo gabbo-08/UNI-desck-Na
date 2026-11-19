@@ -1,6 +1,33 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { isStrongCredentialKey, validateOrigins, runChecks } = require('../check-env');
+const { validateRuntimeConfig } = require('../lib/runtime-config');
+
+test('check-env e runtime rifiutano le stesse configurazioni di origini, cookie e porta', () => {
+  const base = {
+    NODE_ENV: 'production', CRED_KEY: '0123456789abcdef'.repeat(4),
+    FRONTEND_URL: 'https://app.example.test', PUBLIC_ORIGIN: 'https://app.example.test', TRUST_PROXY: '1'
+  };
+  for (const override of [
+    { PUBLIC_ORIGIN: 'http://app.example.test' },
+    { PUBLIC_ORIGIN: 'https://app.example.test/path' },
+    { PUBLIC_ORIGIN: 'https://user:password@app.example.test' },
+    { COOKIE_SAMESITE: 'invalid' },
+    { PORT: '65536' },
+    { PORT: 'not-a-port' },
+    { PERSONAL_DATA_RETENTION_DAYS: 'invalid' },
+    { PERSONAL_DATA_RETENTION_DAYS: '0' },
+    { DOCENTI_CACHE_RETENTION_HOURS: 'Infinity' },
+    { TEACHER_CACHE_RETENTION_DAYS: '1e300' },
+    { NODE_ENV: 'development', FRONTEND_URL: 'https://app.example.test/path' },
+    { NODE_ENV: 'development', COOKIE_SAMESITE: 'none', COOKIE_SECURE: 'false' }
+  ]) {
+    const env = { ...base, ...override };
+    assert.ok(runChecks(env).checks.some(item => !item.ok), JSON.stringify(override));
+    assert.ok(validateRuntimeConfig(env).errors.length > 0, JSON.stringify(override));
+  }
+  assert.equal(runChecks({ ...base, COOKIE_SAMESITE: 'none', COOKIE_SECURE: 'true' }).checks.every(item => item.ok), true);
+});
 
 test('check-env rifiuta chiavi deboli e accetta una chiave esadecimale sufficientemente casuale', () => {
   assert.equal(isStrongCredentialKey('a'.repeat(64)), false);

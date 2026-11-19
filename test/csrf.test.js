@@ -33,6 +33,8 @@ test('requestOrigin preferisce Origin e ricade su Referer', () => {
   assert.equal(requestOrigin({ headers: { origin: 'https://a.example' } }), 'https://a.example');
   assert.equal(requestOrigin({ headers: { referer: 'https://b.example/page' } }), 'https://b.example');
   assert.equal(requestOrigin({ headers: {} }), null);
+  assert.equal(requestOrigin({ headers: { origin: 'null', referer: 'http://localhost:3000/' } }), null);
+  assert.equal(requestOrigin({ headers: { origin: 'invalid', referer: 'http://localhost:3000/' } }), null);
 });
 
 test('i metodi safe non richiedono Origin', () => {
@@ -169,4 +171,11 @@ test('il middleware è realmente applicato in una app Express', async t => {
     body: '{}'
   });
   assert.equal(withBearer.status, 403);
+
+  const sameOrigin = await fetch(url, {
+    method: 'POST',
+    headers: { Origin: `http://127.0.0.1:${port}`, 'Content-Type': 'application/json' },
+    body: '{}'
+  });
+  assert.equal(sameOrigin.status, 200);
 });

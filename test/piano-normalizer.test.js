@@ -17,6 +17,18 @@ const table = {
   ]
 };
 
+test('legge sinonimi delle intestazioni di altri corsi e conserva i CFU decimali', () => {
+  const courses = normalizePianoTable({
+    headers: ['Codice attività formativa', 'Insegnamento', 'Crediti formativi', 'Anno di corso', 'SSD'],
+    rows: [['CHIM01', 'Chimica generale', '6,5', 'II', 'CHIM/03'], ['Codice attività formativa', 'Insegnamento', 'Crediti formativi', 'Anno di corso', 'SSD']]
+  });
+  assert.equal(courses.length, 1);
+  assert.equal(courses[0].courseName, 'Chimica generale');
+  assert.equal(courses[0].cfu, 6.5);
+  assert.equal(courses[0].studyYear, 2);
+  assert.equal(courses[0].sector, 'CHIM/03');
+});
+
 test('normalizza gli insegnamenti dalle intestazioni', () => {
   const courses = normalizePianoTable(table);
   assert.equal(courses.length, 5);

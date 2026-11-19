@@ -104,3 +104,23 @@ test('CAREER_CACHE_TTL_MS=0 disattiva la cache', async t => {
   assert.equal(calls, 2);
   assert.equal(second.fromCache, false);
 });
+
+test('un caricamento invalidato non ripopola la cache e non interrompe il nuovo job', async t => {
+  t.after(() => clearCareerCache(PROFILE));
+  let releaseOld;
+  let releaseNew;
+  const oldRequest = getOrLoadCareer(PROFILE, 'password-1', () => new Promise(resolve => { releaseOld = resolve; }));
+  await new Promise(resolve => setImmediate(resolve));
+  clearCareerCache(PROFILE);
+  const newRequest = getOrLoadCareer(PROFILE, 'password-1', () => new Promise(resolve => { releaseNew = resolve; }));
+  await new Promise(resolve => setImmediate(resolve));
+  releaseOld({ marker: 'old' });
+  await oldRequest;
+  assert.equal(getCachedCareer(PROFILE, 'password-1'), null);
+  const shared = getOrLoadCareer(PROFILE, 'password-1', () => { throw new Error('new job lost'); });
+  releaseNew({ marker: 'new' });
+  const [current, concurrent] = await Promise.all([newRequest, shared]);
+  assert.equal(current.value.marker, 'new');
+  assert.equal(concurrent.shared, true);
+  assert.equal(getCachedCareer(PROFILE, 'password-1').value.marker, 'new');
+});

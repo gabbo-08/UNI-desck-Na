@@ -2,6 +2,35 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { parseAmount, parseDate, findPaymentTables, buildTaxesSummary } = require('../lib/taxes');
 
+test('normalizzare tasse non trasforma una lettura fallita in un riepilogo valido', () => {
+  const result = buildTaxesSummary({ available: false, reason: 'TAXES_DATA_NOT_AVAILABLE', stale: true, paid: [{ importo: 16 }] });
+  assert.equal(result.available, false);
+  assert.equal(result.reason, 'TAXES_DATA_NOT_AVAILABLE');
+  assert.equal(result.stale, true);
+  assert.equal(result.summary.totalPaid, 16);
+  assert.deepEqual(buildTaxesSummary(null).pending, []);
+});
+
+test('legge scadenze con intestazioni abbreviate usate dalle tabelle del portale', () => {
+  const result = findPaymentTables([{
+    source: 'debiti', headers: ['Causale', 'Data di scad.', 'Importo'],
+    records: [{ Causale: 'Contributo', 'Data di scad.': '30/11/2026', Importo: '130,00' }],
+  }]);
+  assert.equal(result.pending[0].dueDate, '2026-11-30');
+});
+
+test('la pagina debiti prevale sulla colonna Data e non inventa un codice tributo', () => {
+  const result = findPaymentTables([{
+    source: 'debiti', headers: ['Causale', 'Importo', 'Data'],
+    records: [{ Causale: 'Rata ancora da pagare', Importo: '123,45', Data: '15/12/2026' }],
+  }]);
+  assert.equal(result.paid.length, 0);
+  assert.equal(result.pending.length, 1);
+  assert.equal(result.summary.totalPending, 123.45);
+  assert.equal(result.pending[0].dueDate, '2026-12-15');
+  assert.equal(result.pending[0].codice, undefined);
+});
+
 test('parseAmount converte formati europei e standard', () => {
   assert.equal(parseAmount('1.250,50 €'), 1250.5);
   assert.equal(parseAmount('€ 156,00'), 156);
@@ -22,6 +51,11 @@ test('parseDate converte date italiane e mantiene ISO', () => {
   assert.equal(parseDate('2025-10-15'), '2025-10-15');
   assert.equal(parseDate('non-una-data'), null);
   assert.equal(parseDate(null), null);
+});
+
+test('le scadenze impossibili non diventano date di pagamento valide', () => {
+  for (const invalid of ['31/11/2026', '2026-02-30', '2026-00-10', '00/12/2026']) assert.equal(parseDate(invalid), null);
+  assert.equal(parseDate('29/02/2028'), '2028-02-29');
 });
 
 test('findPaymentTables riconosce le varianti dell’intestazione della scadenza', () => {

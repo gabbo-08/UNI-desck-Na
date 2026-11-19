@@ -70,3 +70,25 @@ test('il purge elimina cache scadute senza cancellare profili per default', () =
     database.close();
   }
 });
+
+test('la retention confronta correttamente timestamp SQLite e ISO nello stesso giorno', t => {
+  const database = createDatabase(':memory:');
+  const previous = process.env.AUTO_PURGE_PERSONAL_DATA;
+  process.env.AUTO_PURGE_PERSONAL_DATA = 'true';
+  t.after(() => {
+    database.close();
+    if (previous === undefined) delete process.env.AUTO_PURGE_PERSONAL_DATA;
+    else process.env.AUTO_PURGE_PERSONAL_DATA = previous;
+  });
+  upsertStudentProfile(database, { id: 'within-retention' });
+  upsertStudentProfile(database, { id: 'past-retention' });
+  database.prepare('UPDATE StudentProfile SET updated_at = ? WHERE id = ?')
+    .run('2026-10-20 13:00:00', 'within-retention');
+  database.prepare('UPDATE StudentProfile SET updated_at = ? WHERE id = ?')
+    .run('2026-10-20 11:00:00', 'past-retention');
+
+  const result = purgeExpiredPersonalData(database, Date.parse('2026-11-19T12:00:00.000Z'));
+  assert.equal(result.profiles, 1);
+  assert.ok(database.prepare('SELECT 1 FROM StudentProfile WHERE id = ?').get('within-retention'));
+  assert.equal(database.prepare('SELECT 1 FROM StudentProfile WHERE id = ?').get('past-retention'), undefined);
+});

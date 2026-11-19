@@ -27,6 +27,17 @@ test('rifiuta una sottoscrizione push priva di chiavi', async t => {
   assert.equal(response.status, 400);
 });
 
+test('rifiuta URL push malformati e interni prima di salvarli', async t => {
+  const base = await appFor(t);
+  for (const endpoint of ['https://', 'https://127.0.0.1/internal', 'https://user:pass@push.example.test/x']) {
+    const response = await fetch(`${base}/subscribe`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ subscription: { endpoint, keys: { p256dh: 'key', auth: 'auth' } } })
+    });
+    assert.equal(response.status, 400, endpoint);
+  }
+});
+
 test('salva e cancella una sottoscrizione push senza restituire il payload', async t => {
   const base = await appFor(t);
   const subscription = { endpoint: 'https://push.example.test/subscription-1', keys: { p256dh: 'p256dh-value', auth: 'auth-value' } };

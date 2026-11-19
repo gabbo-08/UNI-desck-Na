@@ -3,7 +3,7 @@ process.env.DB_PATH = ':memory:';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const express = require('express');
-const { createDocentiRouter } = require('../routes/docenti');
+const { createDocentiRouter, clearDocentiRouteCache } = require('../routes/docenti');
 const { db } = require('../db');
 const { upsertStudentProfile, saveProfessorPreference } = require('../db/repository');
 
@@ -24,6 +24,49 @@ async function withDocentiApi(t, loadDocenti) {
   const { port } = server.address();
   return path => fetch(`http://127.0.0.1:${port}/api/docenti${path}`);
 }
+
+async function withTeacherDetailApi(t, profileId, loader) {
+  const app = express();
+  app.use('/api/docenti', (req, _res, next) => { req.user = { sub: profileId }; next(); },
+    createDocentiRouter({ fetchTeacherDetail: loader }));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
+  t.after(() => clearDocentiRouteCache(profileId));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  return () => fetch(`http://127.0.0.1:${server.address().port}/api/docenti/teacher/teacher-1`);
+}
+
+test('mantiene il dettaglio precedente se il refresh in background fallisce', async t => {
+  let calls = 0;
+  const initialTime = Date.now();
+  let currentTime = initialTime;
+  t.mock.method(Date, 'now', () => currentTime);
+  const request = await withTeacherDetailApi(t, 'profile-stale-detail', async () => {
+    calls += 1;
+    if (calls > 1) throw Object.assign(new Error('timeout'), { code: 'DOCENTI_TIMEOUT' });
+    return { profilo: { id: 'teacher-1', nome: 'Docente Test' }, iscrizioni: [{ courseName: 'Analisi' }] };
+  });
+  assert.equal((await request()).status, 200);
+  currentTime += 16 * 60 * 1000;
+  const stale = await request();
+  assert.equal(stale.status, 200);
+  assert.equal((await stale.json()).profilo.nome, 'Docente Test');
+  await new Promise(resolve => setImmediate(resolve));
+  currentTime = initialTime;
+  assert.equal((await request()).status, 200);
+  assert.equal(calls, 2);
+});
+
+test('un dettaglio assente viene ritentato alla richiesta successiva', async t => {
+  let calls = 0;
+  const request = await withTeacherDetailApi(t, 'profile-null-detail', async () => {
+    calls += 1;
+    return calls === 1 ? null : { profilo: { id: 'teacher-1', nome: 'Docente Test' }, iscrizioni: [{ courseName: 'Analisi' }] };
+  });
+  assert.equal((await request()).status, 404);
+  assert.equal((await request()).status, 200);
+  assert.equal(calls, 2);
+});
 
 test('restituisce gli array attesi dal frontend', async t => {
   const request = await withDocentiApi(t, async () => ({

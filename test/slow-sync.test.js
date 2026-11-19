@@ -1,4 +1,5 @@
 // test/slow-sync.test.js
+process.env.DB_PATH = ':memory:';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
@@ -9,8 +10,128 @@ const {
   inFlight
 } = require('../services/slow-sync');
 const { getSlowSnapshot, getTaxesSnapshot, clearSnapshots } = require('../services/career-snapshots');
+const { setSlowSnapshot } = require('../services/career-snapshots');
+const { RETRY_COOLDOWN_MS } = require('../services/slow-sync');
 
 const CREDENTIALS = { codiceFiscale: 'AAABBB00A00A000A', password: 'test' };
+
+test('un errore tasse non cancella le tasse precedenti e salva gli appelli riusciti', async t => {
+  const id = 'partial-taxes';
+  t.after(() => { resetSlowSync(id); clearSnapshots(id); });
+  setSlowSnapshot(id, { taxes: { available: true, pending: [{ importo: 150 }] }, prenotazioni: [{ id: 'old' }] });
+  const saved = [];
+  startSlowSync(id, CREDENTIALS, {
+    getDatiCarriera: async () => ({ tasse: { available: false, reason: 'TAXES_TIMEOUT' }, prenotazioni: [{ id: 'fresh' }] }),
+    saveStudentSlowData: (_profile, data) => saved.push(data)
+  });
+  await inFlight.get(id);
+  assert.equal(getSlowStatus(id).state, 'partial');
+  assert.equal(getSlowStatus(id).sections.taxes.stale, true);
+  assert.equal(getSlowStatus(id).sections.taxes.error, 'TAXES_TIMEOUT');
+  assert.equal(getSlowSnapshot(id).taxes.pending[0].importo, 150);
+  assert.deepEqual(getSlowSnapshot(id).prenotazioni, [{ id: 'fresh' }]);
+  assert.deepEqual(saved, [{ prenotazioni: [{ id: 'fresh' }] }]);
+});
+
+test('un errore appelli non viene trasformato in nessun appello e conserva lo snapshot', async t => {
+  const id = 'partial-appelli';
+  t.after(() => { resetSlowSync(id); clearSnapshots(id); });
+  setSlowSnapshot(id, { taxes: { available: true }, prenotazioni: [{ id: 'keep' }] });
+  const saved = [];
+  startSlowSync(id, CREDENTIALS, {
+    getDatiCarriera: async () => ({
+      tasse: { available: true, pending: [] }, prenotazioni: [],
+      slowSections: { taxes: { status: 'ready' }, appelli: { status: 'error', error: 'APPELLI_TIMEOUT' } }
+    }),
+    saveStudentSlowData: (_profile, data) => saved.push(data)
+  });
+  await inFlight.get(id);
+  assert.equal(getSlowStatus(id).state, 'partial');
+  assert.equal(getSlowStatus(id).sections.appelli.status, 'error');
+  assert.deepEqual(getSlowSnapshot(id).prenotazioni, [{ id: 'keep' }]);
+  assert.equal(Object.hasOwn(saved[0], 'prenotazioni'), false);
+});
+
+test('il refresh esplicito aggiorna la cache pronta ma rispetta il cooldown dopo un errore', async t => {
+  const id = 'explicit-slow-refresh';
+  t.after(() => { resetSlowSync(id); clearSnapshots(id); });
+  let calls = 0;
+  const dependencies = {
+    getDatiCarriera: async () => { calls += 1; return slowPayload(); },
+    saveStudentSlowData: () => {}
+  };
+  ensureSlowSync(id, CREDENTIALS, dependencies);
+  await inFlight.get(id);
+  ensureSlowSync(id, CREDENTIALS, { ...dependencies, force: true });
+  await inFlight.get(id);
+  assert.equal(calls, 2);
+  ensureSlowSync(id, CREDENTIALS, { ...dependencies, force: true, getDatiCarriera: async () => { calls += 1; throw new Error('offline'); } });
+  await inFlight.get(id);
+  const status = ensureSlowSync(id, CREDENTIALS, { ...dependencies, force: true });
+  assert.equal(status.state, 'error');
+  assert.ok(status.retryAfterMs > 0);
+  assert.equal(calls, 3);
+  assert.equal(getSlowSnapshot(id).taxes.available, true);
+  assert.equal(status.sections.taxes.stale, true);
+});
+
+test('un elenco persistito vuoto non trasforma il successivo errore appelli in una lettura riuscita', async t => {
+  const id = 'persisted-empty-appelli';
+  t.after(() => { resetSlowSync(id); clearSnapshots(id); });
+  startSlowSync(id, CREDENTIALS, {
+    initialSnapshot: { taxes: { available: true }, prenotazioni: [], sections: { taxes: { status: 'ready' }, appelli: { status: 'ready' } } },
+    getDatiCarriera: async () => ({ tasse: { available: true }, prenotazioni: [], slowSections: { taxes: { status: 'ready' }, appelli: { status: 'error', error: 'APPELLI_TIMEOUT' } } }),
+    saveStudentSlowData: () => {}
+  });
+  await inFlight.get(id);
+  assert.equal(getSlowStatus(id).state, 'partial');
+  assert.equal(getSlowStatus(id).sections.appelli.status, 'error');
+  assert.equal(getSlowSnapshot(id).sections.appelli.status, 'error');
+});
+
+test('due errori appelli distinguono placeholder mai letto e precedente cache valida', async t => {
+  for (const wasRead of [false, true]) {
+    const id = `consecutive-appelli-${wasRead}`;
+    t.after(() => { resetSlowSync(id); clearSnapshots(id); });
+    setSlowSnapshot(id, {
+      taxes: { available: true },
+      prenotazioni: wasRead ? [{ id: 'known-exam' }] : [],
+      sections: { taxes: { status: 'ready' }, appelli: { status: wasRead ? 'ready' : 'error', stale: false } }
+    });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      startSlowSync(id, CREDENTIALS, {
+        force: true,
+        getDatiCarriera: async () => ({ tasse: { available: true }, prenotazioni: [], slowSections: {
+          taxes: { status: 'ready' }, appelli: { status: 'error', error: 'APPELLI_TIMEOUT' }
+        } }),
+        saveStudentSlowData: () => {}
+      });
+      await inFlight.get(id);
+      assert.equal(getSlowStatus(id).sections.appelli.stale, wasRead);
+      assert.deepEqual(getSlowSnapshot(id).prenotazioni, wasRead ? [{ id: 'known-exam' }] : []);
+    }
+  }
+});
+
+test('i retry automatici sono limitati e quello esplicito riparte dopo il cooldown', async t => {
+  const id = 'limited-auto-retries';
+  t.after(() => { resetSlowSync(id); clearSnapshots(id); });
+  let now = Date.now();
+  t.mock.method(Date, 'now', () => now);
+  let calls = 0;
+  const dependencies = { getDatiCarriera: async () => { calls += 1; throw Object.assign(new Error('timeout'), { code: 'SLOW_TIMEOUT' }); } };
+  for (let attempt = 0; attempt < 3; attempt++) {
+    ensureSlowSync(id, CREDENTIALS, dependencies);
+    await inFlight.get(id);
+    assert.equal(getSlowStatus(id).sections.appelli.stale, false);
+    now += RETRY_COOLDOWN_MS + 1;
+  }
+  ensureSlowSync(id, CREDENTIALS, dependencies);
+  assert.equal(calls, 3);
+  ensureSlowSync(id, CREDENTIALS, { ...dependencies, force: true });
+  await inFlight.get(id);
+  assert.equal(calls, 4);
+});
 
 function slowPayload() {
   return {

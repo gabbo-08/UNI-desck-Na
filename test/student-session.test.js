@@ -1,4 +1,4 @@
-﻿process.env.DB_PATH = ':memory:';
+process.env.DB_PATH = ':memory:';
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -40,22 +40,22 @@ function dependencies(db, overrides = {}) {
 
 test('crea la sessione, salva profilo ed esami senza memorizzare credenziali', async t => {
   const db = createDatabase(':memory:');
-  clearCareerCache(CF);
+  clearCareerCache(EMAIL);
   t.after(() => {
-    clearSnapshots(CF);
-    clearCareerCache(CF);
+    clearSnapshots(EMAIL);
+    clearCareerCache(EMAIL);
     db.close();
   });
 
   const session = await createStudentSession({ email: EMAIL, password: 'do-not-store' }, dependencies(db));
   assert.equal(session.fromCache, false);
-  const storedProfile = db.prepare('SELECT * FROM StudentProfile WHERE id = ?').get(CF);
+  const storedProfile = db.prepare('SELECT * FROM StudentProfile WHERE id = ?').get(EMAIL);
   const storedSession = db.prepare('SELECT * FROM Sessions WHERE token_hash = ?').get(
     require('../services/server-sessions').sessionTokenHash(session.token)
   );
 
   assert.equal(Buffer.from(session.token, 'base64url').length, 32);
-  assert.equal(session.profileId, CF);
+  assert.equal(session.profileId, EMAIL);
   assert.equal(session.onboardingRequired, false);
   assert.equal(session.docentiReason, 'DOCENTI_CREDENTIALS_REQUIRED');
   assert.equal(storedProfile.course_id, 'DE3');
@@ -67,16 +67,16 @@ test('crea la sessione, salva profilo ed esami senza memorizzare credenziali', a
   assert.equal(storedSession.token_hash.includes(session.token), false);
   assert.equal(storedSession.credentials_ciphertext.includes('do-not-store'), false);
 
-  assert.equal(getCareerSnapshot(CF).length, 1);
-  assert.equal(getTaxesSnapshot(CF).paid.length, 1);
+  assert.equal(getCareerSnapshot(EMAIL).length, 1);
+  assert.equal(getTaxesSnapshot(EMAIL).paid.length, 1);
 });
 
 test('registra un motivo stabile quando lo scraper Docenti fallisce', async t => {
   const db = createDatabase(':memory:');
-  clearCareerCache(CF);
+  clearCareerCache(EMAIL);
   t.after(() => {
-    clearSnapshots(CF);
-    clearCareerCache(CF);
+    clearSnapshots(EMAIL);
+    clearCareerCache(EMAIL);
     db.close();
   });
 
@@ -86,15 +86,15 @@ test('registra un motivo stabile quando lo scraper Docenti fallisce', async t =>
   }));
 
   await new Promise(resolve => setTimeout(resolve, 0));
-  assert.equal(getDocentiSnapshot(CF).reason, 'DOCENTI_SCRAPE_FAILED');
+  assert.equal(getDocentiSnapshot(EMAIL).reason, 'DOCENTI_SCRAPE_FAILED');
 });
 
 test('salva il riepilogo Docenti riuscito nel database per il prossimo accesso', async t => {
   const db = createDatabase(':memory:');
-  clearCareerCache(CF);
+  clearCareerCache(EMAIL);
   t.after(() => {
-    clearSnapshots(CF);
-    clearCareerCache(CF);
+    clearSnapshots(EMAIL);
+    clearCareerCache(EMAIL);
     db.close();
   });
 
@@ -109,7 +109,7 @@ test('salva il riepilogo Docenti riuscito nel database per il prossimo accesso',
   await createStudentSession({ email: EMAIL, password: 'test-password' }, deps);
   await new Promise(resolve => setTimeout(resolve, 10));
 
-  const saved = getDocentiDataCache(CF, db);
+  const saved = getDocentiDataCache(EMAIL, db);
   assert.deepEqual(saved?.data.subscriptions, [{ courseName: 'Analisi II', professor: 'Docente A' }]);
   assert.ok(saved?.fetchedAt > 0);
   await createStudentSession({ email: EMAIL, password: 'test-password' }, deps);
@@ -118,10 +118,10 @@ test('salva il riepilogo Docenti riuscito nel database per il prossimo accesso',
 
 test('riusa i dati in cache al secondo login dello stesso studente', async t => {
   const db = createDatabase(':memory:');
-  clearCareerCache(CF);
+  clearCareerCache(EMAIL);
   t.after(() => {
-    clearSnapshots(CF);
-    clearCareerCache(CF);
+    clearSnapshots(EMAIL);
+    clearCareerCache(EMAIL);
     db.close();
   });
 
@@ -140,10 +140,10 @@ test('riusa i dati in cache al secondo login dello stesso studente', async t => 
 
 test('una password diversa non riusa la cache', async t => {
   const db = createDatabase(':memory:');
-  clearCareerCache(CF);
+  clearCareerCache(EMAIL);
   t.after(() => {
-    clearSnapshots(CF);
-    clearCareerCache(CF);
+    clearSnapshots(EMAIL);
+    clearCareerCache(EMAIL);
     db.close();
   });
 
@@ -175,6 +175,8 @@ test('normalizza solo email istituzionali @studenti.unina.it', () => {
   assert.equal(normalizeLoginIdentifier(' Nome.Cognome@STUDENTI.UNINA.IT '), 'nome.cognome@studenti.unina.it');
   assert.equal(normalizeLoginIdentifier('utente@example.com'), null);
   assert.equal(normalizeLoginIdentifier('123'), null);
+  assert.equal(normalizeLoginIdentifier('nome\tcognome@studenti.unina.it'), null);
+  assert.equal(normalizeLoginIdentifier('nome\ncognome@studenti.unina.it'), null);
 });
 
 test('un vecchio scraping Docenti non sovrascrive i dati del login più recente', async t => {

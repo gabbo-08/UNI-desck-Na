@@ -2,6 +2,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { parsePianoHeader } = require('../scraper/piano');
 
+test('riconosce intestazioni del piano distribuite su piu righe', () => {
+  assert.deepEqual(parsePianoHeader('Insegnamenti del Piano:\n PIANO GENERALE\n (IMM. DAL 2025/26)\n (N391)'), {
+    annoImmatricolazione: 2025, codiceCorso: 'N39'
+  });
+});
+
 test('ricava coorte e codice corso dall\'intestazione del piano', () => {
   const header = 'Insegnamenti del Piano: PIANO GENERALE (IMM. DAL 2025/26) (DE301)';
 

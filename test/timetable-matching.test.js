@@ -86,6 +86,16 @@ test('il range viene applicato anche senza snapshot Docenti', () => {
   assert.equal(out.filter.hidden, 1);
 });
 
+test('senza iniziale cognome mantiene visibili tutte le cattedre', () => {
+  const events = [
+    { ...lezione('DIRITTO DEL LAVORO', ['DOCENTE A']), channel: '05 Cognomi B-C' },
+    { ...lezione('DIRITTO DEL LAVORO', ['DOCENTE B']), channel: '05 Cognomi D-F' }
+  ];
+  const out = filterEventsBySurnameRange(events, '');
+  assert.deepEqual(out.events, events);
+  assert.deepEqual(out.filter, { applied: false, reason: 'SURNAME_INITIAL_MISSING', hidden: 0 });
+});
+
 test('il gruppo selezionato viene usato come range quando il nome materia è pulito', () => {
   const events = [
     { ...lezione('DIRITTO DEL LAVORO', ['DOCENTE A']), selectedGroup: '05 Cognomi B-C' },

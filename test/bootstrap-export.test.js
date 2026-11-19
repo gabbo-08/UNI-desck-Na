@@ -8,6 +8,7 @@ const { db } = require('../db');
 const { upsertStudentProfile, saveBookingReceipt, getLatestBookingReceipt } = require('../db/repository');
 const { createServerSession } = require('../services/server-sessions');
 const { COOKIE_NAME } = require('../lib/cookies');
+const snapshots = require('../services/career-snapshots');
 
 async function requestFor(t, authSession = session) {
   const app = express();
@@ -34,6 +35,7 @@ upsertStudentProfile(db, {
   cohortYear: 2025,
   currentCourseYear: 2,
   channel: 'A-D',
+  anagrafica: { nomeCompleto: 'Studente Bootstrap', cognome: 'Bootstrap', pin: '987654', codiceNumericoPersonale: '123456789', password: 'secret-field' },
   esamiSostenuti: [{ materia: 'Algoritmi', cfu: 9, voto: 30 }],
   tasse: { pending: [{ amount: 100 }] }
 });
@@ -47,6 +49,21 @@ test('bootstrap restituisce dati già presenti senza avviare scraping', async t 
   assert.equal(body.metriche.esami.length, 1);
   assert.equal(body.metriche.tasse.pending[0].amount, 100);
   assert.equal(body.authenticated, true);
+  assert.equal(body.metriche.anagrafica.nomeCompleto, 'Studente Bootstrap');
+  for (const key of ['pin', 'codiceNumericoPersonale', 'password', 'token']) assert.equal(Object.hasOwn(body.metriche.anagrafica, key), false);
+});
+
+test('bootstrap ripristina il piano Segrepass persistito nella cache RAM', async t => {
+  const courses = [{ id: 'MAT-BOOT', courseName: 'Analisi', cfu: 9 }];
+  upsertStudentProfile(db, { id: profileId, pianoDiStudiRaw: courses });
+  snapshots.clearSnapshots(profileId);
+  t.after(() => snapshots.clearSnapshots(profileId));
+  const request = await requestFor(t);
+  const response = await request('/bootstrap');
+  const body = await response.json();
+  assert.equal(response.status, 200);
+  assert.deepEqual(body.metriche.pianoDiStudiRaw, courses);
+  assert.deepEqual(snapshots.getPianoSnapshot(profileId), courses);
 });
 
 test('bootstrap ripristina l opt-in Docenti senza esporre le credenziali', async t => {

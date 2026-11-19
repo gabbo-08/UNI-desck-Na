@@ -1,6 +1,17 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { classifyLoginPage } = require('../scraper/segrepass');
+const { findLoginInputs } = require('../scraper/segrepass');
+
+test('trova i campi generici quando il portale cambia i nomi del modulo', async () => {
+  const username = { field: 'username' };
+  const password = { field: 'password' };
+  const page = { $: async selector => ({
+    'input[type="text"]': username,
+    'input[type="password"]': password
+  })[selector] || null };
+  assert.deepEqual(await findLoginInputs(page), { userInput: username, passInput: password });
+});
 
 test('classifica come credenziali errate il rifiuto esplicito del portale', () => {
   assert.equal(classifyLoginPage({

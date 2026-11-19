@@ -30,6 +30,15 @@ test('force ignora la cache', async () => {
   assert.equal(calls.length, 2);
 });
 
+test('force raggiunge il provider e ignora anche la sua cache interna', async () => {
+  clearTimetableServiceCache();
+  const forceValues = [];
+  const fetcher = async (_filters, options) => { forceValues.push(options.force); return { events: [] }; };
+  await getTimetableCached(filters, { fetcher });
+  await getTimetableCached(filters, { fetcher, force: true });
+  assert.deepEqual(forceValues, [false, true]);
+});
+
 test('dopo la scadenza il dato viene riscaricato', async () => {
   clearTimetableServiceCache();
   const calls = [];
