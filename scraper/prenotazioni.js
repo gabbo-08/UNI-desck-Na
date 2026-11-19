@@ -1,8 +1,7 @@
 const { enableFastMode } = require('./utils');
 const { safeErrorMeta } = require('../lib/safe-log');
+const { waitForFinancialPage } = require('./slow-page-state');
 
-const DEBUG = process.env.DEBUG_SCRAPER === '1' && process.env.NODE_ENV !== 'production';
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 async function clickMenu(page) {
   for (const frame of page.frames()) {
@@ -21,37 +20,23 @@ async function clickMenu(page) {
   return false;
 }
 
-async function getTargetFrame(page) {
-  for (let attempt = 0; attempt < 10; attempt++) {
-    for (const frame of page.frames()) {
-      try {
-        const table = await frame.$('table');
-        if (!table) continue;
-        const rows = await frame.$$eval('table tr', elements => elements.length);
-        if (rows > 2) return frame;
-      } catch {}
-    }
-    await sleep(120);
-  }
-  return page.mainFrame();
-}
-
-async function scrapeCalendarioAppelli(context, esisUrl) {
+async function scrapeCalendarioAppelli(context, esisUrl, options = {}) {
   const startedAt = Date.now();
-  const listPage = await context.newPage();
-  await enableFastMode(listPage);
+  const listPage = options.page || await context.newPage();
+  if (!options.page) await enableFastMode(listPage);
 
   try {
-    await listPage.goto(esisUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    if (!options.page) await listPage.goto(esisUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
     if (!await clickMenu(listPage)) {
-      console.log('[prenotazioni] Link Calendario Appelli non trovato.');
-      return [];
+      const target = new URL('/esis/caricaMenu.do?azione=calendarioAppelli', esisUrl);
+      await listPage.goto(target.href, { waitUntil: 'domcontentloaded', timeout: 15000 });
     }
 
-    const frame = await getTargetFrame(listPage);
+    const { frame } = await waitForFinancialPage(listPage, 'appelli', options.timeoutMs ?? 5000);
 
     // Esecuzione in-page simultanea via fetch() native con cookie condivisi
-    const appelli = await frame.evaluate(async () => {
+    const result = await frame.evaluate(async ({ concurrency, requestTimeoutMs, maxMs }) => {
+      const deadline = Date.now() + maxMs;
       const clean = s => (s || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
       const rows = Array.from(document.querySelectorAll('table tr'));
       const items = [];
@@ -69,15 +54,15 @@ async function scrapeCalendarioAppelli(context, esisUrl) {
         }
       }
 
-      if (items.length === 0) return [];
+      if (items.length === 0) return { items: [], failed: 0 };
 
-      // Esegue tutte le chiamate di dettaglio in parallelo direttamente dal browser
-      const results = await Promise.all(items.map(async (exam) => {
+      let failed = 0;
+      const readExam = async exam => {
         try {
-          if (!exam.href || exam.href.startsWith('javascript:')) return null;
+          if (!exam.href || exam.href.startsWith('javascript:')) throw new Error('APPELLI_LINK_NOT_SUPPORTED');
 
-          const response = await fetch(exam.href, { credentials: 'include' });
-          if (!response.ok) return null;
+          const response = await fetch(exam.href, { credentials: 'include', signal: AbortSignal.timeout(Math.max(1, Math.min(requestTimeoutMs, deadline - Date.now()))) });
+          if (!response.ok) throw new Error('APPELLI_REQUEST_FAILED');
           const html = await response.text();
 
           const parser = new DOMParser();
@@ -90,9 +75,12 @@ async function scrapeCalendarioAppelli(context, esisUrl) {
             .replace(/document\.\w+\s*\([^)]*\)\s*;?/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
-          const text = cleanText(doc.body ? doc.body.innerText : '');
+          const text = cleanText(doc.body ? (doc.body.innerText || doc.body.textContent) : '');
+          if (doc.querySelector('input[type="password"]') || /sessione[^.!?]{0,35}scadut|richiesta non valida/i.test(text)) {
+            throw new Error('ESIS_SESSION_EXPIRED');
+          }
 
-          const noAppelliRegex = /nessun\s+appello|non\s+(?:ci\s+sono|risultano)\s+appelli|nessuna\s+sessione|impossibile\s+prenotare|nessun\s+dato/i;
+          const noAppelliRegex = /nessun\s+appello|non\s+(?:ci\s+sono|risultano)\s+appelli|nessuna\s+sessione|nessun\s+dato/i;
           if (noAppelliRegex.test(text)) return null;
 
           let docente = '';
@@ -109,7 +97,7 @@ async function scrapeCalendarioAppelli(context, esisUrl) {
           if (matchDocente && matchDocente[1]) docente = clean(matchDocente[1]);
 
           const matchDate = text.match(/(?:Appello del|Data Appello|Data)[:\s]*(\d{2}\/\d{2}\/\d{4})/i);
-          if (!matchDate) return null;
+          if (!matchDate) throw new Error('APPELLI_DETAIL_NOT_RECOGNIZED');
 
           // Aula: si ferma prima del campo successivo (Ora, Note, Data...).
           const matchAula = text.match(/Aula(?:\s*\/?\s*Sede)?\s*[:\-]?\s*(.+?)(?=\s+(?:Ora|Note|Data|Docente|Appello|Uscita)\b|$)/i);
@@ -150,21 +138,46 @@ async function scrapeCalendarioAppelli(context, esisUrl) {
             bookingEnabled
           };
         } catch {
+          failed += 1;
           return null;
+        }
+      };
+      let next = 0;
+      const results = [];
+      await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+        while (next < items.length) {
+          if (Date.now() >= deadline) {
+            failed += items.length - next;
+            next = items.length;
+            break;
+          }
+          const index = next++;
+          const value = await readExam(items[index]);
+          if (value) results.push(value);
         }
       }));
 
-      return results.filter(Boolean);
+      return { items: results, failed };
+    }, {
+      concurrency: Math.min(4, Math.max(1, Number.parseInt(process.env.SCRAPER_APPELLI_CONCURRENCY || '3', 10) || 3)),
+      requestTimeoutMs: 10000,
+      maxMs: Math.min(120000, Math.max(5000, Number.parseInt(process.env.SCRAPER_APPELLI_MAX_MS || '60000', 10) || 60000))
     });
+    const appelli = Array.isArray(result) ? result : result.items;
+    if (result.failed) {
+      const error = new Error('Alcuni dettagli appello non sono stati letti.');
+      error.code = 'APPELLI_DETAILS_UNAVAILABLE';
+      throw error;
+    }
 
     const seconds = ((Date.now() - startedAt) / 1000).toFixed(1);
     console.log(`[prenotazioni] Appelli attivi: ${appelli.length} in ${seconds}s.`);
     return appelli;
   } catch (error) {
     console.warn('[prenotazioni] Errore lettura appelli:', safeErrorMeta(error));
-    return [];
+    throw error;
   } finally {
-    await listPage.close().catch(() => {});
+    if (!options.page) await listPage.close().catch(() => {});
   }
 }
 

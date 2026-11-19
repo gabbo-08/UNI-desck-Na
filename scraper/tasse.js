@@ -1,21 +1,22 @@
 const { enableFastMode, extractTables } = require('./utils');
 const { findPaymentTables } = require('../lib/taxes');
 const { safeErrorMeta } = require('../lib/safe-log');
+const { waitForFinancialPage } = require('./slow-page-state');
 
 // Come per segrepass.js: il debug è escluso in produzione e non stampa mai
 // le tabelle finanziarie grezze, che contengono dati personali dello studente.
 const DEBUG = process.env.DEBUG_SCRAPER === '1' && process.env.NODE_ENV !== 'production';
 
-async function scrapeTasse(context, esisUrl) {
-  const page = await context.newPage();
-  await enableFastMode(page);
+async function scrapeTasse(context, esisUrl, options = {}) {
+  const page = options.page || await context.newPage();
+  if (!options.page) await enableFastMode(page);
   
   try {
     console.log('[tasse] Caricamento pagina ESIS...');
-    await page.goto(esisUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
+    if (!options.page) await page.goto(esisUrl, { waitUntil: 'domcontentloaded', timeout: 20000 });
     
     // Ricaviamo il dominio base (es. https://www.segrepass3.unina.it)
-    const urlObj = new URL(page.url());
+    const urlObj = new URL(options.page ? esisUrl : page.url());
     const baseUrl = urlObj.origin;
 
     console.log('[tasse] Lettura URL ufficiali versamenti e debiti...');
@@ -27,12 +28,14 @@ async function scrapeTasse(context, esisUrl) {
       waitUntil: 'domcontentloaded',
       timeout: 15000
     });
+    await waitForFinancialPage(page, 'taxes', options.timeoutMs ?? 5000);
     const paymentTables = await extractTables(page);
 
     await page.goto(debitiUrl, {
       waitUntil: 'domcontentloaded',
       timeout: 15000
     });
+    await waitForFinancialPage(page, 'taxes', options.timeoutMs ?? 5000);
     const debtTables = await extractTables(page);
 
     const tables = [
@@ -54,13 +57,13 @@ async function scrapeTasse(context, esisUrl) {
     console.warn('[tasse] Errore estrazione:', safeErrorMeta(err));
     return {
       available: false,
-      reason: 'TAXES_DATA_NOT_AVAILABLE',
+      reason: err?.code || 'TAXES_DATA_NOT_AVAILABLE',
       paid: [],
       pending: [],
       summary: { totalPaid: 0, totalPending: 0, nextDeadline: null }
     };
   } finally {
-    await page.close().catch(() => {});
+    if (!options.page) await page.close().catch(() => {});
   }
 }
 

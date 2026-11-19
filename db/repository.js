@@ -3,6 +3,7 @@ const dbIndex = require('./index');
 const db = dbIndex.db || dbIndex;
 const crypto = require('node:crypto');
 const { seal, open } = require('../lib/secret-box');
+const { validPushSubscription } = require('../lib/push-subscription');
 
 const PROFILE_RETENTION_MS = Math.max(1, Number(process.env.PERSONAL_DATA_RETENTION_DAYS || 30)) * 24 * 60 * 60 * 1000;
 const DOCENTI_CACHE_RETENTION_MS = Math.max(1, Number(process.env.DOCENTI_CACHE_RETENTION_HOURS || 720)) * 60 * 60 * 1000;
@@ -30,6 +31,36 @@ function decryptProfileJson(row, column, associatedData) {
   if (!row) return row;
   const parsed = openJson(row[column], associatedData);
   return { ...row, [column]: parsed === null ? null : JSON.stringify(parsed) };
+}
+
+// Only these display fields may be persisted. PIN/CNP and credentials never
+// enter this object, even if the scraper returns additional properties.
+const ANAGRAFICA_FIELDS = ['nomeCompleto', 'cognome', 'matricola', 'codiceCorso', 'corsoDiLaurea', 'annoImmatricolazione', 'annoCorso'];
+function sanitizeAnagrafica(value) {
+  const result = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return result;
+  for (const field of ANAGRAFICA_FIELDS) {
+    const item = value[field];
+    if (typeof item === 'string' && item.trim()) result[field] = item.trim().slice(0, 300);
+    else if (typeof item === 'number' && Number.isFinite(item)) result[field] = item;
+  }
+  return result;
+}
+
+function readAnagrafica(profile) {
+  try { return sanitizeAnagrafica(JSON.parse(profile?.anagrafica_json || 'null')); } catch { return {}; }
+}
+
+function getProfileAnagrafica(profile) {
+  const stored = readAnagrafica(profile);
+  return {
+    ...stored,
+    matricola: profile?.matricola || stored.matricola || null,
+    codiceCorso: profile?.course_id || stored.codiceCorso || null,
+    corsoDiLaurea: profile?.course_name || stored.corsoDiLaurea || null,
+    annoImmatricolazione: profile?.cohort_year || stored.annoImmatricolazione || null,
+    annoCorso: profile?.current_course_year || stored.annoCorso || null
+  };
 }
 
 // 1. Utility di base
@@ -98,13 +129,17 @@ function getStudentProfile(arg1, arg2) {
   if (!row) return null;
   const withCareer = decryptProfileJson(row, 'carriera_json', `${profileId}:carriera`);
   const withTaxes = decryptProfileJson(withCareer, 'tasse_json', `${profileId}:tasse`);
-  return decryptProfileJson(withTaxes, 'prenotazioni_json', `${profileId}:prenotazioni`);
+  const withBookings = decryptProfileJson(withTaxes, 'prenotazioni_json', `${profileId}:prenotazioni`);
+  const withPlan = decryptProfileJson(withBookings, 'piano_json', `${profileId}:piano`);
+  return decryptProfileJson(withPlan, 'anagrafica_json', `${profileId}:anagrafica`);
 }
 
 function upsertStudentProfile(arg1, arg2) {
   const { db, arg: profile } = getDbAndArg(arg1, arg2);
   const targetId = profile.id || profile.profileId || profile.codiceFiscale;
   const existing = getStudentProfile(db, targetId);
+  const incomingAnagrafica = sanitizeAnagrafica(profile.anagrafica);
+  const mergedAnagrafica = { ...readAnagrafica(existing), ...incomingAnagrafica };
   const matricola = normalizeMatricola(profile.matricola || profile.anagrafica?.matricola)
     || normalizeMatricola(existing?.matricola);
   if (existing?.matricola && !normalizeMatricola(existing.matricola)) {
@@ -114,9 +149,9 @@ function upsertStudentProfile(arg1, arg2) {
   db.prepare(`
     INSERT INTO StudentProfile (
       id, matricola, course_id, course_name, cohort_year, current_course_year, channel, surname_initial,
-      carriera_json, tasse_json, prenotazioni_json
+      carriera_json, tasse_json, prenotazioni_json, piano_json, anagrafica_json
     )
-    VALUES (@id, @matricola, @courseId, @courseName, @cohortYear, @currentCourseYear, @channel, @surnameInitial, @carrieraJson, @tasseJson, @prenotazioniJson)
+    VALUES (@id, @matricola, @courseId, @courseName, @cohortYear, @currentCourseYear, @channel, @surnameInitial, @carrieraJson, @tasseJson, @prenotazioniJson, @pianoJson, @anagraficaJson)
     ON CONFLICT(id) DO UPDATE SET
       matricola = COALESCE(excluded.matricola, StudentProfile.matricola),
       course_id = COALESCE(excluded.course_id, StudentProfile.course_id),
@@ -128,6 +163,8 @@ function upsertStudentProfile(arg1, arg2) {
       carriera_json = COALESCE(excluded.carriera_json, StudentProfile.carriera_json),
       tasse_json = COALESCE(excluded.tasse_json, StudentProfile.tasse_json),
       prenotazioni_json = COALESCE(excluded.prenotazioni_json, StudentProfile.prenotazioni_json),
+      piano_json = COALESCE(excluded.piano_json, StudentProfile.piano_json),
+      anagrafica_json = COALESCE(excluded.anagrafica_json, StudentProfile.anagrafica_json),
       updated_at = CURRENT_TIMESTAMP
   `).run({
     id: targetId,
@@ -140,7 +177,17 @@ function upsertStudentProfile(arg1, arg2) {
     surnameInitial: profile.surnameInitial || null,
     carrieraJson: sealJson(profile.esamiSostenuti, `${targetId}:carriera`),
     tasseJson: sealJson(profile.tasse, `${targetId}:tasse`),
-    prenotazioniJson: sealJson(profile.prenotazioni, `${targetId}:prenotazioni`)
+    prenotazioniJson: sealJson(profile.prenotazioni, `${targetId}:prenotazioni`),
+    anagraficaJson: Object.keys(incomingAnagrafica).length ? sealJson(mergedAnagrafica, `${targetId}:anagrafica`) : null,
+    // Empty/unavailable scraping must not erase the last successfully read plan.
+    // Keep its original course/cohort so a later profile change cannot reuse it.
+    pianoJson: Array.isArray(profile.pianoDiStudiRaw) && profile.pianoDiStudiRaw.length
+      ? sealJson({
+        courseId: profile.courseId || profile.anagrafica?.codiceCorso || existing?.course_id || null,
+        cohortYear: profile.cohortYear || profile.anagrafica?.annoImmatricolazione || existing?.cohort_year || null,
+        courses: profile.pianoDiStudiRaw
+      }, `${targetId}:piano`)
+      : null
   });
 
   return getStudentProfile(db, targetId);
@@ -470,12 +517,6 @@ function pushEndpointHash(endpoint) {
   return crypto.createHash('sha256').update(String(endpoint)).digest('hex');
 }
 
-function validPushSubscription(subscription) {
-  return subscription && typeof subscription === 'object' &&
-    typeof subscription.endpoint === 'string' && /^https:\/\//i.test(subscription.endpoint) &&
-    subscription.keys && typeof subscription.keys.p256dh === 'string' && typeof subscription.keys.auth === 'string';
-}
-
 function savePushSubscription(profileId, subscription, database = db, userAgent = '') {
   if (!profileId || !validPushSubscription(subscription)) return false;
   const endpoint = String(subscription.endpoint);
@@ -576,7 +617,7 @@ function purgeExpiredPersonalData(database = db, now = Date.now()) {
     const profiles = String(process.env.AUTO_PURGE_PERSONAL_DATA || '').toLowerCase() === 'true'
       ? database.prepare(`
           DELETE FROM StudentProfile
-          WHERE updated_at < ?
+          WHERE julianday(updated_at) < julianday(?)
             AND id NOT IN (SELECT profile_id FROM Sessions)
         `).run(profileCutoff).changes
       : 0;
@@ -586,6 +627,7 @@ function purgeExpiredPersonalData(database = db, now = Date.now()) {
 
 module.exports = {
   normalizeName,
+  getProfileAnagrafica,
   getStudentProfile,
   upsertStudentProfile,
   saveStudentSlowData,

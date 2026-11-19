@@ -3,7 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const { seal } = require('../lib/secret-box');
 
-const SCHEMA_VERSION = 8;
+const SCHEMA_VERSION = 10;
 const DEFAULT_DB_PATH = path.resolve(__dirname, '../data/unicorno.sqlite');
 
 function ensureDataDir(filename = DEFAULT_DB_PATH) {
@@ -40,6 +40,8 @@ function initSchema(database) {
       carriera_json TEXT,
       tasse_json TEXT,
       prenotazioni_json TEXT,
+      piano_json TEXT,
+      anagrafica_json TEXT,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -172,6 +174,12 @@ function initSchema(database) {
   if (!profileColumns.some(column => column.name === 'prenotazioni_json')) {
     database.exec('ALTER TABLE StudentProfile ADD COLUMN prenotazioni_json TEXT');
   }
+  if (!profileColumns.some(column => column.name === 'piano_json')) {
+    database.exec('ALTER TABLE StudentProfile ADD COLUMN piano_json TEXT');
+  }
+  if (!profileColumns.some(column => column.name === 'anagrafica_json')) {
+    database.exec('ALTER TABLE StudentProfile ADD COLUMN anagrafica_json TEXT');
+  }
 }
 
 function sealLegacyJson(value, associatedData) {
@@ -186,13 +194,15 @@ function sealLegacyJson(value, associatedData) {
 
 /** Upgrade valid legacy personal JSON rows to encrypted-at-rest storage. */
 function migratePersonalJson(database) {
-  const profiles = database.prepare('SELECT id, carriera_json, tasse_json, prenotazioni_json FROM StudentProfile').all();
-  const updateProfile = database.prepare('UPDATE StudentProfile SET carriera_json = ?, tasse_json = ?, prenotazioni_json = ? WHERE id = ?');
+  const profiles = database.prepare('SELECT id, carriera_json, tasse_json, prenotazioni_json, piano_json, anagrafica_json FROM StudentProfile').all();
+  const updateProfile = database.prepare('UPDATE StudentProfile SET carriera_json = ?, tasse_json = ?, prenotazioni_json = ?, piano_json = ?, anagrafica_json = ? WHERE id = ?');
   for (const row of profiles) {
     const career = sealLegacyJson(row.carriera_json, `${row.id}:carriera`);
     const taxes = sealLegacyJson(row.tasse_json, `${row.id}:tasse`);
     const bookings = sealLegacyJson(row.prenotazioni_json, `${row.id}:prenotazioni`);
-    if (career || taxes || bookings) updateProfile.run(career || row.carriera_json || null, taxes || row.tasse_json || null, bookings || row.prenotazioni_json || null, row.id);
+    const plan = sealLegacyJson(row.piano_json, `${row.id}:piano`);
+    const anagrafica = sealLegacyJson(row.anagrafica_json, `${row.id}:anagrafica`);
+    if (career || taxes || bookings || plan || anagrafica) updateProfile.run(career || row.carriera_json || null, taxes || row.tasse_json || null, bookings || row.prenotazioni_json || null, plan || row.piano_json || null, anagrafica || row.anagrafica_json || null, row.id);
   }
 
   const docenti = database.prepare('SELECT profile_id, data_json FROM DocentiDataCache').all();

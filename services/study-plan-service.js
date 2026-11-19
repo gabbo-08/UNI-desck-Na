@@ -7,13 +7,33 @@
 const { getStudyPlan, getPlanCourses } = require('../db/repository');
 const { getPianoSnapshot } = require('./career-snapshots');
 
+function getPersistedPiano(profile) {
+  if (!profile?.piano_json) return null;
+  try {
+    const payload = JSON.parse(profile.piano_json);
+    const courses = Array.isArray(payload) ? payload : payload?.courses;
+    if (!Array.isArray(courses)) return null;
+    if (!Array.isArray(payload) && (
+      (payload.courseId && String(payload.courseId) !== String(profile.course_id || '')) ||
+      (payload.cohortYear && Number(payload.cohortYear) !== Number(profile.cohort_year))
+    )) return null;
+    return courses;
+  } catch {
+    return null;
+  }
+}
+
 function resolveStudyPlan(db, profile, profileId) {
   const manifest = getStudyPlan(db, profile.course_id, profile.cohort_year);
   if (manifest) {
-    return { source: 'manifest', plan: manifest, courses: getPlanCourses(db, manifest.id) };
+    const courses = getPlanCourses(db, manifest.id);
+    // An imported header without any courses must not hide the personal plan.
+    if (courses.length) return { source: 'manifest', plan: manifest, courses };
   }
 
-  const fromSegrepass = getPianoSnapshot(profileId);
+  // Persisted plans are bound to their original course/cohort. If the profile
+  // changed, do not fall back to a snapshot from the previous course in RAM.
+  const fromSegrepass = profile.piano_json ? getPersistedPiano(profile) : getPianoSnapshot(profileId);
   if (Array.isArray(fromSegrepass) && fromSegrepass.length > 0) {
     return {
       source: 'segrepass',
@@ -30,4 +50,4 @@ function resolveStudyPlan(db, profile, profileId) {
   return null;
 }
 
-module.exports = { resolveStudyPlan };
+module.exports = { resolveStudyPlan, getPersistedPiano };
