@@ -30,20 +30,22 @@ function pickField(record, patterns, exclude = null) {
 function parseGrade(raw) {
   const text = cleanText(raw).toUpperCase();
   if (!text) return { voto: null, lode: false, giudizio: null };
-  const digits = text.match(/(\d{2})/);
-  const voto = digits ? Number(digits[1]) : null;
-  if (voto !== null && voto >= 18 && voto <= 30) {
+  const digits = text.match(/-?\d+(?:[.,]\d+)?/);
+  const voto = digits ? Number(digits[0].replace(',', '.')) : null;
+  if (!FAILED_JUDGMENT.test(text) && Number.isInteger(voto) && voto >= 18 && voto <= 30) {
     return { voto, lode: voto === 30 && /LODE|30\s*L\b/.test(text), giudizio: null };
   }
   return { voto: null, lode: false, giudizio: cleanText(raw) };
 }
 
 const PASSED_JUDGMENT = /idone|approvat|superat|positiv|conseguit|riconosciut|convalid/i;
+const FAILED_JUDGMENT = /\bnon\b|negativ|respint|assent|ritirat|insuff/i;
 
 /**
  * Righe del libretto -> Esame[] (solo esami superati)
  */
 function normalizeEsami(records = []) {
+  records = (Array.isArray(records) ? records : []).filter(record => record && typeof record === 'object' && !Array.isArray(record));
   const hasGradeColumn = records.some(record =>
     Object.keys(record).some(key => /voto|valutazione|esito|giudizio/.test(normalizeKey(key)))
   );
@@ -52,7 +54,7 @@ function normalizeEsami(records = []) {
   for (const record of records) {
     const name = pickField(
       record,
-      [/insegnamento/, /denominazione/, /attivita/, /descrizione/, /materia/, /^esame/],
+      [/insegnamento/, /denominazione/, /attivita/, /descrizione/, /materia/, /^esame/, /^nome/],
       /codice|^cod$/
     );
     if (!name) continue;
@@ -60,19 +62,20 @@ function normalizeEsami(records = []) {
     const gradeRaw = pickField(record, [/^voto/, /valutazione/, /esito/, /giudizio/]);
     const { voto, lode, giudizio } = parseGrade(gradeRaw);
     // Senza colonna dei voti nella tabella, tutte le righe sono considerate superate
-    const passed = !hasGradeColumn || voto !== null || (giudizio && PASSED_JUDGMENT.test(giudizio));
+    const passed = !hasGradeColumn || voto !== null || (giudizio && !FAILED_JUDGMENT.test(giudizio) && PASSED_JUDGMENT.test(giudizio));
     if (!passed) continue;
 
     const cfuRaw = pickField(record, [/cfu/, /crediti/, /peso/]);
-    const cfu = cfuRaw ? Number((cfuRaw.replace(',', '.').match(/\d+(?:\.\d+)?/) || ['0'])[0]) : 0;
+    const cfu = cfuRaw ? Number((cfuRaw.replace(',', '.').match(/-?\d+(?:\.\d+)?/) || ['0'])[0]) : 0;
 
     exams.push({
+      codice: pickField(record, [/^codice/, /^cod$/]) || null,
       materia: name,
       insegnamento: name,
-      cfu: Number.isFinite(cfu) ? cfu : 0,
+      cfu: Number.isFinite(cfu) && cfu > 0 ? cfu : 0,
       voto,
       giudizio: voto === null ? giudizio : null,
-      lode,
+      lode: lode || (voto === 30 && (record.lode === true || record.isLode === true)),
       data: pickField(record, [/data/, /verbalizz/, /superamento/]) || undefined
     });
   }
@@ -83,6 +86,7 @@ function normalizeEsami(records = []) {
  * Metriche nel formato atteso dal frontend (tipo Metriche di api.ts)
  */
 function buildMetriche(records = [], { cfuTotali = 180 } = {}) {
+  cfuTotali = Number.isFinite(Number(cfuTotali)) && Number(cfuTotali) > 0 ? Number(cfuTotali) : 180;
   const esami = normalizeEsami(records);
   const graded = esami.filter(exam => exam.voto !== null);
 

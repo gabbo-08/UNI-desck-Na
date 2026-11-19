@@ -3,8 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const crypto = require('node:crypto');
-const { deriveKey } = require('./lib/secret-box');
+const { loginRateLimitKey } = require('./lib/login-rate-limit');
 
 // Router Modules
 const authRoutes = require('./routes/auth');
@@ -113,12 +112,7 @@ const loginAccountIpLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skipSuccessfulRequests: true,
-  keyGenerator: req => {
-    const account = String(req.body?.codiceFiscale || req.body?.username || '').normalize('NFKC').trim().toUpperCase();
-    const accountHash = crypto.createHmac('sha256', deriveKey('login-rate-limit')).update(account).digest('hex').slice(0, 20);
-    const ip = rateLimit.ipKeyGenerator ? rateLimit.ipKeyGenerator(req.ip) : req.ip;
-    return `${ip}:${accountHash}`;
-  },
+  keyGenerator: loginRateLimitKey,
   message: { error: 'Troppi tentativi per questo account da questa rete. Riprova tra qualche minuto.' }
 });
 
@@ -178,10 +172,11 @@ app.use((err, req, res, next) => {
 let server = null;
 let shuttingDown = false;
 let retentionTimer = null;
+let sessionCleanupTimer = null;
 
 async function start() {
   assertRuntimeConfig();
-  startSessionCleanup(db);
+  sessionCleanupTimer = startSessionCleanup(db);
   purgeExpiredPersonalData(db);
   retentionTimer = setInterval(() => {
     try { purgeExpiredPersonalData(db); } catch (error) { console.error('[Retention Error]', safeErrorMeta(error)); }
@@ -206,6 +201,16 @@ async function gracefulShutdown(signal, exitCode = 0) {
   }, 10000);
   forceExit.unref();
 
+  if (retentionTimer) clearInterval(retentionTimer);
+  if (sessionCleanupTimer) clearInterval(sessionCleanupTimer);
+
+  // Ferma prima gli ingressi e attendi le richieste in corso: scraper e DB
+  // devono restare disponibili fino all'invio dell'ultima risposta.
+  if (server) {
+    await new Promise(resolve => server.close(resolve));
+    console.log('[System] Server HTTP chiuso.');
+  }
+
   try {
     await closeCluster();
   } catch (error) {
@@ -218,19 +223,8 @@ async function gracefulShutdown(signal, exitCode = 0) {
     console.error('[System] Errore chiusura database:', safeErrorMeta(error));
   }
 
-  if (retentionTimer) clearInterval(retentionTimer);
-
-  if (!server) {
-    clearTimeout(forceExit);
-    process.exit(exitCode);
-    return;
-  }
-
-  server.close(() => {
-    clearTimeout(forceExit);
-    console.log('[System] Server HTTP chiuso.');
-    process.exit(exitCode);
-  });
+  clearTimeout(forceExit);
+  process.exit(exitCode);
 }
 
 process.on('uncaughtException', error => {

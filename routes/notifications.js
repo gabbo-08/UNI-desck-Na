@@ -1,14 +1,9 @@
 const express = require('express');
 const { savePushSubscription, deletePushSubscription } = require('../db/repository');
 const { isWebPushConfigured, vapidPublicKey, sendPushToProfile } = require('../services/web-push');
+const { validPushEndpoint, validPushSubscription } = require('../lib/push-subscription');
 
 const router = express.Router();
-
-function validSubscription(value) {
-  return value && typeof value === 'object' &&
-    typeof value.endpoint === 'string' && /^https:\/\//i.test(value.endpoint) &&
-    value.keys && typeof value.keys.p256dh === 'string' && typeof value.keys.auth === 'string';
-}
 
 router.get('/vapid-public-key', (req, res) => {
   const publicKey = vapidPublicKey();
@@ -18,7 +13,7 @@ router.get('/vapid-public-key', (req, res) => {
 
 router.post('/subscribe', (req, res) => {
   const subscription = req.body?.subscription;
-  if (!validSubscription(subscription)) {
+  if (!validPushSubscription(subscription)) {
     return res.status(400).json({ error: 'Sottoscrizione push non valida.', code: 'PUSH_SUBSCRIPTION_INVALID' });
   }
   if (!savePushSubscription(req.user.sub, subscription, undefined, req.get('user-agent'))) {
@@ -29,7 +24,7 @@ router.post('/subscribe', (req, res) => {
 
 router.delete('/subscribe', (req, res) => {
   const endpoint = req.body?.endpoint;
-  if (typeof endpoint !== 'string' || !/^https:\/\//i.test(endpoint)) {
+  if (!validPushEndpoint(endpoint)) {
     return res.status(400).json({ error: 'Endpoint push non valido.', code: 'PUSH_ENDPOINT_INVALID' });
   }
   deletePushSubscription(req.user.sub, endpoint);

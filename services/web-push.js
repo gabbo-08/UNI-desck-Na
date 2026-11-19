@@ -1,5 +1,6 @@
 const webpush = require('web-push');
 const { getPushSubscriptions, deletePushSubscription } = require('../db/repository');
+const { publicPushAgent } = require('../lib/push-subscription');
 
 let configured = false;
 
@@ -38,7 +39,7 @@ async function sendPushToProfile(profileId, payload, database) {
   });
   const results = await Promise.allSettled(subscriptions.map(async subscription => {
     try {
-      await webpush.sendNotification(subscription, body, { TTL: 3600 });
+      await webpush.sendNotification(subscription, body, { TTL: 3600, timeout: 10000, agent: publicPushAgent });
       return { sent: true };
     } catch (error) {
       if ([404, 410].includes(Number(error?.statusCode))) {

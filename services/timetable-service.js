@@ -46,13 +46,15 @@ async function getTimetableCached(filters, options = {}) {
   }
 
   const task = Promise.resolve()
-    .then(() => fetcher(filters))
+    .then(() => fetcher(filters, { force }))
     .then(value => {
       const entry = { value, storedAt: now };
-      if (ttl > 0) cache.set(key, entry);
+      if (ttl > 0 && inFlight.get(key) === task) cache.set(key, entry);
       return entry;
     })
-    .finally(() => inFlight.delete(key));
+    .finally(() => {
+      if (inFlight.get(key) === task) inFlight.delete(key);
+    });
 
   inFlight.set(key, task);
   const entry = await task;

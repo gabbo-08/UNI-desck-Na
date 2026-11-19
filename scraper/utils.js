@@ -32,17 +32,24 @@ async function extractTables(targetPage) {
     try {
       const tables = await frame.evaluate(() => {
         const cleanStr = s => (s || '').replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim();
-        return Array.from(document.querySelectorAll('table')).map(t => {
-          const rows = Array.from(t.querySelectorAll('tr')).map(tr => ({
-            cells: Array.from(tr.querySelectorAll('th, td')).map(td => cleanStr(td.innerText)),
-          }));
-          
-          if (rows.length < 2) return null;
-          
-          const headers = rows[0].cells;
-          const records = rows.slice(1)
+        return Array.from(document.querySelectorAll('table')).filter(t => !t.querySelector('table')).map(t => {
+          const rows = Array.from(t.querySelectorAll('tr')).filter(tr => tr.closest('table') === t).map(tr => ({
+            cells: Array.from(tr.children).filter(cell => /^(TH|TD)$/.test(cell.tagName)).map(td => cleanStr(td.innerText)),
+            hasHeadings: Array.from(tr.children).some(cell => cell.tagName === 'TH'),
+          })).filter(row => row.cells.some(Boolean));
+
+          // ESIS sometimes puts a title above the real column headings. A
+          // layout table or a colspan title must not become the data schema.
+          const columnName = /\b(?:codice|descrizione|causale|importo|crediti|cfu|insegnamento|voto|esito|scadenza|scad|data|anno|nome|matricola|origine|iscrizioni)\b/i;
+          let headerIndex = rows.findIndex(row => row.cells.length > 1 &&
+            (row.hasHeadings || row.cells.filter(cell => columnName.test(cell)).length >= 2));
+          if (headerIndex === -1) headerIndex = rows.findIndex(row => row.cells.length > 1);
+          if (headerIndex === -1) return null;
+
+          const headers = rows[headerIndex].cells;
+          const records = rows.slice(headerIndex + 1)
             .map(row => row.cells)
-            .filter(row => row.some(cell => cell !== ''))
+            .filter(row => row.length > 1 && !row.every((cell, index) => cell === headers[index]))
             .map(row => Object.fromEntries(headers.map((h, i) => [h || `col_${i}`, row[i] ?? ''])));
             
           const caption = t.querySelector('caption')?.innerText || '';
@@ -50,7 +57,7 @@ async function extractTables(targetPage) {
             ? t.previousElementSibling.innerText 
             : '';
           return {
-            title: cleanStr(caption || previousHeading),
+            title: cleanStr(caption || previousHeading || (headerIndex > 0 ? rows[0].cells.join(' ') : '')),
             headers,
             records,
             rowCount: records.length

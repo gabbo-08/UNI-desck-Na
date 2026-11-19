@@ -69,10 +69,13 @@ async function getOrLoadCareer(profileId, password, loader) {
   const task = Promise.resolve()
     .then(loader)
     .then(value => {
-      setCachedCareer(profileId, password, value);
+      // An invalidated login/refresh may finish after a newer request.
+      if (inFlight.get(key) === task) setCachedCareer(profileId, password, value);
       return value;
     })
-    .finally(() => inFlight.delete(key));
+    .finally(() => {
+      if (inFlight.get(key) === task) inFlight.delete(key);
+    });
 
   inFlight.set(key, task);
   return { value: await task, fromCache: false };
@@ -86,6 +89,9 @@ function clearCareerCache(profileId) {
   }
   for (const key of cache.keys()) {
     if (key.includes(`:${profileId}:`)) cache.delete(key);
+  }
+  for (const key of inFlight.keys()) {
+    if (key.includes(`:${profileId}:`)) inFlight.delete(key);
   }
 }
 

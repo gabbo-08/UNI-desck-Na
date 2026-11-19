@@ -7,6 +7,9 @@ const careerCache = require('../services/career-cache');
 const snapshots = require('../services/career-snapshots');
 const { sessionErrorMessage } = require('../lib/errors');
 const { getSessionCredentials } = require('../services/server-sessions');
+const { getStudentProfile, getProfileAnagrafica, upsertStudentProfile } = require('../db/repository');
+const { getPersistedPiano } = require('../services/study-plan-service');
+const { safeErrorMeta } = require('../lib/safe-log');
 
 const router = express.Router();
 
@@ -33,7 +36,11 @@ router.get('/', async (req, res) => {
 
     // Se i dati lenti (tasse, appelli) sono già pronti li uniamo subito.
     const slow = snapshots.getSlowSnapshot(profileId);
-    const profile = require('../db/repository').getStudentProfile(req.user.sub);
+    let profile = getStudentProfile(profileId);
+    if (profile && (value?.anagrafica || (Array.isArray(value?.pianoDiStudiRaw) && value.pianoDiStudiRaw.length))) {
+      profile = upsertStudentProfile({ id: profileId, anagrafica: value.anagrafica, pianoDiStudiRaw: value.pianoDiStudiRaw });
+      snapshots.setPianoSnapshot(profileId, getPersistedPiano(profile) || []);
+    }
     let persistedPrenotazioni = [];
     try {
       const parsed = JSON.parse(profile?.prenotazioni_json || '[]');
@@ -43,13 +50,14 @@ router.get('/', async (req, res) => {
       ...value,
       anagrafica: {
         ...(value?.anagrafica || {}),
+        ...getProfileAnagrafica(profile),
         matricola: value?.anagrafica?.matricola || profile?.matricola || null
       },
       tasse: slow?.taxes ?? value?.tasse ?? null,
       prenotazioni: slow?.prenotazioni ?? value?.prenotazioni ?? persistedPrenotazioni
     });
   } catch (error) {
-    console.error('[Metriche Error]', error.message);
+    console.error('[Metriche Error]', safeErrorMeta(error));
     // 502 (non 401/403): un errore del portale non deve azzerare la sessione.
     return res.status(502).json({ error: sessionErrorMessage(error) });
   }

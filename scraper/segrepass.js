@@ -1,12 +1,12 @@
-﻿
+
 const { queueScrapingTask } = require('./pool');
 const { scrapeEsamiSostenuti } = require('./esami');
-const { scrapeCalendarioAppelli } = require('./prenotazioni');
 const { submitAppelloAction } = require('./prenotazioni');
-const { scrapeTasse } = require('./tasse');
+const { readSlowData } = require('./slow-data');
 const { scrapePianoPage } = require('./piano');
 const { normalizePianoTable } = require('../lib/piano-normalizer');
 const { enableFastMode } = require('./utils');
+const { normalizeEsami } = require('../services/career-metrics');
 
 const NODI_SEGREPASS = ['segrepass1', 'segrepass2', 'segrepass3'];
 const NODE_TIMEOUT_MS = 9500;
@@ -175,8 +175,7 @@ async function getDatiCarriera({ email, username, codiceFiscale, password } = {}
       throw portalError('PORTAL_UNAVAILABLE', 'Il portale Segrepass non Ã¨ disponibile. Riprova piÃ¹ tardi.');
     }
 
-    const userInput = await page.$('input[name="codice_fiscale"]') || (await page.$('input[type="text"]'))[0];
-    const passInput = await page.$('input[name="password"]');
+    const { userInput, passInput } = await findLoginInputs(page);
 
     if (!userInput || !passInput) {
       throw new Error('Impossibile trovare i campi di input del modulo di login.');
@@ -444,23 +443,12 @@ async function getDatiCarriera({ email, username, codiceFiscale, password } = {}
       debugLog(() => JSON.stringify(redactForDebug(tabellaEsami), null, 2));
       debugLog('-------------------------------------\n');
 
-      esamiList = (tabellaEsami.records || []).map(record => {
-        const cfu = parseInt(record['CFU'], 10) || 0;
-        const voto = record['Valutazione'] || '';
-        const votoNumerico = parseInt(voto, 10) || null;
-
-        return {
-          codice: record['Codice'] || '',
-          materia: record['Insegnamento'] || '',
-          voto: votoNumerico,
-          giudizio: votoNumerico ? null : (voto || null),
-          // Campi storici, mantenuti per compatibilitÃ .
-          votoNumerico: votoNumerico,
-          isLode: voto.toLowerCase().includes('lode'),
-          cfu: cfu,
-          data: record['Data esame'] || ''
-        };
-      });
+      esamiList = normalizeEsami(tabellaEsami.records).map(exam => ({
+        ...exam,
+        // Campi storici mantenuti per compatibilita.
+        votoNumerico: exam.voto,
+        isLode: exam.lode
+      }));
 
       esamiList.forEach(esame => {
         cfuAcquisiti += esame.cfu;
@@ -480,17 +468,15 @@ async function getDatiCarriera({ email, username, codiceFiscale, password } = {}
       : '0.00';
     let taxes = null;
     let appelliCalendario = [];
+    let slowSections;
 
     if (phase !== 'fast') {
       console.log('[Segrepass] Inizio estrazione background in parallelo (Tasse, Appelli)...');
 
-      const [taxesRes, appelliRes] = await Promise.all([
-        scrapeTasse(context, esisUrl).catch(() => null),
-        scrapeCalendarioAppelli(context, esisUrl).catch(() => [])
-      ]);
-
-      taxes = taxesRes;
-      appelliCalendario = appelliRes;
+      const slowData = await readSlowData(context, page, esisUrl);
+      taxes = slowData.tasse;
+      appelliCalendario = slowData.prenotazioni;
+      slowSections = slowData.slowSections;
 
       debugLog('\n--- [DEBUG] TASSE ESTRATTE (oscurate) ---');
       debugLog(() => JSON.stringify(redactForDebug({ tasse: taxes }), null, 2));
@@ -528,6 +514,7 @@ async function getDatiCarriera({ email, username, codiceFiscale, password } = {}
       esami: esamiList,
       tasse: taxes,
       prenotazioni: appelliCalendario,
+      ...(slowSections ? { slowSections } : {}),
       pianoDiStudiRaw: pianoCourses
     };
 
@@ -540,5 +527,11 @@ async function getDatiCarriera({ email, username, codiceFiscale, password } = {}
   });
 }
 
-module.exports = { getDatiCarriera, classifyLoginPage, scrapePin, redactForDebug };
+async function findLoginInputs(page) {
+  const userInput = await page.$('input[name="codice_fiscale"]') || await page.$('input[type="text"]');
+  const passInput = await page.$('input[name="password"]') || await page.$('input[type="password"]');
+  return { userInput, passInput };
+}
+
+module.exports = { getDatiCarriera, classifyLoginPage, scrapePin, redactForDebug, findLoginInputs };
 

@@ -293,10 +293,10 @@ async function scrapeTimetablePage(page, filters) {
   }
 }
 
-async function getTimetable({ courseId, courseName, academicYear, studyYear, semester, channel, surnameInitial }) {
+async function getTimetable({ courseId, courseName, academicYear, studyYear, semester, channel, surnameInitial }, { force = false } = {}) {
   if (!courseName && !courseId) throw errorWithStatus('Imposta il corso nel profilo.', 409, 'PROFILE_ONBOARDING_REQUIRED');
   const key = cacheKey({ courseId, courseName, academicYear, studyYear, semester, channel, surnameInitial });
-  const cached = readCache(key);
+  const cached = force ? null : readCache(key);
   if (cached) return cached;
 
   return queueScrapingTask({}, page => scrapeTimetablePage(page, {

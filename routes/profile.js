@@ -72,14 +72,27 @@ router.put('/', (req, res, next) => {
     const courseChanged = (Object.hasOwn(parsed.updates, 'courseId') && parsed.updates.courseId !== current.course_id) ||
       (Object.hasOwn(parsed.updates, 'cohortYear') && parsed.updates.cohortYear !== current.cohort_year);
 
-    const profile = updateStudentProfile(db, req.user.sub, parsed.updates);
-    if (courseChanged && !parsed.selectedElectiveIds) clearSelectedElectives(db, req.user.sub);
+    // Profilo e scelte sono un'unica modifica: un piano mancante o una scelta
+    // non valida devono lasciare intatti entrambi, anche in caso di errore.
+    const profile = db.transaction(() => {
+      const updated = updateStudentProfile(db, req.user.sub, parsed.updates);
+      if (courseChanged && !parsed.selectedElectiveIds) clearSelectedElectives(db, req.user.sub);
 
-    if (parsed.selectedElectiveIds) {
-      const plan = getStudyPlan(db, profile.course_id, profile.cohort_year);
-      if (!plan) return res.status(409).json({ error: 'Carica prima il piano di studi per salvare gli esami a scelta.' });
-      replaceSelectedElectives(db, req.user.sub, plan.id, parsed.selectedElectiveIds.map(Number));
-    }
+      if (parsed.selectedElectiveIds) {
+        if (parsed.selectedElectiveIds.length === 0) {
+          clearSelectedElectives(db, req.user.sub);
+        } else {
+          const plan = getStudyPlan(db, updated.course_id, updated.cohort_year);
+          if (!plan) {
+            const error = new Error('Carica prima il piano di studi per salvare gli esami a scelta.');
+            error.status = 409;
+            throw error;
+          }
+          replaceSelectedElectives(db, req.user.sub, plan.id, parsed.selectedElectiveIds.map(Number));
+        }
+      }
+      return updated;
+    })();
 
     return res.json({
       profile: toProfileDto(profile),

@@ -18,64 +18,51 @@ const BOOKING_RECEIPT_TTL_MS = 10 * 60 * 1000;
  * GET /api/career/slow-data
  * Stato e risultato del caricamento in background di tasse e appelli.
  * Risposta nel formato SlowData del frontend:
- *   { status: 'idle' | 'loading' | 'ready' | 'error', error?, updatedAt?, taxes?, prenotazioni? }
+ *   { status: 'idle' | 'loading' | 'ready' | 'partial' | 'error', sections,
+ *     retryAfterMs, error?, updatedAt?, taxes?, prenotazioni? }
  */
 router.get('/slow-data', (req, res) => {
   const profileId = req.user.sub;
   const credentials = getSessionCredentials(req.authSession.tokenHash);
-  const codiceFiscale = credentials?.codiceFiscale || profileId;
   const password = credentials?.password;
-
-  // Dati già pronti: restituiscili subito.
-  const snapshot = snapshots.getSlowSnapshot(profileId);
-  if (snapshot) {
-    return res.json({
-      status: 'ready',
-      taxes: snapshot.taxes ?? null,
-      prenotazioni: Array.isArray(snapshot.prenotazioni) ? snapshot.prenotazioni : [],
-      updatedAt: snapshot.updatedAt ?? null
-    });
-  }
-
-  // Dopo un riavvio il risultato lento può essere ancora solo nel profilo
-  // cifrato. Restituiscilo subito mentre un eventuale refresh può proseguire.
   const persistedProfile = getStudentProfile(profileId);
-  let persistedPrenotazioni = [];
+  let taxes = null;
+  let prenotazioni = null;
+  try { taxes = JSON.parse(persistedProfile?.tasse_json || 'null'); } catch {}
   try {
-    const parsed = JSON.parse(persistedProfile?.prenotazioni_json || '[]');
-    if (Array.isArray(parsed)) persistedPrenotazioni = parsed;
+    const parsed = JSON.parse(persistedProfile?.prenotazioni_json || 'null');
+    if (Array.isArray(parsed)) prenotazioni = parsed;
   } catch {}
-  if (persistedPrenotazioni.length || persistedProfile?.tasse_json) {
-    let persistedTaxes = null;
-    try { persistedTaxes = JSON.parse(persistedProfile?.tasse_json || 'null'); } catch {}
-    if (password) {
-      // Restituisci subito il dato persistito e aggiorna in background senza
-      // lasciare la dashboard vuota dopo il riavvio del processo.
-      slowSync.ensureSlowSync(profileId, { codiceFiscale, password });
-    }
-    return res.json({
-      status: 'ready',
-      taxes: persistedTaxes,
-      prenotazioni: persistedPrenotazioni,
-      updatedAt: persistedProfile?.updated_at ? Date.parse(persistedProfile.updated_at) || null : null,
-      fromPersistence: true
-    });
-  }
-
-  // Le credenziali decifrate servono solo per avviare lo scraping protetto.
-  if (!password) {
-    return res.json({ status: 'error', error: 'CREDENTIALS_REQUIRED' });
-  }
-
-  // Avvia (o riprende, ad esempio dopo un riavvio del server) il caricamento in background.
-  const status = slowSync.ensureSlowSync(profileId, { codiceFiscale, password });
-
-  if (status.state === 'error') {
-    return res.json({ status: 'error', error: status.error || 'SLOW_SYNC_FAILED' });
-  }
-  return res.json({ status: 'loading' });
+  if (taxes?.available === false) taxes = null;
+  const persisted = taxes || prenotazioni ? {
+    taxes, prenotazioni: prenotazioni || [],
+    sections: {
+      taxes: { status: taxes ? 'ready' : 'error', stale: Boolean(taxes) },
+      appelli: { status: prenotazioni ? 'ready' : 'error', stale: Boolean(prenotazioni) }
+    },
+    updatedAt: persistedProfile?.updated_at ? Date.parse(persistedProfile.updated_at) || null : null
+  } : null;
+  const force = req.query.refresh === '1';
+  const status = password
+    ? slowSync.ensureSlowSync(profileId, {
+      codiceFiscale: credentials.codiceFiscale || profileId, password
+    }, { force, initialSnapshot: persisted })
+    : { state: 'error', error: 'CREDENTIALS_REQUIRED', sections: {
+      taxes: { status: 'error', error: 'CREDENTIALS_REQUIRED', stale: Boolean(taxes) },
+      appelli: { status: 'error', error: 'CREDENTIALS_REQUIRED', stale: Boolean(prenotazioni) }
+    } };
+  const snapshot = snapshots.getSlowSnapshot(profileId) || persisted;
+  return res.json({
+    status: status.state,
+    sections: status.sections || snapshot?.sections,
+    ...(status.error ? { error: status.error } : {}),
+    retryAfterMs: status.retryAfterMs || 0,
+    taxes: snapshot?.taxes ?? null,
+    prenotazioni: Array.isArray(snapshot?.prenotazioni) ? snapshot.prenotazioni : [],
+    updatedAt: snapshot?.updatedAt ?? null,
+    ...(snapshot === persisted && persisted ? { fromPersistence: true } : {})
+  });
 });
-
 router.post('/book', async (req, res) => {
   const { annopri, numAppello } = req.body || {};
   const profileId = req.user.sub;

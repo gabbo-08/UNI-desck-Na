@@ -1,7 +1,7 @@
 const express = require('express');
 const { createStudentSession } = require('../services/student-session');
 const { authMiddleware, extractToken } = require('../middleware/auth');
-const { getStudentProfile, updateStudentProfile, getDocentiDataCache, getProfessorPreferences, getBookingReceipts } = require('../db/repository');
+const { getStudentProfile, getProfileAnagrafica, updateStudentProfile, getDocentiDataCache, getProfessorPreferences, getBookingReceipts } = require('../db/repository');
 const { readProfilePrefsCookie, writeProfilePrefsCookie } = require('../lib/profile-cookie');
 const { db } = require('../db');
 const { sessionErrorStatus, sessionErrorMessage } = require('../lib/errors');
@@ -13,6 +13,7 @@ const { deleteStudentData } = require('../db/repository');
 const { safeErrorMeta } = require('../lib/safe-log');
 const snapshots = require('../services/career-snapshots');
 const { getSlowStatus } = require('../services/slow-sync');
+const { getPersistedPiano } = require('../services/study-plan-service');
 
 const router = express.Router();
 
@@ -23,7 +24,7 @@ router.post('/login', async (req, res) => {
     return res.json(toLoginDto(session));
   } catch (error) {
     console.error('[Auth Error]', safeErrorMeta(error));
-    if (error.retryAfterMs) res.set('Retry-After', String(Math.ceil(error.retryAfterMs / 1000)));
+    if (error?.retryAfterMs) res.set('Retry-After', String(Math.ceil(error.retryAfterMs / 1000)));
     return res.status(sessionErrorStatus(error)).json({ error: sessionErrorMessage(error) });
   }
 });
@@ -49,6 +50,8 @@ router.get('/bootstrap', authMiddleware, (req, res) => {
   const persistedCareer = parsePersonalJson(profile.carriera_json) || [];
   const persistedTaxes = parsePersonalJson(profile.tasse_json);
   const persistedPrenotazioni = parsePersonalJson(profile.prenotazioni_json) || [];
+  const persistedPiano = getPersistedPiano(profile);
+  if (persistedPiano && !snapshots.getPianoSnapshot(req.user.sub)) snapshots.setPianoSnapshot(req.user.sub, persistedPiano);
   const career = snapshots.getCareerSnapshot(req.user.sub) || persistedCareer;
   const slow = snapshots.getSlowSnapshot(req.user.sub);
   const taxes = slow?.taxes ?? persistedTaxes;
@@ -65,14 +68,9 @@ router.get('/bootstrap', authMiddleware, (req, res) => {
     profile: toSessionDto(profile).profile,
     onboardingRequired: toSessionDto(profile).onboardingRequired,
     metriche: {
-      anagrafica: {
-        matricola: profile.matricola || null,
-        corsoDiLaurea: profile.course_name || null,
-        codiceCorso: profile.course_id || null,
-        annoCorso: profile.current_course_year || null,
-        annoImmatricolazione: profile.cohort_year || null
-      },
+      anagrafica: getProfileAnagrafica(profile),
       esami: Array.isArray(career) ? career : [],
+      pianoDiStudiRaw: persistedPiano || [],
       tasse: taxes,
       prenotazioni: Array.isArray(prenotazioni) ? prenotazioni : []
     },
@@ -99,7 +97,9 @@ router.get('/export', authMiddleware, (req, res) => {
   const payload = {
     exportedAt: new Date().toISOString(),
     profile: toSessionDto(profile).profile,
+    anagrafica: getProfileAnagrafica(profile),
     career: parsePersonalJson(profile.carriera_json) || [],
+    studyPlan: getPersistedPiano(profile) || [],
     taxes: parsePersonalJson(profile.tasse_json),
     prenotazioni: parsePersonalJson(profile.prenotazioni_json) || [],
     preferences: getProfessorPreferences(req.user.sub),

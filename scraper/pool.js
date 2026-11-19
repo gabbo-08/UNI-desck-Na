@@ -3,8 +3,17 @@ const { Cluster } = require('puppeteer-cluster');
 
 let cluster = null;
 let initPromise = null;
+let closePromise = null;
+
+function closingError() {
+  const error = new Error('Il servizio di scraping è in chiusura. Riprova tra poco.');
+  error.code = 'SCRAPER_SHUTTING_DOWN';
+  error.status = 503;
+  return error;
+}
 
 async function initCluster() {
+  if (closePromise) throw closingError();
   if (cluster) return cluster;
   if (initPromise) return initPromise;
 
@@ -47,24 +56,44 @@ async function initCluster() {
 }
 
 async function queueScrapingTask(data, scrapeLogic) {
-  if (!cluster) await initCluster();
-  return await cluster.execute(data, async ({ page, data }) => {
+  if (closePromise) throw closingError();
+  const active = cluster || await initCluster();
+  // La chiusura può iniziare mentre attendiamo il lancio del browser.
+  if (closePromise || active !== cluster) throw closingError();
+  return await active.execute(data, async ({ page, data }) => {
     return await scrapeLogic(page, data);
   });
 }
 
 async function closeCluster() {
-  if (cluster) {
-    console.log('[Pool] Chiusura cluster in corso...');
-    await cluster.idle();
-    await cluster.close();
+  if (closePromise) return closePromise;
+  if (!cluster && !initPromise) return;
+
+  const starting = initPromise;
+  closePromise = (async () => {
+    if (starting) {
+      // Anche un browser ancora in avvio appartiene al lifecycle corrente.
+      // Un errore di lancio resta a carico del chiamante di initCluster.
+      try { await starting; } catch {}
+    }
+    const active = cluster;
+    if (!active) return;
     cluster = null;
+    console.log('[Pool] Chiusura cluster in corso...');
+    try {
+      await active.idle();
+    } finally {
+      await active.close();
+    }
     console.log('[Pool] Cluster disattivato.');
-  }
+  })().finally(() => {
+    closePromise = null;
+  });
+  return closePromise;
 }
 
 function isClusterReady() {
-  return Boolean(cluster);
+  return Boolean(cluster) && !closePromise;
 }
 
 module.exports = { initCluster, queueScrapingTask, closeCluster, isClusterReady };

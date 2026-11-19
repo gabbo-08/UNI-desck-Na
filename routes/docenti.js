@@ -182,9 +182,13 @@ function refreshTeacherDetail(cacheKey, identifier, coursePrefix, dependencies) 
   if (existing?.promise) return existing.promise;
 
   const loadTeacherDetail = dependencies.fetchTeacherDetail || fetchTeacherDetail;
-  const promise = loadTeacherDetail(identifier, { ...dependencies, coursePrefix })
+  const promise = Promise.resolve()
+    .then(() => loadTeacherDetail(identifier, { ...dependencies, coursePrefix }))
     .then(detail => {
-      if (!detail) return null;
+      if (!detail) {
+        if (teacherDetailCache.get(cacheKey)?.promise === promise) teacherDetailCache.delete(cacheKey);
+        return null;
+      }
       if (detail.materiali) {
         detail.materiali = Object.fromEntries(
           ['pubblico', 'ftp', 'riservato'].map(section => [
@@ -210,6 +214,7 @@ function refreshTeacherDetail(cacheKey, identifier, coursePrefix, dependencies) 
           detail.materiali?.ftp?.length ||
           detail.materiali?.riservato?.length)
       );
+      if (teacherDetailCache.get(cacheKey)?.promise !== promise) return detail;
       if (hasContent) {
         teacherDetailCache.set(cacheKey, { value: detail, storedAt: Date.now() });
       } else {
@@ -218,7 +223,10 @@ function refreshTeacherDetail(cacheKey, identifier, coursePrefix, dependencies) 
       return detail;
     })
     .catch(error => {
-      teacherDetailCache.delete(cacheKey);
+      if (teacherDetailCache.get(cacheKey)?.promise === promise) {
+        if (existing?.value) teacherDetailCache.set(cacheKey, { value: existing.value, storedAt: existing.storedAt });
+        else teacherDetailCache.delete(cacheKey);
+      }
       throw error;
     });
 
@@ -499,6 +507,9 @@ function createDocentiRouter(dependencies = {}) {
       if (isStale && !cached.refreshing) {
         cached.refreshing = true;
         void refreshTeacherDetail(cacheKey, identifierForTeacher(req), coursePrefix, { ...dependencies, sessionKey: req.user.sub })
+          .catch(error => {
+            console.warn('[docenti] aggiornamento dettaglio non disponibile:', safeErrorMeta(error));
+          })
           .finally(() => {
             const current = teacherDetailCache.get(cacheKey);
             if (current) current.refreshing = false;

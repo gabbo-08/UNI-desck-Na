@@ -7,12 +7,13 @@ const careerCache = require('./career-cache');
 const slowSync = require('./slow-sync');
 const { clearDocentiCache, sanitizeDocentiSnapshot, SNAPSHOT_VERSION: DOCENTI_SNAPSHOT_VERSION, TTL_MS: DOCENTI_CACHE_TTL_MS } = require('./docenti-cache');
 const dbModule = require('../db');
-const { upsertStudentProfile, getStudentProfile, getStudyPlan, getDocentiDataCache, saveDocentiDataCache } = require('../db/repository');
+const { upsertStudentProfile, getStudentProfile, getProfileAnagrafica, getStudyPlan, getDocentiDataCache, saveDocentiDataCache } = require('../db/repository');
 const { clearDocentiRouteCache } = require('../routes/docenti');
 const { createServerSession } = require('./server-sessions');
 const { assertLoginAllowed, recordLoginFailure, recordLoginSuccess } = require('../lib/login-throttle');
 const { sessionErrorStatus } = require('../lib/errors');
 const { safeErrorMeta, safeProfileRef } = require('../lib/safe-log');
+const { getPersistedPiano } = require('./study-plan-service');
 
 const db = dbModule.db || dbModule;
 const EMPTY_DOCENTI = Object.freeze({ subscriptions: [], bookedExams: [], announcements: [] });
@@ -125,7 +126,7 @@ function resolveDocentiEmail(profile, profileId) {
 
 function normalizeEmail(value) {
   const email = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  if (!email || email.includes(' ') || !email.endsWith('@studenti.unina.it')) return null;
+  if (!email || /\s/.test(email) || !email.endsWith('@studenti.unina.it')) return null;
   const local = email.slice(0, -'@studenti.unina.it'.length);
   return local.length > 0 && !local.includes('@') ? email : null;
 }
@@ -191,11 +192,12 @@ async function createStudentSession({ codiceFiscale, password, email, identifier
     ...profile,
     email: cleanEmail,
     esamiSostenuti: esami,
+    pianoDiStudiRaw: datiCarriera.pianoDiStudiRaw,
     tasse
   });
 
   snapshots.setCareerSnapshot(cfClean, esami);
-  snapshots.setPianoSnapshot(cfClean, datiCarriera.pianoDiStudiRaw || []);
+  snapshots.setPianoSnapshot(cfClean, getPersistedPiano(storedProfile) || []);
   snapshots.setTaxesSnapshot(cfClean, tasse);
   snapshots.invalidateDocentiSnapshot(cfClean);
   clearDocentiCache(cfClean);
@@ -239,6 +241,7 @@ async function createStudentSession({ codiceFiscale, password, email, identifier
     ...datiCarriera,
     anagrafica: {
       ...(datiCarriera.anagrafica || {}),
+      ...getProfileAnagrafica(storedProfile),
       matricola: datiCarriera.anagrafica?.matricola || storedProfile?.matricola || null
     }
   };
