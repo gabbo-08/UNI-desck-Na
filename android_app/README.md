@@ -10,7 +10,7 @@ Le notifiche push della PWA richiedono VAPID configurato sul backend. Il wrapper
 
 Per l'uso quotidiano è consigliata la PWA HTTPS del frontend: dal browser scegli **Installa app**. Il wrapper Android richiede comunque un backend cloud raggiungibile e non esegue il server sul telefono.
 
-La procedura completa per configurazione, deploy e installazione è disponibile in `../PROCEDURA_CASA.md` e `../docs/DEPLOYMENT.md`.
+La procedura per configurazione e deploy è disponibile in [Deploy senza PC acceso](../docs/DEPLOYMENT.md). Per le verifiche e le correzioni recenti consulta il [report del 19 novembre 2026](../REPORT_BUG_2026-11-19.md).
 
 ## Firma della release Android
 

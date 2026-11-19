@@ -1,5 +1,6 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -31,7 +32,17 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 }
 
 class NativePushNotifications {
-  static Future<void> initialize() async {
+  static bool _initialized = false;
+  static Future<bool>? _pendingInitialization;
+
+  static Future<bool> initialize() {
+    if (_initialized) return Future.value(true);
+    return _pendingInitialization ??= _initializeOnce().whenComplete(() {
+      _pendingInitialization = null;
+    });
+  }
+
+  static Future<bool> _initializeOnce() async {
     try {
       FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
       final messaging = FirebaseMessaging.instance;
@@ -41,7 +52,8 @@ class NativePushNotifications {
         sound: true,
         provisional: false,
       );
-      if (settings.authorizationStatus == AuthorizationStatus.denied) return;
+      if (settings.authorizationStatus != AuthorizationStatus.authorized &&
+          settings.authorizationStatus != AuthorizationStatus.provisional) return false;
       await messaging.getToken();
       FirebaseMessaging.onMessage.listen((message) {
         debugPrint('[UniDesk Push] Notifica ricevuta in primo piano: ${message.messageId ?? 'senza-id'}');
@@ -49,8 +61,11 @@ class NativePushNotifications {
       FirebaseMessaging.onMessageOpenedApp.listen((message) {
         debugPrint('[UniDesk Push] Notifica aperta: ${message.messageId ?? 'senza-id'}');
       });
+      _initialized = true;
+      return true;
     } catch (error) {
       debugPrint('[UniDesk Push] Configurazione non disponibile: $error');
+      return false;
     }
   }
 }
@@ -59,7 +74,6 @@ Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   try {
     await Firebase.initializeApp();
-    await NativePushNotifications.initialize();
   } catch (error) {
     debugPrint('[UniDesk Firebase] Configurazione assente o incompleta: $error');
   }
@@ -94,7 +108,7 @@ class AppHome extends StatefulWidget {
 class _AppHomeState extends State<AppHome> {
   final _urlController = TextEditingController();
   WebViewController? _webController;
-  Uri? _serverUri;
+  int _navigationGeneration = 0;
   bool _loading = true;
   bool _hasError = false;
   bool _showSettings = false;
@@ -123,10 +137,15 @@ class _AppHomeState extends State<AppHome> {
     if (value.isEmpty) return null;
     if (!value.contains('://')) value = 'https://$value';
     final uri = Uri.tryParse(value);
-    if (uri == null || !uri.hasAuthority || uri.host.isEmpty) return null;
+    if (uri == null || !uri.hasAuthority || uri.host.isEmpty || uri.userInfo.isNotEmpty) return null;
+    try {
+      if (uri.port < 1 || uri.port > 65535) return null;
+    } on FormatException {
+      return null;
+    }
     final localHttpAllowed = kDebugMode && uri.scheme == 'http' && _isPrivateHost(uri.host);
     if (uri.scheme != 'https' && !localHttpAllowed) return null;
-    return uri.toString().replaceFirst(RegExp(r'/+$'), '');
+    return uri.toString();
   }
 
   String? _normalizedUrl() => _normalizeUrl(_urlController.text);
@@ -143,6 +162,7 @@ class _AppHomeState extends State<AppHome> {
     }
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_savedUrlKey, url);
+    if (!mounted) return;
     _urlController.text = url;
     setState(() => _showSettings = false);
     _openUrl(url);
@@ -151,32 +171,32 @@ class _AppHomeState extends State<AppHome> {
   void _openUrl(String url) {
     final serverUri = Uri.tryParse(url);
     if (serverUri == null) return;
-    _serverUri = serverUri;
+    final generation = ++_navigationGeneration;
     final controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(
         NavigationDelegate(
           onNavigationRequest: (request) {
             final target = Uri.tryParse(request.url);
-            final base = _serverUri;
-            final sameOrigin = target != null && base != null &&
-                target.scheme == base.scheme &&
-                target.host.toLowerCase() == base.host.toLowerCase() &&
-                target.port == base.port;
+            final sameOrigin = target != null &&
+                target.userInfo.isEmpty &&
+                target.scheme == serverUri.scheme &&
+                target.host.toLowerCase() == serverUri.host.toLowerCase() &&
+                target.port == serverUri.port;
             return sameOrigin ? NavigationDecision.navigate : NavigationDecision.prevent;
           },
           onPageStarted: (_) {
-            if (!mounted) return;
+            if (!mounted || generation != _navigationGeneration) return;
             setState(() {
               _loading = true;
               _hasError = false;
             });
           },
           onPageFinished: (_) {
-            if (mounted) setState(() => _loading = false);
+            if (mounted && generation == _navigationGeneration) setState(() => _loading = false);
           },
           onWebResourceError: (error) {
-            if ((error.isForMainFrame ?? false) && mounted) {
+            if ((error.isForMainFrame ?? false) && mounted && generation == _navigationGeneration) {
               setState(() {
                 _loading = false;
                 _hasError = true;
@@ -197,14 +217,28 @@ class _AppHomeState extends State<AppHome> {
     setState(() => _showSettings = true);
   }
 
+  Future<void> _enableNotifications() async {
+    final enabled = await NativePushNotifications.initialize();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(enabled
+          ? 'Autorizzazione notifiche attivata.'
+          : 'Notifiche non disponibili: verifica il permesso e la configurazione Firebase.'),
+    ));
+  }
+
   Future<void> _back() async {
     if (_showSettings && _webController != null) {
       setState(() => _showSettings = false);
       return;
     }
-    if (_webController != null && await _webController!.canGoBack()) {
-      await _webController!.goBack();
+    final controller = _webController;
+    if (controller != null && await controller.canGoBack()) {
+      if (!mounted) return;
+      await controller.goBack();
+      return;
     }
+    if (mounted) await SystemNavigator.pop();
   }
 
   @override
@@ -225,6 +259,11 @@ class _AppHomeState extends State<AppHome> {
         appBar: AppBar(
           title: const Text('UniDesk NA'),
           actions: [
+            IconButton(
+              tooltip: 'Attiva notifiche',
+              icon: const Icon(Icons.notifications_outlined),
+              onPressed: _enableNotifications,
+            ),
             if (controller != null && !_showSettings)
               IconButton(
                 tooltip: 'Ricarica',
