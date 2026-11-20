@@ -18,7 +18,7 @@ Dashboard web (PWA) e client unificato per consultare in un'unica interfaccia mo
 - **UI/UX & PWA:** Tema Light e Dark con design token CSS (palette blu reale profondo e oro antico), interfaccia responsive desktop/mobile, caricamento dinamico delle sezioni pesanti e installazione come Progressive Web App su Android e iOS.
 - **Identità visiva:** Il frontend usa l'asset indipendente `logo_prova.jpg` senza modificarne i colori o presentarlo come stemma istituzionale.
 - **Ricerca globale:** Ricerca di esami, appelli, corsi e docenti direttamente dalla Home.
-- **Scadenziario:** Prossime scadenze per esami, prenotazioni e pagamenti con filtri e orizzonte di 90 giorni.
+- **Scadenziario:** Esami, prenotazioni e pagamenti confrontati con oggi nel fuso di Roma, filtri per periodo e tipo, orari di chiusura e aggiornamento automatico. Orizzonte futuro di 90 giorni, con pagamenti arretrati sempre visibili.
 - **Pianificatore esami:** Prossimi appelli ordinati e possibili conflitti di data/orario evidenziati.
 - **Simulatore carriera:** Stima di media e base di laurea inserendo voto e CFU ipotetici.
 - **Privacy mode e stato servizi:** Oscuramento temporaneo dei dati visibili e stato di carriera, tasse, Docenti e orario.
@@ -255,6 +255,7 @@ npm run smoke:health
 
 La documentazione operativa è raccolta in:
 
+- [Scadenze e confronto con la data di oggi](AGGIORNAMENTO_SCADENZE_2026-11-20.md)
 - [Collegamenti ai servizi ufficiali nella Home](AGGIORNAMENTO_SERVIZI_HOME_2026-11-19.md)
 - [Recupero piano di studi, tasse e appelli](AGGIORNAMENTO_PIANO_TASSE_APPELLI_2026-11-19.md)
 - [Deploy senza PC acceso](docs/DEPLOYMENT.md)

@@ -121,7 +121,7 @@ function courseNameOf(item) {
 
 // Le date del portale arrivano come millisecondi (es. 1793228400000): le converto
 // in formato italiano leggibile (dd/mm/yyyy hh:mm, ora di Roma).
-function formatDocenteDate(value) {
+function formatDocenteDate(value, { preserveTime = false } = {}) {
   if (value === undefined || value === null || String(value).trim() === '') return '';
   const text = String(value).trim();
   if (/^\d{12,14}$/.test(text)) {
@@ -129,7 +129,7 @@ function formatDocenteDate(value) {
     if (!Number.isNaN(date.getTime())) {
       const giorno = date.toLocaleDateString('it-IT', { timeZone: 'Europe/Rome', day: '2-digit', month: '2-digit', year: 'numeric' });
       const ora = date.toLocaleTimeString('it-IT', { timeZone: 'Europe/Rome', hour: '2-digit', minute: '2-digit' });
-      return ora === '00:00' ? giorno : `${giorno} ${ora}`;
+      return !preserveTime && ora === '00:00' ? giorno : `${giorno} ${ora}`;
     }
   }
   return text;
@@ -525,8 +525,8 @@ function mapBookedExam(item) {
     professor: professorName(item),
     examDate: formatDocenteDate(pick(item, ['dataEsame', 'dataAppello', 'data'])),
     bookingDate: formatDocenteDate(pick(item, ['dataPrenotazione', 'dataIscrizione'])),
-    inizioPrenotazione: formatDocenteDate(pick(item, ['dataInizioPrenotazione', 'inizioPrenotazione', 'startBooking'], '')) || null,
-    finePrenotazione: formatDocenteDate(pick(item, ['dataFinePrenotazione', 'finePrenotazione', 'endBooking'], '')) || null,
+    inizioPrenotazione: formatDocenteDate(pick(item, ['dataInizioPrenotazione', 'inizioPrenotazione', 'startBooking'], ''), { preserveTime: true }) || null,
+    finePrenotazione: formatDocenteDate(pick(item, ['dataFinePrenotazione', 'finePrenotazione', 'endBooking'], ''), { preserveTime: true }) || null,
     session: String(pick(item, ['sessione'], '')),
     status: 'Prenotato',
     location: String(pick(item, ['aula', 'luogo'], ''))
@@ -1460,6 +1460,7 @@ module.exports = {
   mapAnnouncement,
   mapDocentiGroup,
   mapDocentiTest,
+  mapBookedExam,
   mapTeacherDetail,
   dedupeMaterialTree,
   fetchTeacherDetail,

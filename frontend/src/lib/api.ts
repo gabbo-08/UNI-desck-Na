@@ -127,6 +127,7 @@ export type Prenotazione = {
   ora?: string;
   inizioPrenotazione?: string | null;
   finePrenotazione?: string | null;
+  prenotato?: boolean;
   aula?: string;
   isMyProfessor?: boolean;
   note?: string;

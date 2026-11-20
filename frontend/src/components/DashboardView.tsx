@@ -63,6 +63,7 @@ import {
   type ProfiloRecord,
   type ProfiloStudente,
   type SlowData,
+  type SlowSectionState,
   type TassaItem,
   type SubscriptionDocenti,
   type ProfessorPreference,
@@ -281,6 +282,9 @@ export default function DashboardView() {
   const [docentiBookings, setDocentiBookings] = useState<BookedExamDocenti[]>([]);
   const [docentiTests, setDocentiTests] = useState<TestDocenti[]>([]);
   const [docentiSubscriptions, setDocentiSubscriptions] = useState<SubscriptionDocenti[]>([]);
+  const [docentiSummaryState, setDocentiSummaryState] = useState<SlowSectionState>({ status: 'loading' });
+  const [docentiReload, setDocentiReload] = useState(0);
+  const docentiForceRefreshRef = useRef(false);
   const [professorPreferences, setProfessorPreferences] = useState<ProfessorPreference[]>([]);
   const [teacherFromSearch, setTeacherFromSearch] = useState<SubscriptionDocenti | null>(null);
   const [bookingId, setBookingId] = useState<string | null>(null);
@@ -307,6 +311,9 @@ export default function DashboardView() {
     setDocentiBookings([]);
     setDocentiTests([]);
     setDocentiSubscriptions([]);
+    setDocentiSummaryState({ status: 'loading' });
+    setDocentiReload(0);
+    docentiForceRefreshRef.current = false;
     setProfessorPreferences([]);
     setTeacherFromSearch(null);
     setCheckingSession(false);
@@ -539,6 +546,14 @@ export default function DashboardView() {
     setSlowReload(value => value + 1);
   };
 
+  const retryDeadlineData = () => {
+    retrySlowData();
+    if (docentiEnabled) {
+      docentiForceRefreshRef.current = true;
+      setDocentiReload(value => value + 1);
+    }
+  };
+
 const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -754,32 +769,40 @@ const handleLogin = async (e: React.FormEvent) => {
   // e mostrate insieme agli appelli Segrepass.
 
   useEffect(() => {
-    if (!authenticated || !docentiEnabled || !['home', 'docenti', 'prenotazioni'].includes(activeView)) return;
+    if (!authenticated || !docentiEnabled || !['home', 'docenti', 'prenotazioni', 'deadlines'].includes(activeView)) return;
 
     let active = true;
+    const generation = sessionGenerationRef.current;
+    const isCurrent = () => active && generation === sessionGenerationRef.current;
     const delay = activeView === 'home' ? 1200 : 0;
     const timer = window.setTimeout(() => {
-      if (!active) return;
+      if (!isCurrent()) return;
 
-      fetchDocentiSummary()
-        .then(({ bookedExams: bookings, tests, subscriptions }) => {
-          if (active) {
+      setDocentiSummaryState(previous => ({ status: 'loading', stale: previous.stale }));
+      const refresh = docentiForceRefreshRef.current;
+      docentiForceRefreshRef.current = false;
+      fetchDocentiSummary({ refresh })
+        .then(({ bookedExams: bookings, tests, subscriptions, meta }) => {
+          if (isCurrent()) {
             setDocentiBookings(bookings);
             setDocentiTests(tests);
             setDocentiSubscriptions(subscriptions);
+            setDocentiSummaryState({ status: 'ready', stale: Boolean(meta?.stale || meta?.refreshing) });
           }
         })
-        .catch(() => {
-          if (active) {
-            setDocentiBookings([]);
-            setDocentiTests([]);
-            setDocentiSubscriptions([]);
+        .catch((error: unknown) => {
+          if (isCurrent()) {
+            setDocentiSummaryState({
+              status: 'error',
+              stale: true,
+              error: error instanceof Error ? error.message : 'Prenotazioni Docenti non disponibili.'
+            });
           }
         });
     }, delay);
 
     return () => { active = false; window.clearTimeout(timer); };
-  }, [authenticated, activeView, docentiEnabled]);
+  }, [authenticated, activeView, docentiEnabled, docentiReload, profile?.id]);
 
   useEffect(() => {
     if (!authenticated || !docentiEnabled || !['home', 'docenti', 'prenotazioni'].includes(activeView)) return;
@@ -799,6 +822,7 @@ const handleLogin = async (e: React.FormEvent) => {
       dataAppello: b.examDate || b.dataAppello,
       inizioPrenotazione: b.inizioPrenotazione,
       finePrenotazione: b.finePrenotazione,
+      prenotato: true,
       aula: b.location || b.aula || b.room,
       note: b.bookingDate ? `Prenotato il ${b.bookingDate}` : undefined,
       isMyProfessor: true,
@@ -812,11 +836,15 @@ const handleLogin = async (e: React.FormEvent) => {
       isMyProfessor: true,
     }));
 
-    const visti = new Set<string>();
-    const unite = [...(data?.prenotazioni || []), ...daPortale, ...testPortale].filter((p) => {
+    const visti = new Map<string, Prenotazione>();
+    const unite = [...(data?.prenotazioni || []), ...daPortale, ...testPortale].map(p => ({ ...p })).filter((p) => {
       const chiave = `${(p.materia || '').toLowerCase()}|${p.dataAppello || ''}|${(p.docente || '').toLowerCase()}`;
-      if (visti.has(chiave)) return false;
-      visti.add(chiave);
+      const precedente = visti.get(chiave);
+      if (precedente) {
+        if (p.prenotato) precedente.prenotato = true;
+        return false;
+      }
+      visti.set(chiave, p);
       return true;
     });
 
@@ -1522,7 +1550,7 @@ const handleLogin = async (e: React.FormEvent) => {
           )}
 
           {activeView === 'deadlines' && (
-            <DeadlineView exams={prenotazioniFiltrate} taxes={data?.tasse} />
+            <DeadlineView exams={displayedPrenotazioni} taxes={data?.tasse} sourceStates={{ taxes: taxesState, appelli: appelliState, ...(docentiEnabled ? { docenti: docentiSummaryState } : {}) }} onRetry={retryDeadlineData} />
           )}
 
           {activeView === 'prenotazioni' && (

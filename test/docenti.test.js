@@ -12,7 +12,31 @@ const {
   dedupeMaterialTree,
   ensureDocentiSessionResponse
 } = require('../scraper/docenti');
-const { mapSubscription, isUsableSubscription, mapDocentiTest } = require('../scraper/docenti');
+const { mapSubscription, isUsableSubscription, mapDocentiTest, mapBookedExam } = require('../scraper/docenti');
+
+test('mantiene la mezzanotte esplicita nei confini prenotazione con timestamp e offset', () => {
+  const midnight = Date.parse('2026-11-20T00:00:00+01:00');
+  const result = mapBookedExam({
+    dataEsame: midnight,
+    dataInizioPrenotazione: midnight,
+    dataFinePrenotazione: '2026-11-21T00:00:00+01:00'
+  });
+
+  assert.equal(result.inizioPrenotazione, '20/11/2026 00:00');
+  assert.equal(result.finePrenotazione, '2026-11-21T00:00:00+01:00');
+  assert.equal(result.examDate, '20/11/2026');
+  assert.equal(mapBookedExam({ dataFinePrenotazione: midnight }).finePrenotazione, '20/11/2026 00:00');
+});
+
+test('non aggiunge orari ai confini prenotazione che hanno solo la data', () => {
+  const result = mapBookedExam({
+    dataInizioPrenotazione: '20/11/2026',
+    dataFinePrenotazione: '2026-11-21'
+  });
+
+  assert.equal(result.inizioPrenotazione, '20/11/2026');
+  assert.equal(result.finePrenotazione, '2026-11-21');
+});
 
 test('accetta solo firme immagine supportate e coerenti col MIME type', () => {
   const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
